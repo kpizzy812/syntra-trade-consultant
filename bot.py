@@ -44,10 +44,6 @@ async def setup_bot_commands(bot: Bot) -> None:
     commands = [
         BotCommand(command="start", description="🚀 Start the bot"),
         BotCommand(command="help", description="💡 Get help and information"),
-        BotCommand(command="price", description="💰 Get cryptocurrency prices"),
-        BotCommand(command="analyze", description="📊 Analyze crypto market"),
-        BotCommand(command="market", description="📈 Market overview"),
-        BotCommand(command="news", description="📰 Latest crypto news"),
         BotCommand(command="limits", description="⚡ Check your usage limits"),
     ]
 
