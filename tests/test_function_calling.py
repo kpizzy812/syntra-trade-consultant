@@ -11,6 +11,7 @@ Tests the complete flow:
 """
 import asyncio
 import sys
+import pytest
 
 sys.path.insert(0, ".")
 
@@ -39,6 +40,7 @@ async def get_or_create_test_user(session):
     return user
 
 
+@pytest.mark.skip(reason="Requires PostgreSQL database - run locally only")
 async def test_function_calling():
     """Test OpenAI Function Calling integration"""
     print("=" * 70)

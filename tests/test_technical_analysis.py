@@ -63,6 +63,7 @@ async def test_fear_greed_index():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Binance API blocked on CI servers (error 451)")
 async def test_binance_klines():
     """Test Binance klines (candlestick data)"""
     service = BinanceService()
@@ -85,6 +86,7 @@ async def test_binance_klines():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Binance API blocked on CI servers (error 451)")
 async def test_technical_indicators():
     """Test technical indicators calculation"""
     service = BinanceService()
@@ -128,6 +130,7 @@ async def test_technical_indicators():
 
 
 @pytest.mark.asyncio
+@pytest.mark.skip(reason="Binance API blocked on CI servers (error 451)")
 async def test_candlestick_patterns():
     """Test candlestick pattern detection"""
     service = BinanceService()
