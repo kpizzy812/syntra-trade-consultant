@@ -71,11 +71,14 @@
 - Управление состояниями (FSM)
 
 **Компоненты:**
-- `handlers/start.py` - /start, /help
-- `handlers/ai.py` - AI-чат
-- `handlers/crypto.py` - /price, /analyze, /market
-- `handlers/vision.py` - анализ графиков
-- `handlers/admin.py` - админ-команды
+- `handlers/start.py` - /start команда, приветствие
+- `handlers/help_cmd.py` - /help команда, справка
+- `handlers/limits.py` - /limits команда, проверка лимитов
+- `handlers/chat.py` - AI-чат с контекстом
+- `handlers/crypto.py` - /price, /analyze, /market, /news
+- `handlers/vision.py` - анализ графиков (Vision API)
+- `handlers/menu.py` - интерактивное меню навигации
+- `handlers/admin.py` - админ-панель (/admin, /admin_stats, /admin_users, /admin_costs)
 
 **Пример:**
 ```python
@@ -144,6 +147,37 @@ class RequestLimitMiddleware(BaseMiddleware):
         return await handler(event, data)
 ```
 
+#### AdminMiddleware
+```python
+class AdminMiddleware(BaseMiddleware):
+    """Проверка прав администратора"""
+    async def __call__(self, handler, event, data):
+        from config.config import ADMIN_IDS
+
+        user_id = event.from_user.id
+        data['is_admin'] = user_id in ADMIN_IDS
+
+        return await handler(event, data)
+```
+
+#### LanguageMiddleware
+```python
+class LanguageMiddleware(BaseMiddleware):
+    """Определение языка пользователя"""
+    async def __call__(self, handler, event, data):
+        session: AsyncSession = data['session']
+        user_id = event.from_user.id
+
+        # Получить язык пользователя из БД или language_code из Telegram
+        user = await get_user_by_telegram_id(session, user_id)
+        language = user.language if user and user.language else 'ru'
+
+        # Добавляем в data для использования в handlers
+        data['language'] = language
+
+        return await handler(event, data)
+```
+
 ### 3. Service Layer
 
 **Ответственность:**
@@ -179,7 +213,8 @@ class OpenAIService:
     def _select_model(self, messages: list) -> str:
         """Роутинг: gpt-4o для сложных, gpt-4o-mini для простых"""
         total_tokens = sum(count_tokens(m['content']) for m in messages)
-        return "gpt-4o" if total_tokens > 500 else "gpt-4o-mini"
+        # Оптимизированный порог: 1500 токенов (экономия 25-35%)
+        return "gpt-4o" if total_tokens > 1500 else "gpt-4o-mini"
 ```
 
 #### CoinGecko Service
@@ -198,6 +233,103 @@ class CoinGeckoService:
         price = await self._fetch_price(coin_id)
         self.cache.set(f'price_{coin_id}', price)
         return price
+```
+
+#### Binance Service
+```python
+class BinanceService:
+    """Дополнительные данные от Binance API для точных цен и объемов"""
+    async def get_ticker_24h(self, symbol: str):
+        """Получить 24h статистику тикера"""
+        pass
+
+    async def get_klines(self, symbol: str, interval: str):
+        """Получить данные свечей для TA"""
+        pass
+```
+
+#### Technical Indicators
+```python
+class TechnicalIndicators:
+    """Расчет технических индикаторов"""
+    @staticmethod
+    def calculate_rsi(prices: list, period: int = 14) -> float:
+        """Relative Strength Index"""
+        pass
+
+    @staticmethod
+    def calculate_macd(prices: list):
+        """MACD индикатор"""
+        pass
+
+    @staticmethod
+    def calculate_bollinger_bands(prices: list, period: int = 20):
+        """Bollinger Bands"""
+        pass
+
+    @staticmethod
+    def calculate_ema(prices: list, period: int) -> float:
+        """Exponential Moving Average"""
+        pass
+```
+
+#### Candlestick Patterns
+```python
+class CandlestickPatterns:
+    """Определение свечных паттернов"""
+    @staticmethod
+    def is_doji(candle: dict) -> bool:
+        """Проверка паттерна Doji"""
+        pass
+
+    @staticmethod
+    def is_hammer(candle: dict) -> bool:
+        """Проверка паттерна Hammer"""
+        pass
+
+    @staticmethod
+    def is_engulfing(prev_candle: dict, curr_candle: dict) -> str:
+        """Проверка паттернов Bullish/Bearish Engulfing"""
+        pass
+```
+
+#### Retention Service
+```python
+class RetentionService:
+    """Воронка удержания пользователей"""
+    async def start_retention_service(self, bot: Bot):
+        """Запуск retention scheduler"""
+        pass
+
+    async def send_retention_message(self, user_id: int, message_type: str):
+        """Отправка retention сообщения"""
+        pass
+
+    async def process_unsubscribed_users(self):
+        """Обработка неподписанных пользователей"""
+        pass
+```
+
+#### Fear & Greed Service
+```python
+class FearGreedService:
+    """Получение индекса страха и жадности"""
+    async def get_fear_greed_index(self):
+        """Получить текущий Fear & Greed Index"""
+        pass
+```
+
+#### CryptoPanic Service
+```python
+class CryptoPanicService:
+    """Криптовалютные новости"""
+    async def get_news(self, currencies: list, filter_type: str):
+        """Получить новости по монетам"""
+        pass
+
+    async def format_news_for_telegram(self, news: list) -> str:
+        """Форматирование новостей для Telegram"""
+        pass
 ```
 
 ### 4. Data Layer

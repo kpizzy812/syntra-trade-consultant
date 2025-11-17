@@ -4,7 +4,7 @@ Database models for Syntra Trade Consultant Bot
 SQLAlchemy 2.0 models with full type hints
 """
 
-from datetime import datetime, date
+from datetime import datetime, date, UTC
 from typing import Optional
 
 from sqlalchemy import (
@@ -55,7 +55,7 @@ class User(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
         nullable=False,
         comment="User registration timestamp",
     )
@@ -67,8 +67,8 @@ class User(Base):
     )
     last_activity: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
         nullable=False,
         comment="Last user activity timestamp",
     )
@@ -125,7 +125,7 @@ class ChatHistory(Base):
     )
     timestamp: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
         nullable=False,
         index=True,
         comment="Message timestamp",
@@ -223,7 +223,7 @@ class CostTracking(Base):
     )
     timestamp: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
         nullable=False,
         index=True,
         comment="Timestamp of the request",
@@ -266,7 +266,7 @@ class AdminLog(Base):
     )
     timestamp: Mapped[datetime] = mapped_column(
         DateTime,
-        default=datetime.utcnow,
+        default=lambda: datetime.now(UTC),
         nullable=False,
         index=True,
         comment="Action timestamp",
@@ -309,3 +309,164 @@ class AdminLog(Base):
 # - admin_logs.action (index)
 # - admin_logs.target_user_id (index)
 # - admin_logs.timestamp (index)
+
+
+class HistoricalPrice(Base):
+    """
+    Historical OHLCV price data model
+
+    Stores historical candlestick data for technical analysis
+    and long-term price comparisons
+    """
+
+    __tablename__ = "historical_prices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    coin_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+        comment="CoinGecko coin ID (bitcoin, ethereum, etc.)"
+    )
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        index=True,
+        comment="Candlestick timestamp"
+    )
+    timeframe: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        comment="Timeframe: 1h, 4h, 1d, 1w"
+    )
+    open: Mapped[float] = mapped_column(
+        Float, nullable=False, comment="Opening price"
+    )
+    high: Mapped[float] = mapped_column(
+        Float, nullable=False, comment="Highest price"
+    )
+    low: Mapped[float] = mapped_column(
+        Float, nullable=False, comment="Lowest price"
+    )
+    close: Mapped[float] = mapped_column(
+        Float, nullable=False, comment="Closing price"
+    )
+    volume: Mapped[float] = mapped_column(
+        Float, nullable=False, comment="Trading volume"
+    )
+    market_cap: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="Market capitalization"
+    )
+
+    # Unique constraint: one record per coin per timestamp per timeframe
+    __table_args__ = (
+        UniqueConstraint("coin_id", "timestamp", "timeframe", name="uix_coin_timestamp_timeframe"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<HistoricalPrice(coin_id={self.coin_id}, timestamp={self.timestamp}, close={self.close})>"
+
+
+class OnChainMetric(Base):
+    """
+    On-chain metrics model - stores blockchain metrics from CoinMetrics
+
+    Tracks:
+    - Network health (active addresses, transaction volume)
+    - Market indicators (exchange flows, whale movements)
+    - Profitability metrics (SOPR, NUPL)
+    """
+
+    __tablename__ = "onchain_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    coin_id: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+        comment="Asset ID (btc, eth, sol, etc.)"
+    )
+    metric_name: Mapped[str] = mapped_column(
+        String(100),
+        nullable=False,
+        index=True,
+        comment="Metric name (active_addresses, txn_count, etc.)"
+    )
+    value: Mapped[float] = mapped_column(
+        Float, nullable=False, comment="Metric value"
+    )
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        index=True,
+        comment="Metric timestamp"
+    )
+
+    # Unique constraint
+    __table_args__ = (
+        UniqueConstraint("coin_id", "metric_name", "timestamp", name="uix_coin_metric_timestamp"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<OnChainMetric(coin_id={self.coin_id}, metric={self.metric_name}, value={self.value})>"
+
+
+class FundingRate(Base):
+    """
+    Funding rate model - stores perpetual futures funding rates
+
+    Funding rates indicate market sentiment:
+    - Positive rate: Longs pay shorts (bullish sentiment)
+    - Negative rate: Shorts pay longs (bearish sentiment)
+    """
+
+    __tablename__ = "funding_rates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    symbol: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        index=True,
+        comment="Trading symbol (BTCUSDT, ETHUSDT, etc.)"
+    )
+    exchange: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        default="binance",
+        comment="Exchange name (binance, bybit, etc.)"
+    )
+    funding_rate: Mapped[float] = mapped_column(
+        Float, nullable=False, comment="Funding rate (e.g., 0.0001 = 0.01%)"
+    )
+    funding_time: Mapped[datetime] = mapped_column(
+        DateTime,
+        nullable=False,
+        index=True,
+        comment="Funding interval timestamp"
+    )
+    mark_price: Mapped[Optional[float]] = mapped_column(
+        Float, nullable=True, comment="Mark price at funding time"
+    )
+
+    # Unique constraint
+    __table_args__ = (
+        UniqueConstraint("symbol", "exchange", "funding_time", name="uix_symbol_exchange_time"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<FundingRate(symbol={self.symbol}, rate={self.funding_rate}, time={self.funding_time})>"
+
+
+# Additional indexes documentation:
+# HistoricalPrice:
+# - historical_prices.coin_id (index)
+# - historical_prices.timestamp (index)
+
+# OnChainMetric:
+# - onchain_metrics.coin_id (index)
+# - onchain_metrics.metric_name (index)
+# - onchain_metrics.timestamp (index)
+
+# FundingRate:
+# - funding_rates.symbol (index)
+# - funding_rates.funding_time (index)

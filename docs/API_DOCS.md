@@ -847,6 +847,235 @@ for item in news:
 
 ---
 
+## Binance API
+
+### Базовая информация
+
+- **Base URL:** `https://api.binance.com/api/v3`
+- **Аутентификация:** Не требуется для публичных endpoint
+- **Документация:** https://binance-docs.github.io/apidocs/spot/en/
+
+### Ticker 24hr
+
+**GET** `/ticker/24hr`
+
+**Parameters:**
+- `symbol` - Торговая пара (BTCUSDT, ETHUSDT)
+
+**Request:**
+```
+GET /api/v3/ticker/24hr?symbol=BTCUSDT
+```
+
+**Response:**
+```json
+{
+  "symbol": "BTCUSDT",
+  "priceChange": "1200.50",
+  "priceChangePercent": "2.75",
+  "weightedAvgPrice": "44500.00",
+  "prevClosePrice": "43500.00",
+  "lastPrice": "44700.50",
+  "lastQty": "0.05",
+  "bidPrice": "44700.00",
+  "askPrice": "44701.00",
+  "openPrice": "43500.00",
+  "highPrice": "45000.00",
+  "lowPrice": "43200.00",
+  "volume": "12345.67",
+  "quoteVolume": "550000000.00",
+  "openTime": 1672531200000,
+  "closeTime": 1672617600000,
+  "count": 234567
+}
+```
+
+### K-Lines (OHLC)
+
+**GET** `/klines`
+
+**Parameters:**
+- `symbol` - Торговая пара
+- `interval` - Интервал (1m, 5m, 15m, 1h, 4h, 1d, 1w, 1M)
+- `limit` - Количество свечей (макс 1000)
+
+**Request:**
+```
+GET /api/v3/klines?symbol=BTCUSDT&interval=1h&limit=24
+```
+
+**Response:**
+```json
+[
+  [
+    1672531200000,  // Open time
+    "43500.00",     // Open
+    "43800.00",     // High
+    "43200.00",     // Low
+    "43600.00",     // Close
+    "123.45",       // Volume
+    1672534799999,  // Close time
+    "5400000.00",   // Quote asset volume
+    1234,           // Number of trades
+    "61.72",        // Taker buy base asset volume
+    "2700000.00",   // Taker buy quote asset volume
+    "0"             // Ignore
+  ],
+  ...
+]
+```
+
+### Python Implementation
+
+```python
+import aiohttp
+
+async def get_binance_price(symbol: str = "BTCUSDT"):
+    """Получить цену с Binance"""
+    url = f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            data = await response.json()
+            return {
+                'price': float(data['lastPrice']),
+                'change_24h': float(data['priceChangePercent']),
+                'volume': float(data['volume']),
+                'high_24h': float(data['highPrice']),
+                'low_24h': float(data['lowPrice'])
+            }
+
+async def get_binance_klines(symbol: str, interval: str = "1h", limit: int = 24):
+    """Получить OHLC данные"""
+    url = f"https://api.binance.com/api/v3/klines"
+    params = {
+        'symbol': symbol,
+        'interval': interval,
+        'limit': limit
+    }
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, params=params) as response:
+            data = await response.json()
+            return [
+                {
+                    'timestamp': item[0],
+                    'open': float(item[1]),
+                    'high': float(item[2]),
+                    'low': float(item[3]),
+                    'close': float(item[4]),
+                    'volume': float(item[5])
+                }
+                for item in data
+            ]
+```
+
+### Rate Limits
+
+- **Weight system:** Каждый запрос имеет вес
+- **Limit:** 1200 weight/minute
+- **Ticker 24hr:** Weight 1
+- **Klines:** Weight 1
+
+**Рекомендации:**
+- Кэшировать данные (30-60 сек для ticker)
+- Использовать websockets для real-time данных
+- Обрабатывать 418/429 ошибки (rate limit exceeded)
+
+---
+
+## Fear & Greed Index API
+
+### Базовая информация
+
+- **Base URL:** `https://api.alternative.me/fng/`
+- **Аутентификация:** Не требуется
+- **Документация:** https://alternative.me/crypto/fear-and-greed-index/
+
+### Current Index
+
+**GET** `/`
+
+**Parameters:**
+- `limit` - Количество дней (опционально, default 1)
+- `format` - json или csv (default json)
+
+**Request:**
+```
+GET https://api.alternative.me/fng/?limit=1
+```
+
+**Response:**
+```json
+{
+  "name": "Fear and Greed Index",
+  "data": [
+    {
+      "value": "45",
+      "value_classification": "Fear",
+      "timestamp": "1640000000",
+      "time_until_update": "43200"
+    }
+  ],
+  "metadata": {
+    "error": null
+  }
+}
+```
+
+### Классификация значений
+
+| Значение | Классификация |
+|----------|---------------|
+| 0-24     | Extreme Fear  |
+| 25-44    | Fear          |
+| 45-55    | Neutral       |
+| 56-75    | Greed         |
+| 76-100   | Extreme Greed |
+
+### Python Implementation
+
+```python
+import aiohttp
+
+async def get_fear_greed_index():
+    """Получить индекс страха и жадности"""
+    url = "https://api.alternative.me/fng/?limit=1"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as response:
+            data = await response.json()
+            index_data = data['data'][0]
+
+            return {
+                'value': int(index_data['value']),
+                'classification': index_data['value_classification'],
+                'timestamp': int(index_data['timestamp'])
+            }
+
+def format_fear_greed(value: int) -> str:
+    """Форматирование индекса для отображения"""
+    if value <= 24:
+        return f"😱 Extreme Fear ({value})"
+    elif value <= 44:
+        return f"😰 Fear ({value})"
+    elif value <= 55:
+        return f"😐 Neutral ({value})"
+    elif value <= 75:
+        return f"😏 Greed ({value})"
+    else:
+        return f"🤑 Extreme Greed ({value})"
+```
+
+### Особенности
+
+- Обновляется раз в сутки (можно кэшировать на 24 часа)
+- Основан на волатильности, объемах, соцсетях, опросах
+- Исторические данные доступны (параметр `limit`)
+- Бесплатный, без rate limits
+
+---
+
 ## Telegram Bot API
 
 ### Базовая информация

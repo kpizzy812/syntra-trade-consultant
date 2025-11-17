@@ -3,7 +3,7 @@
 Admin panel handlers - statistics, user management, cost monitoring
 """
 import logging
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, UTC
 from typing import Optional
 
 from aiogram import Router, F
@@ -124,7 +124,7 @@ async def cmd_admin(message: Message, session: AsyncSession):
             today_costs = await get_total_costs(session, start_date=today_start)
 
             # Get costs for last 7 days
-            week_start = datetime.utcnow() - timedelta(days=7)
+            week_start = datetime.now(UTC) - timedelta(days=7)
             week_costs = await get_total_costs(session, start_date=week_start)
 
             # Format message
@@ -149,7 +149,7 @@ async def cmd_admin(message: Message, session: AsyncSession):
             response += f"└ Стоимость: <b>${week_costs['total_cost']:.4f}</b>\n\n"
 
             response += (
-                f"<i>Обновлено: {datetime.utcnow().strftime('%H:%M:%S UTC')}</i>"
+                f"<i>Обновлено: {datetime.now(UTC).strftime('%H:%M:%S UTC')}</i>"
             )
 
             await message.answer(response, reply_markup=get_admin_main_menu())
@@ -186,7 +186,7 @@ async def admin_refresh_callback(callback: CallbackQuery, session: AsyncSession)
         today_costs = await get_total_costs(session, start_date=today_start)
 
         # Get costs for last 7 days
-        week_start = datetime.utcnow() - timedelta(days=7)
+        week_start = datetime.now(UTC) - timedelta(days=7)
         week_costs = await get_total_costs(session, start_date=week_start)
 
         # Format message
@@ -210,7 +210,7 @@ async def admin_refresh_callback(callback: CallbackQuery, session: AsyncSession)
         response += f"├ Токенов: <b>{week_costs['total_tokens']:,}</b>\n"
         response += f"└ Стоимость: <b>${week_costs['total_cost']:.4f}</b>\n\n"
 
-        response += f"<i>Обновлено: {datetime.utcnow().strftime('%H:%M:%S UTC')}</i>"
+        response += f"<i>Обновлено: {datetime.now(UTC).strftime('%H:%M:%S UTC')}</i>"
 
         await callback.message.edit_text(response, reply_markup=get_admin_main_menu())
         await callback.answer("✅ Обновлено")
@@ -249,11 +249,11 @@ async def admin_stats_period_callback(callback: CallbackQuery, session: AsyncSes
             period_name = "сегодня"
             days = 1
         elif period == "7d":
-            start_date = datetime.utcnow() - timedelta(days=7)
+            start_date = datetime.now(UTC) - timedelta(days=7)
             period_name = "за 7 дней"
             days = 7
         elif period == "30d":
-            start_date = datetime.utcnow() - timedelta(days=30)
+            start_date = datetime.now(UTC) - timedelta(days=30)
             period_name = "за 30 дней"
             days = 30
         else:  # all
@@ -293,7 +293,7 @@ async def admin_stats_period_callback(callback: CallbackQuery, session: AsyncSes
             avg_cost = costs["total_cost"] / costs["request_count"]
             response += f"💵 <b>Средняя стоимость запроса:</b> ${avg_cost:.4f}\n\n"
 
-        response += f"<i>Обновлено: {datetime.utcnow().strftime('%H:%M:%S UTC')}</i>"
+        response += f"<i>Обновлено: {datetime.now(UTC).strftime('%H:%M:%S UTC')}</i>"
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -461,11 +461,11 @@ async def admin_costs_period_callback(callback: CallbackQuery, session: AsyncSes
             period_name = "сегодня"
             days = 1
         elif period == "7d":
-            start_date = datetime.utcnow() - timedelta(days=7)
+            start_date = datetime.now(UTC) - timedelta(days=7)
             period_name = "за 7 дней"
             days = 7
         elif period == "30d":
-            start_date = datetime.utcnow() - timedelta(days=30)
+            start_date = datetime.now(UTC) - timedelta(days=30)
             period_name = "за 30 дней"
             days = 30
         else:  # all
@@ -531,7 +531,7 @@ async def admin_costs_period_callback(callback: CallbackQuery, session: AsyncSes
             response += f"├ За запрос: <b>${avg_cost:.4f}</b>\n"
             response += f"└ Токенов за запрос: <b>{avg_tokens:.0f}</b>\n\n"
 
-        response += f"<i>Обновлено: {datetime.utcnow().strftime('%H:%M:%S UTC')}</i>"
+        response += f"<i>Обновлено: {datetime.now(UTC).strftime('%H:%M:%S UTC')}</i>"
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[

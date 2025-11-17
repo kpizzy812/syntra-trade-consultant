@@ -23,6 +23,7 @@ loguru
 
 # Data Processing
 pandas
+numpy  # For mathematical calculations (Rainbow Chart, cycle analysis)
 Pillow
 ta  # Technical Analysis Library for indicators (RSI, MACD, Bollinger Bands, etc.)
 

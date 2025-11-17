@@ -8,7 +8,7 @@ Uses APScheduler to send:
 - Subscription status checks
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Optional
 
 from aiogram import Bot
@@ -26,7 +26,7 @@ from config.prompts import (
     get_random_catchphrase,
 )
 from config.config import REQUIRED_CHANNEL
-from src.database.engine import get_session
+from src.database.engine import get_session_maker
 from src.database.crud import (
     get_user_by_telegram_id,
     get_inactive_users,
@@ -142,9 +142,10 @@ class RetentionService:
         logger.info("Running non-subscriber check...")
 
         try:
-            async with get_session() as session:
+            session_maker = get_session_maker()
+            async with session_maker() as session:
                 # Time windows
-                now = datetime.utcnow()
+                now = datetime.now(UTC)
                 one_hour_ago = now - timedelta(hours=1)
                 one_hour_window = timedelta(minutes=30)  # ±30 min window
 
@@ -234,12 +235,13 @@ class RetentionService:
         logger.info("Running inactive users check...")
 
         try:
-            async with get_session() as session:
+            session_maker = get_session_maker()
+            async with session_maker() as session:
                 # Get users inactive for 7 days
                 users_7d = await get_inactive_users(session, days=7)
 
                 # Filter out users who were inactive for exactly 7 days (±1 day)
-                now = datetime.utcnow()
+                now = datetime.now(UTC)
                 users_7d_exact = [
                     u
                     for u in users_7d
@@ -362,7 +364,8 @@ class RetentionService:
         logger.info("Running subscription status check...")
 
         try:
-            async with get_session() as session:
+            session_maker = get_session_maker()
+            async with session_maker() as session:
                 # Get all users who were previously subscribed
                 from src.database.models import User
                 from sqlalchemy import select
@@ -438,12 +441,13 @@ class RetentionService:
         logger.info("Running active users motivation...")
 
         try:
-            async with get_session() as session:
+            session_maker = get_session_maker()
+            async with session_maker() as session:
                 # Get active users (active in last 3 days)
                 from src.database.models import User
                 from sqlalchemy import select
 
-                three_days_ago = datetime.utcnow() - timedelta(days=3)
+                three_days_ago = datetime.now(UTC) - timedelta(days=3)
                 stmt = select(User).where(
                     User.last_activity >= three_days_ago, User.is_subscribed == True
                 )

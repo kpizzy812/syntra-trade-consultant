@@ -24,10 +24,12 @@ logger = logging.getLogger(__name__)
 
 class BinanceService:
     """
-    Service for fetching cryptocurrency candlestick data from Binance API
+    Service for fetching cryptocurrency data from Binance API
 
     Features:
     - Klines (candlestick) data in OHLCV format
+    - Funding rates for perpetual futures (sentiment indicator)
+    - Open Interest data
     - Multiple timeframe support (1m, 5m, 15m, 1h, 4h, 1d, etc.)
     - Symbol validation
     - Automatic retries on failures
@@ -35,6 +37,7 @@ class BinanceService:
     """
 
     BASE_URL = "https://api.binance.com/api/v3"
+    FUTURES_URL = "https://fapi.binance.com/fapi/v1"
 
     # Common trading pairs on Binance
     COMMON_SYMBOLS = {
@@ -285,3 +288,231 @@ class BinanceService:
         except Exception as e:
             logger.error(f"Error fetching current price for {symbol}: {e}")
             return None
+
+    @retry(
+        retry=retry_if_exception_type((aiohttp.ClientError, TimeoutError)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+    async def get_funding_rate(
+        self, symbol: str, limit: int = 100
+    ) -> Optional[pd.DataFrame]:
+        """
+        Get funding rate history for perpetual futures
+
+        Funding rates indicate market sentiment:
+        - Positive rate: Longs pay shorts (bullish sentiment, potential overheating)
+        - Negative rate: Shorts pay longs (bearish sentiment)
+
+        Rate limit: 500/5min/IP (shared with /fapi/v1/fundingInfo)
+
+        Args:
+            symbol: Trading pair symbol (e.g., 'BTCUSDT')
+            limit: Number of data points (max 1000, default 100)
+
+        Returns:
+            pandas DataFrame with funding rate history or None
+
+        DataFrame columns:
+            - symbol: Trading pair
+            - funding_rate: Funding rate (e.g., 0.0001 = 0.01%)
+            - funding_time: Funding interval timestamp
+        """
+        try:
+            limit = min(max(1, limit), 1000)
+
+            params = {"symbol": symbol, "limit": limit}
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.FUTURES_URL}/fundingRate", params=params
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        if not data:
+                            logger.warning(f"No funding rate data for {symbol}")
+                            return None
+
+                        # Convert to DataFrame
+                        df = pd.DataFrame(data)
+
+                        # Convert types
+                        df["fundingTime"] = pd.to_datetime(
+                            df["fundingTime"], unit="ms"
+                        )
+                        df["fundingRate"] = df["fundingRate"].astype(float)
+
+                        # Rename columns
+                        df = df.rename(
+                            columns={
+                                "fundingTime": "funding_time",
+                                "fundingRate": "funding_rate",
+                            }
+                        )
+
+                        logger.info(
+                            f"Fetched {len(df)} funding rate data points for {symbol}"
+                        )
+                        return df
+
+                    elif response.status == 400:
+                        error_data = await response.json()
+                        logger.warning(
+                            f"Binance Futures API error for {symbol}: {error_data}"
+                        )
+                        return None
+                    else:
+                        logger.error(
+                            f"Binance Futures API error: {response.status}"
+                        )
+                        return None
+
+        except Exception as e:
+            logger.exception(f"Error fetching funding rate for {symbol}: {e}")
+            return None
+
+    async def get_latest_funding_rate(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the latest funding rate for a symbol
+
+        Args:
+            symbol: Trading pair symbol (e.g., 'BTCUSDT')
+
+        Returns:
+            Dict with latest funding rate info or None
+
+        Example:
+        {
+            "symbol": "BTCUSDT",
+            "funding_rate": 0.0001,
+            "funding_rate_pct": 0.01,
+            "funding_time": datetime,
+            "sentiment": "bullish"
+        }
+        """
+        df = await self.get_funding_rate(symbol, limit=1)
+
+        if df is not None and len(df) > 0:
+            latest = df.iloc[-1]
+            rate = latest["funding_rate"]
+
+            # Determine sentiment
+            if rate > 0.0005:  # > 0.05%
+                sentiment = "very_bullish"
+            elif rate > 0:
+                sentiment = "bullish"
+            elif rate < -0.0005:
+                sentiment = "very_bearish"
+            else:
+                sentiment = "bearish"
+
+            return {
+                "symbol": latest["symbol"],
+                "funding_rate": rate,
+                "funding_rate_pct": rate * 100,  # Convert to percentage
+                "funding_time": latest["funding_time"],
+                "sentiment": sentiment,
+            }
+
+        return None
+
+    @retry(
+        retry=retry_if_exception_type((aiohttp.ClientError, TimeoutError)),
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=True,
+    )
+    async def get_open_interest(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get current open interest for perpetual futures
+
+        Open Interest = total number of outstanding derivative contracts
+        Rising OI + Rising Price = Bullish (new longs opening)
+        Rising OI + Falling Price = Bearish (new shorts opening)
+        Falling OI = Positions closing (profit-taking or stop-losses)
+
+        Args:
+            symbol: Trading pair symbol (e.g., 'BTCUSDT')
+
+        Returns:
+            Dict with open interest data or None
+
+        Example:
+        {
+            "symbol": "BTCUSDT",
+            "open_interest": 123456.789,
+            "timestamp": datetime
+        }
+        """
+        try:
+            params = {"symbol": symbol}
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.FUTURES_URL}/openInterest", params=params
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        return {
+                            "symbol": data["symbol"],
+                            "open_interest": float(data["openInterest"]),
+                            "timestamp": pd.to_datetime(data["time"], unit="ms"),
+                        }
+
+                    else:
+                        logger.error(
+                            f"Binance Futures API error: {response.status}"
+                        )
+                        return None
+
+        except Exception as e:
+            logger.exception(f"Error fetching open interest for {symbol}: {e}")
+            return None
+
+    async def format_funding_rate(self, funding_data: Dict[str, Any]) -> str:
+        """
+        Format funding rate data for Telegram display
+
+        Args:
+            funding_data: Funding rate dict
+
+        Returns:
+            Formatted string for Telegram
+        """
+        if not funding_data:
+            return "❌ Funding rate data not available"
+
+        symbol = funding_data.get("symbol")
+        rate = funding_data.get("funding_rate", 0)
+        rate_pct = funding_data.get("funding_rate_pct", 0)
+        sentiment = funding_data.get("sentiment", "neutral")
+
+        # Emoji based on sentiment
+        emoji_map = {
+            "very_bullish": "🚀",
+            "bullish": "📈",
+            "bearish": "📉",
+            "very_bearish": "🔻",
+        }
+        emoji = emoji_map.get(sentiment, "➡️")
+
+        text = f"💰 **Funding Rate: {symbol}**\n\n"
+        text += f"📊 Rate: {rate_pct:.4f}%\n"
+        text += f"{emoji} Sentiment: {sentiment.replace('_', ' ').title()}\n\n"
+
+        # Explanation
+        if rate > 0:
+            text += "📌 Longs are paying shorts → Bullish sentiment in market\n"
+            if rate > 0.0005:
+                text += "⚠️ High funding rate may indicate overheated longs\n"
+        else:
+            text += "📌 Shorts are paying longs → Bearish sentiment in market\n"
+            if rate < -0.0005:
+                text += "⚠️ High negative rate may indicate overheated shorts\n"
+
+        return text

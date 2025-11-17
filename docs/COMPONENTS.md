@@ -20,15 +20,17 @@
 **Назначение:** Обработка команды /start
 
 **Функции:**
-- `cmd_start(message: Message, session: AsyncSession)` - Приветствие пользователя и регистрация в БД
+- `cmd_start(message: Message, session: AsyncSession, language: str)` - Приветствие пользователя и регистрация в БД
 
 **Зависимости:**
 - Database: User model, get_or_create_user()
 - Config: REQUIRED_CHANNEL
+- Localization: i18n
 
 **Особенности:**
 - Создает пользователя в БД при первом использовании
-- Показывает приветственное сообщение с функциями бота
+- Показывает приветственное сообщение с функциями бота (на выбранном языке)
+- Отображает интерактивное меню с кнопками
 - Напоминает о необходимости подписки на канал
 
 ---
@@ -39,16 +41,62 @@
 **Назначение:** Обработка команды /help
 
 **Функции:**
-- `cmd_help(message: Message, session: AsyncSession)` - Справка по командам и показ лимитов
+- `cmd_help(message: Message, session: AsyncSession, language: str)` - Справка по командам и показ лимитов
 
 **Зависимости:**
 - Database: get_request_limit()
 - Config: REQUEST_LIMIT_PER_DAY
+- Localization: i18n
 
 **Особенности:**
-- Показывает список доступных команд
+- Показывает список доступных команд (на выбранном языке)
 - Отображает оставшиеся запросы (X/5)
 - Показывает время до сброса лимитов
+- Мультиязычная поддержка
+
+---
+
+### limits.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/bot/handlers/limits.py`
+
+**Назначение:** Обработка команды /limits
+
+**Функции:**
+- `cmd_limits(message: Message, session: AsyncSession, language: str)` - Проверка лимитов запросов
+
+**Зависимости:**
+- Database: get_request_limit()
+- Config: REQUEST_LIMIT_PER_DAY
+- Localization: i18n
+
+**Особенности:**
+- Показывает детальную информацию о лимитах
+- Отображает количество использованных запросов
+- Показывает время до обновления лимитов
+- Форматированный вывод с прогресс-баром
+
+---
+
+### menu.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/bot/handlers/menu.py`
+
+**Назначение:** Интерактивное меню навигации
+
+**Функции:**
+- Callback handlers для кнопок меню
+- `show_main_menu()` - Показ главного меню
+- `show_crypto_menu()` - Меню криптовалютных функций
+- `show_help_menu()` - Меню справки
+
+**Зависимости:**
+- aiogram InlineKeyboardMarkup
+- Localization: i18n
+
+**Особенности:**
+- Inline keyboard для удобной навигации
+- Мультиязычная поддержка
+- Callback query handlers
+- Быстрый доступ к основным функциям
 
 ---
 
@@ -255,6 +303,107 @@
 
 ---
 
+### binance_service.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/services/binance_service.py`
+
+**Класс:** `BinanceService`
+
+**Назначение:** Дополнительные данные от Binance API
+
+**Методы:**
+- `get_ticker_24h(symbol: str)` - Получить 24h статистику тикера
+- `get_orderbook_depth(symbol: str)` - Получить глубину стакана заявок
+- `get_klines(symbol: str, interval: str)` - Получить OHLC данные
+
+**Особенности:**
+- Дополняет данные CoinGecko
+- Более точные цены и объемы
+- Real-time данные
+
+---
+
+### fear_greed_service.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/services/fear_greed_service.py`
+
+**Класс:** `FearGreedService`
+
+**Назначение:** Получение индекса страха и жадности
+
+**Методы:**
+- `get_fear_greed_index()` - Получить текущий Fear & Greed Index
+- `format_fear_greed(data: dict)` - Форматирование для отображения
+
+**Особенности:**
+- Индикатор настроений крипторынка
+- Значения от 0 (Extreme Fear) до 100 (Extreme Greed)
+- Кэширование на 1 час
+- Исторические данные
+
+---
+
+### technical_indicators.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/services/technical_indicators.py`
+
+**Назначение:** Расчет технических индикаторов
+
+**Функции:**
+- `calculate_rsi(prices: list, period: int = 14) -> float` - RSI индикатор
+- `calculate_macd(prices: list)` - MACD индикатор
+- `calculate_bollinger_bands(prices: list, period: int = 20)` - Bollinger Bands
+- `calculate_sma(prices: list, period: int)` - Simple Moving Average
+- `calculate_ema(prices: list, period: int)` - Exponential Moving Average
+
+**Особенности:**
+- Профессиональные TA индикаторы
+- Используется библиотека `ta`
+- Работа с pandas DataFrame
+- Точные математические расчеты
+
+---
+
+### candlestick_patterns.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/services/candlestick_patterns.py`
+
+**Назначение:** Определение свечных паттернов
+
+**Функции:**
+- `is_doji(candle: dict) -> bool` - Паттерн Doji
+- `is_hammer(candle: dict) -> bool` - Паттерн Hammer
+- `is_shooting_star(candle: dict) -> bool` - Паттерн Shooting Star
+- `is_engulfing(prev: dict, curr: dict) -> str` - Bullish/Bearish Engulfing
+- `is_morning_star(candles: list) -> bool` - Morning Star
+- `is_evening_star(candles: list) -> bool` - Evening Star
+
+**Особенности:**
+- Определение классических свечных паттернов
+- Бычьи и медвежьи сигналы
+- Математическая валидация паттернов
+- Возврат уверенности (confidence score)
+
+---
+
+### retention_service.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/services/retention_service.py`
+
+**Класс:** `RetentionService`
+
+**Назначение:** Воронка удержания пользователей
+
+**Функции:**
+- `start_retention_service(bot: Bot)` - Запуск retention scheduler
+- `stop_retention_service()` - Остановка scheduler
+- `send_retention_message(user_id: int, message_type: str)` - Отправка сообщения
+- `process_unsubscribed_users()` - Обработка неподписанных пользователей
+
+**Особенности:**
+- APScheduler для планирования
+- Автоматические рассылки через 1 час, 24 часа, 7 дней
+- Персонализированные сообщения
+- Отслеживание конверсии
+- Мягкие напоминания о подписке
+
+---
+
 ## Middleware
 
 ### database.py
@@ -350,6 +499,49 @@ async def __call__(self, handler, event, data):
 - Structured logging
 - Сохранение в файл logs/bot.log
 - Опционально сохранение в AdminLog (БД)
+
+---
+
+### admin.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/bot/middleware/admin.py`
+
+**Класс:** `AdminMiddleware`
+
+**Назначение:** Проверка прав администратора
+
+**Алгоритм:**
+1. Получить user_id из события
+2. Проверить наличие в ADMIN_IDS
+3. Добавить флаг is_admin в data
+
+**Особенности:**
+- Проверка перед выполнением handler
+- Флаг is_admin доступен в handlers
+- Используется для доступа к админ-командам
+- Не блокирует обычные команды
+
+---
+
+### language.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/bot/middleware/language.py`
+
+**Класс:** `LanguageMiddleware`
+
+**Назначение:** Определение языка пользователя
+
+**Алгоритм:**
+1. Получить user_id
+2. Загрузить язык из БД (поле language)
+3. Если не установлен - использовать language_code из Telegram
+4. Fallback на 'ru' если не определен
+5. Добавить language в data
+
+**Особенности:**
+- Автоматическое определение языка
+- Сохранение выбора пользователя в БД
+- Поддержка RU/EN
+- Используется для локализации ответов
+- Интеграция с i18n системой
 
 ---
 
@@ -596,6 +788,35 @@ AsyncSessionLocal = sessionmaker(
     'ada': 'cardano',
     # ... и т.д.
 }
+```
+
+---
+
+### i18n.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/utils/i18n.py`
+
+**Функции:**
+- `load_locale(language: str) -> dict` - Загрузка языковых файлов
+- `get_text(language: str, key: str, **kwargs) -> str` - Получение локализованного текста
+- `format_text(template: str, **kwargs) -> str` - Форматирование с подстановкой
+
+**Особенности:**
+- Загрузка из JSON файлов (locales/ru.json, locales/en.json)
+- Поддержка плейсхолдеров {variable}
+- Fallback на русский язык если ключ не найден
+- Кэширование загруженных локалей
+
+**Локали:**
+- `ru.json` - Русский язык
+- `en.json` - Английский язык
+
+**Пример использования:**
+```python
+# Загрузка текста
+text = get_text('ru', 'welcome_message', name='Пользователь')
+
+# Форматирование
+formatted = format_text('Привет, {name}!', name='Ivan')
 ```
 
 ---

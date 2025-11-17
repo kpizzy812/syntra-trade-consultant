@@ -19,6 +19,8 @@ from src.services.binance_service import BinanceService
 from src.services.fear_greed_service import FearGreedService
 from src.services.technical_indicators import TechnicalIndicators
 from src.services.candlestick_patterns import CandlestickPatterns
+from src.services.cycle_analysis_service import CycleAnalysisService
+from src.services.coinmetrics_service import CoinMetricsService
 from src.utils.coin_parser import normalize_coin_name
 
 
@@ -31,6 +33,8 @@ binance_service = BinanceService()
 fear_greed_service = FearGreedService()
 technical_indicators = TechnicalIndicators()
 candlestick_patterns = CandlestickPatterns()
+cycle_service = CycleAnalysisService()
+coinmetrics_service = CoinMetricsService()
 
 
 # ============================================================================
@@ -175,10 +179,13 @@ CRYPTO_TOOLS = [
             "name": "get_technical_analysis",
             "description": (
                 "Get comprehensive technical analysis for a cryptocurrency. "
-                "Use this when user asks for 'analysis', 'indicators', 'technical analysis', or 'TA'. "
+                "Use this when user asks for 'analysis', 'indicators', 'technical analysis', "
+                "'potential', 'should I buy', or questions about market cycle/phase. "
                 "Returns: RSI, MACD, EMAs, Bollinger Bands, candlestick patterns, ATH/ATL, "
-                "Fear & Greed Index, latest news (24h delay, cached), and extended market metrics. "
-                "This is the MOST POWERFUL tool for deep crypto analysis with all data sources."
+                "Fear & Greed Index, latest news (24h delay, cached), funding rates (trader sentiment), "
+                "on-chain metrics (network health, exchange flows), and for Bitcoin - cycle analysis "
+                "(Rainbow Chart, market phase detection). "
+                "This is the MOST POWERFUL tool for deep crypto analysis with ALL data sources."
             ),
             "parameters": {
                 "type": "object",
@@ -454,6 +461,9 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
     - Extended market data (ATH/ATL, price changes, tokenomics)
     - Fear & Greed Index
     - Latest news (24h delay, cached for 24h)
+    - Funding rates (Binance Futures - trader sentiment)
+    - Cycle analysis (Bitcoin only - Rainbow Chart, market phase)
+    - On-chain metrics (CoinMetrics - network health, exchange flows)
     - Technical indicators (RSI, MACD, EMAs, Bollinger Bands, etc.)
     - Candlestick patterns
 
@@ -478,19 +488,102 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
 
         # 3. Get latest news (24h delay, cached for 24h - perfect!)
         news = []
+        coin_symbol = None
         try:
             coin_details = await coingecko_service.get_coin_data(normalized_id)
-            symbol = (
+            coin_symbol = (
                 coin_details.get("symbol", "").upper()
                 if coin_details
                 else normalized_id.upper()
             )
-            news = await cryptopanic_service.get_news_for_coin(symbol, limit=5)
+            news = await cryptopanic_service.get_news_for_coin(coin_symbol, limit=5)
         except Exception as e:
             logger.warning(f"Could not fetch news for {normalized_id}: {e}")
             # News are optional, continue without them
 
-        # 4. Get candlestick data from Binance
+        # 4. Get Funding Rates from Binance Futures (trader sentiment)
+        funding_data = None
+        try:
+            # Get Binance symbol for this coin
+            symbol = binance_service.get_symbol(normalized_id)
+            if symbol:
+                funding = await binance_service.get_latest_funding_rate(symbol)
+                if funding:
+                    funding_data = {
+                        "funding_rate_pct": funding["funding_rate_pct"],
+                        "sentiment": funding["sentiment"],
+                        "funding_time": funding.get("funding_time"),
+                    }
+                    # Get Open Interest
+                    oi = await binance_service.get_open_interest(symbol)
+                    if oi:
+                        funding_data["open_interest"] = oi["open_interest"]
+                    logger.info(
+                        f"Got funding rate for {symbol}: {funding['funding_rate_pct']:.4f}%"
+                    )
+        except Exception as e:
+            logger.warning(f"Could not fetch funding data for {normalized_id}: {e}")
+            # Funding data is optional, continue without it
+
+        # 5. Get Cycle Analysis (Bitcoin only - Rainbow Chart, Pi Cycle)
+        cycle_data = None
+        if normalized_id == "bitcoin" and extended_data:
+            try:
+                current_price = extended_data.get("current_price")
+                if current_price:
+                    rainbow = cycle_service.get_rainbow_chart_data(current_price)
+                    cycle_data = {
+                        "current_band": rainbow["current_band"],
+                        "sentiment": rainbow["sentiment"],
+                        "bands": {
+                            "hodl": rainbow["bands"]["hodl"],
+                            "buy": rainbow["bands"]["buy"],
+                            "sell": rainbow["bands"]["sell"],
+                            "maximum_bubble": rainbow["bands"]["maximum_bubble"],
+                        },
+                        "days_since_genesis": rainbow["days_since_genesis"],
+                    }
+                    logger.info(
+                        f"Bitcoin Rainbow Chart: {rainbow['current_band']} band"
+                    )
+            except Exception as e:
+                logger.warning(f"Could not calculate cycle data for Bitcoin: {e}")
+                # Cycle data is optional, continue without it
+
+        # 6. Get On-Chain Metrics from CoinMetrics (network health)
+        onchain_data = None
+        try:
+            # CoinMetrics uses different IDs (bitcoin -> btc)
+            coinmetrics_id = normalized_id
+            if normalized_id == "bitcoin":
+                coinmetrics_id = "btc"
+            elif normalized_id == "ethereum":
+                coinmetrics_id = "eth"
+
+            health = await coinmetrics_service.get_network_health(coinmetrics_id)
+            if health and not health.get("error"):
+                onchain_data = {
+                    "active_addresses": health.get("active_addresses"),
+                    "transaction_count": health.get("transaction_count"),
+                }
+                if "hash_rate" in health:
+                    onchain_data["hash_rate"] = health["hash_rate"]
+
+                # Get Exchange Flows
+                flows = await coinmetrics_service.get_exchange_flows(coinmetrics_id)
+                if flows and not flows.get("error"):
+                    onchain_data["exchange_flows"] = {
+                        "net_flow": flows["net_flow"],
+                        "sentiment": flows["sentiment"],
+                    }
+                logger.info(
+                    f"Got on-chain metrics for {coinmetrics_id}: {health.get('active_addresses')} addresses"
+                )
+        except Exception as e:
+            logger.warning(f"Could not fetch on-chain data for {normalized_id}: {e}")
+            # On-chain data is optional, continue without it
+
+        # 7. Get candlestick data from Binance
         klines_df = await binance_service.get_klines_by_coin_id(
             normalized_id,
             interval=timeframe,
@@ -505,6 +598,9 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
             "extended_data": extended_data or {},
             "fear_greed": fear_greed or {},
             "news": news or [],
+            "funding_data": funding_data or {},
+            "cycle_data": cycle_data or {},
+            "onchain_data": onchain_data or {},
             "technical_indicators": {},
             "candlestick_patterns": {},
             "data_sources": [],
@@ -517,6 +613,12 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
             result["data_sources"].append("fear_greed_index")
         if news:
             result["data_sources"].append("news")
+        if funding_data:
+            result["data_sources"].append("funding_rates")
+        if cycle_data:
+            result["data_sources"].append("cycle_analysis")
+        if onchain_data:
+            result["data_sources"].append("onchain_metrics")
 
         # 5. Calculate technical indicators (if klines available)
         if klines_df is not None and len(klines_df) >= 20:

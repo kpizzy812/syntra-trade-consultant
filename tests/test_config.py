@@ -20,7 +20,7 @@ def test_config_loading():
     # Test default values
     assert REQUEST_LIMIT_PER_DAY == 5
     assert CACHE_TTL_COINGECKO == 60
-    assert CACHE_TTL_CRYPTOPANIC == 300
+    assert CACHE_TTL_CRYPTOPANIC == 86400  # 24 hours in seconds
     assert SKIP_SUBSCRIPTION_CHECK is False  # default is False
 
     # Test model config

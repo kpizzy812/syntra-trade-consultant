@@ -5,7 +5,7 @@ Async database operations using SQLAlchemy 2.0
 """
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, UTC
 from typing import List, Optional
 
 from sqlalchemy import select, update, delete, func
@@ -113,7 +113,7 @@ async def get_or_create_user(
 
     if user:
         # Update last activity
-        user.last_activity = datetime.utcnow()
+        user.last_activity = datetime.now(UTC)
         await session.commit()
         return user, False
 
@@ -193,7 +193,7 @@ async def get_inactive_users(session: AsyncSession, days: int = 7) -> List[User]
     Returns:
         List of inactive users
     """
-    threshold = datetime.utcnow() - timedelta(days=days)
+    threshold = datetime.now(UTC) - timedelta(days=days)
     stmt = select(User).where(User.last_activity < threshold)
     result = await session.execute(stmt)
     return list(result.scalars().all())
@@ -648,7 +648,7 @@ async def get_detailed_user_stats(session: AsyncSession, days: int = 7) -> dict:
     basic_stats = await get_user_stats(session)
 
     # Active users in last N days
-    period_start = datetime.utcnow() - timedelta(days=days)
+    period_start = datetime.now(UTC) - timedelta(days=days)
     active_period_stmt = select(func.count(User.id)).where(
         User.last_activity >= period_start
     )
@@ -661,7 +661,7 @@ async def get_detailed_user_stats(session: AsyncSession, days: int = 7) -> dict:
     new_users = new_users_result.scalar()
 
     # Inactive users (>7 days)
-    inactive_threshold = datetime.utcnow() - timedelta(days=7)
+    inactive_threshold = datetime.now(UTC) - timedelta(days=7)
     inactive_stmt = select(func.count(User.id)).where(
         User.last_activity < inactive_threshold
     )
@@ -880,7 +880,7 @@ async def get_costs_by_day(session: AsyncSession, days: int = 7) -> List[dict]:
     Returns:
         List of dicts with daily costs
     """
-    start_date = datetime.utcnow() - timedelta(days=days)
+    start_date = datetime.now(UTC) - timedelta(days=days)
 
     stmt = (
         select(
