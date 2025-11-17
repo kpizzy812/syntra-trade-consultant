@@ -35,7 +35,7 @@ class CryptoPanicService:
     - Error handling and retries
     """
 
-    BASE_URL = "https://cryptopanic.com/api/v1"
+    BASE_URL = "https://cryptopanic.com/api/developer/v2"
 
     def __init__(self, api_token: str = CRYPTOPANIC_TOKEN):
         """

@@ -15,7 +15,7 @@ import sys
 sys.path.insert(0, ".")
 
 from src.services.openai_service import OpenAIService
-from src.database.engine import async_session
+from src.database.engine import get_session_maker
 from src.database.models import User
 from sqlalchemy import select
 
@@ -63,7 +63,8 @@ async def test_function_calling():
         },
     ]
 
-    async with async_session() as session:
+    async_session_maker = get_session_maker()
+    async with async_session_maker() as session:
         # Get or create test user
         user = await get_or_create_test_user(session)
         print(f"\n✅ Test user created/retrieved: ID={user.id}\n")
