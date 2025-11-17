@@ -39,9 +39,9 @@ class OpenAIServiceWithTools(OpenAIService):
         session: AsyncSession,
         user_id: int,
         user_message: str,
-        user_language: str = 'ru',
+        user_language: str = "ru",
         model: Optional[str] = None,
-        max_tool_iterations: int = 5
+        max_tool_iterations: int = 5,
     ) -> AsyncGenerator[str, None]:
         """
         Stream chat completion with intelligent function calling
@@ -66,10 +66,7 @@ class OpenAIServiceWithTools(OpenAIService):
         try:
             # Build context messages
             messages = await self.get_context_messages(
-                session,
-                user_id,
-                user_message,
-                user_language
+                session, user_id, user_message, user_language
             )
 
             # Calculate history tokens
@@ -82,10 +79,7 @@ class OpenAIServiceWithTools(OpenAIService):
 
             # Save user message to history
             await add_chat_message(
-                session,
-                user_id=user_id,
-                role="user",
-                content=user_message
+                session, user_id=user_id, role="user", content=user_message
             )
 
             logger.info(
@@ -112,7 +106,7 @@ class OpenAIServiceWithTools(OpenAIService):
                     tool_choice="auto",  # Let AI decide when to use tools
                     max_tokens=ModelConfig.MAX_TOKENS_RESPONSE,
                     temperature=ModelConfig.DEFAULT_TEMPERATURE,
-                    stream=True
+                    stream=True,
                 )
 
                 # Process stream
@@ -135,20 +129,24 @@ class OpenAIServiceWithTools(OpenAIService):
                                 current_tool_calls[idx] = {
                                     "id": "",
                                     "name": "",
-                                    "arguments": ""
+                                    "arguments": "",
                                 }
 
                             if tool_call.id:
                                 current_tool_calls[idx]["id"] = tool_call.id
 
                             if tool_call.function and tool_call.function.name:
-                                current_tool_calls[idx]["name"] = tool_call.function.name
+                                current_tool_calls[idx][
+                                    "name"
+                                ] = tool_call.function.name
 
                             if tool_call.function and tool_call.function.arguments:
-                                current_tool_calls[idx]["arguments"] += tool_call.function.arguments
+                                current_tool_calls[idx][
+                                    "arguments"
+                                ] += tool_call.function.arguments
 
                     # Track token usage
-                    if hasattr(chunk, 'usage') and chunk.usage:
+                    if hasattr(chunk, "usage") and chunk.usage:
                         total_input_tokens += chunk.usage.prompt_tokens
                         total_output_tokens += chunk.usage.completion_tokens
 
@@ -171,51 +169,60 @@ class OpenAIServiceWithTools(OpenAIService):
                             logger.info(f"Executing tool: {tool_name} with {arguments}")
                             result = await execute_tool(tool_name, arguments)
 
-                            tool_results.append({
-                                "role": "tool",
-                                "tool_call_id": tool_id,
-                                "content": result
-                            })
+                            tool_results.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_id,
+                                    "content": result,
+                                }
+                            )
 
-                            tool_calls_made.append({
-                                "name": tool_name,
-                                "arguments": arguments,
-                                "result_preview": result[:100]
-                            })
+                            tool_calls_made.append(
+                                {
+                                    "name": tool_name,
+                                    "arguments": arguments,
+                                    "result_preview": result[:100],
+                                }
+                            )
 
                         except Exception as e:
                             logger.error(f"Error executing tool {tool_name}: {e}")
-                            tool_results.append({
-                                "role": "tool",
-                                "tool_call_id": tool_id,
-                                "content": json.dumps({
-                                    "success": False,
-                                    "error": str(e)
-                                })
-                            })
+                            tool_results.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_id,
+                                    "content": json.dumps(
+                                        {"success": False, "error": str(e)}
+                                    ),
+                                }
+                            )
 
                     # Add assistant message with tool calls
-                    messages.append({
-                        "role": "assistant",
-                        "content": current_content or None,
-                        "tool_calls": [
-                            {
-                                "id": tc["id"],
-                                "type": "function",
-                                "function": {
-                                    "name": tc["name"],
-                                    "arguments": tc["arguments"]
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": current_content or None,
+                            "tool_calls": [
+                                {
+                                    "id": tc["id"],
+                                    "type": "function",
+                                    "function": {
+                                        "name": tc["name"],
+                                        "arguments": tc["arguments"],
+                                    },
                                 }
-                            }
-                            for tc in current_tool_calls.values()
-                        ]
-                    })
+                                for tc in current_tool_calls.values()
+                            ],
+                        }
+                    )
 
                     # Add tool results
                     messages.extend(tool_results)
 
                     # Continue to next iteration (AI will use tool results)
-                    logger.info(f"Tool calls completed. Continuing to iteration {iteration + 1}")
+                    logger.info(
+                        f"Tool calls completed. Continuing to iteration {iteration + 1}"
+                    )
                     continue
 
                 else:
@@ -234,10 +241,7 @@ class OpenAIServiceWithTools(OpenAIService):
 
             # Save assistant response to history
             await add_chat_message(
-                session,
-                user_id=user_id,
-                role="assistant",
-                content=full_response
+                session, user_id=user_id, role="assistant", content=full_response
             )
 
             # Track cost
@@ -247,7 +251,7 @@ class OpenAIServiceWithTools(OpenAIService):
                 service="openai_tools",
                 tokens=total_input_tokens + total_output_tokens,
                 cost=cost,
-                model=model
+                model=model,
             )
 
             logger.info(

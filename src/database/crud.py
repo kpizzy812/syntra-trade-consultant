@@ -26,9 +26,9 @@ logger = logging.getLogger(__name__)
 # USER OPERATIONS
 # ===========================
 
+
 async def get_user_by_telegram_id(
-    session: AsyncSession,
-    telegram_id: int
+    session: AsyncSession, telegram_id: int
 ) -> Optional[User]:
     """
     Get user by Telegram ID
@@ -52,7 +52,7 @@ async def create_user(
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
     is_admin: bool = False,
-    language: str = 'ru'
+    language: str = "ru",
 ) -> User:
     """
     Create new user
@@ -75,13 +75,13 @@ async def create_user(
         first_name=first_name,
         last_name=last_name,
         is_admin=is_admin,
-        language=language
+        language=language,
     )
     session.add(user)
     await session.commit()
     await session.refresh(user)
 
-    logger.info(f'User created: {telegram_id} (@{username}) with language: {language}')
+    logger.info(f"User created: {telegram_id} (@{username}) with language: {language}")
     return user
 
 
@@ -92,7 +92,7 @@ async def get_or_create_user(
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
     language: Optional[str] = None,
-    telegram_language: Optional[str] = None
+    telegram_language: Optional[str] = None,
 ) -> tuple[User, bool]:
     """
     Get existing user or create new one
@@ -129,15 +129,13 @@ async def get_or_create_user(
         username=username,
         first_name=first_name,
         last_name=last_name,
-        language=language
+        language=language,
     )
     return user, True
 
 
 async def update_user_subscription(
-    session: AsyncSession,
-    telegram_id: int,
-    is_subscribed: bool
+    session: AsyncSession, telegram_id: int, is_subscribed: bool
 ) -> Optional[User]:
     """
     Update user subscription status
@@ -158,14 +156,12 @@ async def update_user_subscription(
     await session.execute(stmt)
     await session.commit()
 
-    logger.info(f'User {telegram_id} subscription updated: {is_subscribed}')
+    logger.info(f"User {telegram_id} subscription updated: {is_subscribed}")
     return await get_user_by_telegram_id(session, telegram_id)
 
 
 async def update_user_language(
-    session: AsyncSession,
-    telegram_id: int,
-    language: str
+    session: AsyncSession, telegram_id: int, language: str
 ) -> Optional[User]:
     """
     Update user language preference
@@ -178,22 +174,15 @@ async def update_user_language(
     Returns:
         Updated User model or None
     """
-    stmt = (
-        update(User)
-        .where(User.telegram_id == telegram_id)
-        .values(language=language)
-    )
+    stmt = update(User).where(User.telegram_id == telegram_id).values(language=language)
     await session.execute(stmt)
     await session.commit()
 
-    logger.info(f'User {telegram_id} language updated: {language}')
+    logger.info(f"User {telegram_id} language updated: {language}")
     return await get_user_by_telegram_id(session, telegram_id)
 
 
-async def get_inactive_users(
-    session: AsyncSession,
-    days: int = 7
-) -> List[User]:
+async def get_inactive_users(session: AsyncSession, days: int = 7) -> List[User]:
     """
     Get users inactive for N days
 
@@ -214,13 +203,14 @@ async def get_inactive_users(
 # CHAT HISTORY OPERATIONS
 # ===========================
 
+
 async def add_chat_message(
     session: AsyncSession,
     user_id: int,
     role: str,
     content: str,
     tokens_used: Optional[int] = None,
-    model: Optional[str] = None
+    model: Optional[str] = None,
 ) -> ChatHistory:
     """
     Add message to chat history
@@ -241,7 +231,7 @@ async def add_chat_message(
         role=role,
         content=content,
         tokens_used=tokens_used,
-        model=model
+        model=model,
     )
     session.add(message)
     await session.commit()
@@ -251,9 +241,7 @@ async def add_chat_message(
 
 
 async def get_chat_history(
-    session: AsyncSession,
-    user_id: int,
-    limit: int = 10
+    session: AsyncSession, user_id: int, limit: int = 10
 ) -> List[ChatHistory]:
     """
     Get recent chat history for user
@@ -279,10 +267,7 @@ async def get_chat_history(
     return list(reversed(messages))
 
 
-async def clear_chat_history(
-    session: AsyncSession,
-    user_id: int
-) -> int:
+async def clear_chat_history(session: AsyncSession, user_id: int) -> int:
     """
     Clear chat history for user
 
@@ -298,7 +283,7 @@ async def clear_chat_history(
     await session.commit()
 
     deleted_count = result.rowcount
-    logger.info(f'Cleared {deleted_count} messages for user {user_id}')
+    logger.info(f"Cleared {deleted_count} messages for user {user_id}")
     return deleted_count
 
 
@@ -306,10 +291,9 @@ async def clear_chat_history(
 # REQUEST LIMIT OPERATIONS
 # ===========================
 
+
 async def get_or_create_request_limit(
-    session: AsyncSession,
-    user_id: int,
-    today: Optional[date] = None
+    session: AsyncSession, user_id: int, today: Optional[date] = None
 ) -> RequestLimit:
     """
     Get or create request limit for user for today
@@ -326,8 +310,7 @@ async def get_or_create_request_limit(
         today = date.today()
 
     stmt = select(RequestLimit).where(
-        RequestLimit.user_id == user_id,
-        RequestLimit.date == today
+        RequestLimit.user_id == user_id, RequestLimit.date == today
     )
     result = await session.execute(stmt)
     limit_record = result.scalar_one_or_none()
@@ -341,10 +324,7 @@ async def get_or_create_request_limit(
     return limit_record
 
 
-async def increment_request_count(
-    session: AsyncSession,
-    user_id: int
-) -> RequestLimit:
+async def increment_request_count(session: AsyncSession, user_id: int) -> RequestLimit:
     """
     Increment request count for user today
 
@@ -360,13 +340,14 @@ async def increment_request_count(
     await session.commit()
     await session.refresh(limit_record)
 
-    logger.info(f'User {user_id} request count: {limit_record.count}/{limit_record.limit}')
+    logger.info(
+        f"User {user_id} request count: {limit_record.count}/{limit_record.limit}"
+    )
     return limit_record
 
 
 async def check_request_limit(
-    session: AsyncSession,
-    user_id: int
+    session: AsyncSession, user_id: int
 ) -> tuple[bool, int, int]:
     """
     Check if user has requests remaining
@@ -384,10 +365,7 @@ async def check_request_limit(
     return has_remaining, limit_record.count, limit_record.limit
 
 
-async def reset_request_limit(
-    session: AsyncSession,
-    user_id: int
-) -> RequestLimit:
+async def reset_request_limit(session: AsyncSession, user_id: int) -> RequestLimit:
     """
     Reset request count for user (admin function)
 
@@ -403,14 +381,12 @@ async def reset_request_limit(
     await session.commit()
     await session.refresh(limit_record)
 
-    logger.info(f'Request limit reset for user {user_id}')
+    logger.info(f"Request limit reset for user {user_id}")
     return limit_record
 
 
 async def set_user_limit(
-    session: AsyncSession,
-    user_id: int,
-    new_limit: int
+    session: AsyncSession, user_id: int, new_limit: int
 ) -> RequestLimit:
     """
     Set custom request limit for user (admin function)
@@ -428,13 +404,14 @@ async def set_user_limit(
     await session.commit()
     await session.refresh(limit_record)
 
-    logger.info(f'Request limit set to {new_limit} for user {user_id}')
+    logger.info(f"Request limit set to {new_limit} for user {user_id}")
     return limit_record
 
 
 # ===========================
 # COST TRACKING OPERATIONS
 # ===========================
+
 
 async def track_cost(
     session: AsyncSession,
@@ -443,7 +420,7 @@ async def track_cost(
     tokens: int,
     cost: float,
     model: Optional[str] = None,
-    request_type: Optional[str] = None
+    request_type: Optional[str] = None,
 ) -> CostTracking:
     """
     Track API cost
@@ -466,13 +443,13 @@ async def track_cost(
         model=model,
         tokens=tokens,
         cost=cost,
-        request_type=request_type
+        request_type=request_type,
     )
     session.add(cost_record)
     await session.commit()
     await session.refresh(cost_record)
 
-    logger.info(f'Cost tracked: {service} - ${cost:.4f} ({tokens} tokens)')
+    logger.info(f"Cost tracked: {service} - ${cost:.4f} ({tokens} tokens)")
     return cost_record
 
 
@@ -480,7 +457,7 @@ async def get_total_costs(
     session: AsyncSession,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
-    service: Optional[str] = None
+    service: Optional[str] = None,
 ) -> dict:
     """
     Get total costs for period
@@ -495,9 +472,9 @@ async def get_total_costs(
         Dict with total_cost, total_tokens, request_count
     """
     stmt = select(
-        func.sum(CostTracking.cost).label('total_cost'),
-        func.sum(CostTracking.tokens).label('total_tokens'),
-        func.count(CostTracking.id).label('request_count')
+        func.sum(CostTracking.cost).label("total_cost"),
+        func.sum(CostTracking.tokens).label("total_tokens"),
+        func.count(CostTracking.id).label("request_count"),
     )
 
     if start_date:
@@ -511,16 +488,14 @@ async def get_total_costs(
     row = result.one()
 
     return {
-        'total_cost': float(row.total_cost or 0),
-        'total_tokens': int(row.total_tokens or 0),
-        'request_count': int(row.request_count or 0)
+        "total_cost": float(row.total_cost or 0),
+        "total_tokens": int(row.total_tokens or 0),
+        "request_count": int(row.request_count or 0),
     }
 
 
 async def get_user_costs(
-    session: AsyncSession,
-    user_id: int,
-    start_date: Optional[datetime] = None
+    session: AsyncSession, user_id: int, start_date: Optional[datetime] = None
 ) -> dict:
     """
     Get costs for specific user
@@ -537,21 +512,18 @@ async def get_user_costs(
         start_date = datetime.combine(date.today(), datetime.min.time())
 
     stmt = select(
-        func.sum(CostTracking.cost).label('total_cost'),
-        func.sum(CostTracking.tokens).label('total_tokens'),
-        func.count(CostTracking.id).label('request_count')
-    ).where(
-        CostTracking.user_id == user_id,
-        CostTracking.timestamp >= start_date
-    )
+        func.sum(CostTracking.cost).label("total_cost"),
+        func.sum(CostTracking.tokens).label("total_tokens"),
+        func.count(CostTracking.id).label("request_count"),
+    ).where(CostTracking.user_id == user_id, CostTracking.timestamp >= start_date)
 
     result = await session.execute(stmt)
     row = result.one()
 
     return {
-        'total_cost': float(row.total_cost or 0),
-        'total_tokens': int(row.total_tokens or 0),
-        'request_count': int(row.request_count or 0)
+        "total_cost": float(row.total_cost or 0),
+        "total_tokens": int(row.total_tokens or 0),
+        "request_count": int(row.request_count or 0),
     }
 
 
@@ -559,13 +531,14 @@ async def get_user_costs(
 # ADMIN LOG OPERATIONS
 # ===========================
 
+
 async def log_admin_action(
     session: AsyncSession,
     admin_id: int,
     action: str,
     target_user_id: Optional[int] = None,
     details: Optional[str] = None,
-    success: bool = True
+    success: bool = True,
 ) -> AdminLog:
     """
     Log admin action
@@ -586,13 +559,13 @@ async def log_admin_action(
         action=action,
         target_user_id=target_user_id,
         details=details,
-        success=success
+        success=success,
     )
     session.add(log_entry)
     await session.commit()
     await session.refresh(log_entry)
 
-    logger.info(f'Admin action logged: {action} by {admin_id}')
+    logger.info(f"Admin action logged: {action} by {admin_id}")
     return log_entry
 
 
@@ -600,7 +573,7 @@ async def get_admin_logs(
     session: AsyncSession,
     limit: int = 50,
     admin_id: Optional[int] = None,
-    action: Optional[str] = None
+    action: Optional[str] = None,
 ) -> List[AdminLog]:
     """
     Get admin logs
@@ -629,6 +602,7 @@ async def get_admin_logs(
 # STATISTICS
 # ===========================
 
+
 async def get_user_stats(session: AsyncSession) -> dict:
     """
     Get overall user statistics
@@ -653,16 +627,13 @@ async def get_user_stats(session: AsyncSession) -> dict:
     active_today = active_result.scalar()
 
     return {
-        'total_users': total_users,
-        'subscribed_users': subscribed_users,
-        'active_today': active_today
+        "total_users": total_users,
+        "subscribed_users": subscribed_users,
+        "active_today": active_today,
     }
 
 
-async def get_detailed_user_stats(
-    session: AsyncSession,
-    days: int = 7
-) -> dict:
+async def get_detailed_user_stats(session: AsyncSession, days: int = 7) -> dict:
     """
     Get detailed user statistics for period
 
@@ -685,9 +656,7 @@ async def get_detailed_user_stats(
     active_period = active_period_result.scalar()
 
     # New users in last N days
-    new_users_stmt = select(func.count(User.id)).where(
-        User.created_at >= period_start
-    )
+    new_users_stmt = select(func.count(User.id)).where(User.created_at >= period_start)
     new_users_result = await session.execute(new_users_stmt)
     new_users = new_users_result.scalar()
 
@@ -701,9 +670,9 @@ async def get_detailed_user_stats(
 
     return {
         **basic_stats,
-        f'active_last_{days}d': active_period,
-        f'new_users_{days}d': new_users,
-        'inactive_7d': inactive_users
+        f"active_last_{days}d": active_period,
+        f"new_users_{days}d": new_users,
+        "inactive_7d": inactive_users,
     }
 
 
@@ -711,7 +680,7 @@ async def get_all_users(
     session: AsyncSession,
     offset: int = 0,
     limit: int = 10,
-    order_by: str = 'created_at'
+    order_by: str = "created_at",
 ) -> List[User]:
     """
     Get all users with pagination
@@ -728,9 +697,9 @@ async def get_all_users(
     # Build query based on order_by
     stmt = select(User).offset(offset).limit(limit)
 
-    if order_by == 'last_activity':
+    if order_by == "last_activity":
         stmt = stmt.order_by(User.last_activity.desc())
-    elif order_by == 'telegram_id':
+    elif order_by == "telegram_id":
         stmt = stmt.order_by(User.telegram_id)
     else:  # Default to created_at
         stmt = stmt.order_by(User.created_at.desc())
@@ -755,9 +724,7 @@ async def get_users_count(session: AsyncSession) -> int:
 
 
 async def search_users(
-    session: AsyncSession,
-    query: str,
-    limit: int = 10
+    session: AsyncSession, query: str, limit: int = 10
 ) -> List[User]:
     """
     Search users by username, first_name, or telegram_id
@@ -778,30 +745,36 @@ async def search_users(
         pass
 
     # Build search query
-    search_pattern = f'%{query}%'
+    search_pattern = f"%{query}%"
 
     if telegram_id:
         # Search by telegram_id or username/name
-        stmt = select(User).where(
-            (User.telegram_id == telegram_id) |
-            (User.username.ilike(search_pattern)) |
-            (User.first_name.ilike(search_pattern))
-        ).limit(limit)
+        stmt = (
+            select(User)
+            .where(
+                (User.telegram_id == telegram_id)
+                | (User.username.ilike(search_pattern))
+                | (User.first_name.ilike(search_pattern))
+            )
+            .limit(limit)
+        )
     else:
         # Search only by username/name
-        stmt = select(User).where(
-            (User.username.ilike(search_pattern)) |
-            (User.first_name.ilike(search_pattern))
-        ).limit(limit)
+        stmt = (
+            select(User)
+            .where(
+                (User.username.ilike(search_pattern))
+                | (User.first_name.ilike(search_pattern))
+            )
+            .limit(limit)
+        )
 
     result = await session.execute(stmt)
     return list(result.scalars().all())
 
 
 async def get_top_users_by_cost(
-    session: AsyncSession,
-    limit: int = 10,
-    start_date: Optional[datetime] = None
+    session: AsyncSession, limit: int = 10, start_date: Optional[datetime] = None
 ) -> List[dict]:
     """
     Get top users by API costs
@@ -819,9 +792,9 @@ async def get_top_users_by_cost(
             User.telegram_id,
             User.username,
             User.first_name,
-            func.sum(CostTracking.cost).label('total_cost'),
-            func.sum(CostTracking.tokens).label('total_tokens'),
-            func.count(CostTracking.id).label('request_count')
+            func.sum(CostTracking.cost).label("total_cost"),
+            func.sum(CostTracking.tokens).label("total_tokens"),
+            func.count(CostTracking.id).label("request_count"),
         )
         .join(CostTracking, User.id == CostTracking.user_id)
         .group_by(User.id, User.telegram_id, User.username, User.first_name)
@@ -837,12 +810,12 @@ async def get_top_users_by_cost(
 
     return [
         {
-            'telegram_id': row.telegram_id,
-            'username': row.username,
-            'first_name': row.first_name,
-            'total_cost': float(row.total_cost or 0),
-            'total_tokens': int(row.total_tokens or 0),
-            'request_count': int(row.request_count or 0)
+            "telegram_id": row.telegram_id,
+            "username": row.username,
+            "first_name": row.first_name,
+            "total_cost": float(row.total_cost or 0),
+            "total_tokens": int(row.total_tokens or 0),
+            "request_count": int(row.request_count or 0),
         }
         for row in rows
     ]
@@ -851,7 +824,7 @@ async def get_top_users_by_cost(
 async def get_costs_by_service(
     session: AsyncSession,
     start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None,
 ) -> List[dict]:
     """
     Get costs grouped by service
@@ -868,9 +841,9 @@ async def get_costs_by_service(
         select(
             CostTracking.service,
             CostTracking.model,
-            func.sum(CostTracking.cost).label('total_cost'),
-            func.sum(CostTracking.tokens).label('total_tokens'),
-            func.count(CostTracking.id).label('request_count')
+            func.sum(CostTracking.cost).label("total_cost"),
+            func.sum(CostTracking.tokens).label("total_tokens"),
+            func.count(CostTracking.id).label("request_count"),
         )
         .group_by(CostTracking.service, CostTracking.model)
         .order_by(func.sum(CostTracking.cost).desc())
@@ -886,20 +859,17 @@ async def get_costs_by_service(
 
     return [
         {
-            'service': row.service,
-            'model': row.model,
-            'total_cost': float(row.total_cost or 0),
-            'total_tokens': int(row.total_tokens or 0),
-            'request_count': int(row.request_count or 0)
+            "service": row.service,
+            "model": row.model,
+            "total_cost": float(row.total_cost or 0),
+            "total_tokens": int(row.total_tokens or 0),
+            "request_count": int(row.request_count or 0),
         }
         for row in rows
     ]
 
 
-async def get_costs_by_day(
-    session: AsyncSession,
-    days: int = 7
-) -> List[dict]:
+async def get_costs_by_day(session: AsyncSession, days: int = 7) -> List[dict]:
     """
     Get daily costs for last N days
 
@@ -914,10 +884,10 @@ async def get_costs_by_day(
 
     stmt = (
         select(
-            func.date(CostTracking.timestamp).label('date'),
-            func.sum(CostTracking.cost).label('total_cost'),
-            func.sum(CostTracking.tokens).label('total_tokens'),
-            func.count(CostTracking.id).label('request_count')
+            func.date(CostTracking.timestamp).label("date"),
+            func.sum(CostTracking.cost).label("total_cost"),
+            func.sum(CostTracking.tokens).label("total_tokens"),
+            func.count(CostTracking.id).label("request_count"),
         )
         .where(CostTracking.timestamp >= start_date)
         .group_by(func.date(CostTracking.timestamp))
@@ -929,10 +899,10 @@ async def get_costs_by_day(
 
     return [
         {
-            'date': row.date.isoformat() if row.date else None,
-            'total_cost': float(row.total_cost or 0),
-            'total_tokens': int(row.total_tokens or 0),
-            'request_count': int(row.request_count or 0)
+            "date": row.date.isoformat() if row.date else None,
+            "total_cost": float(row.total_cost or 0),
+            "total_tokens": int(row.total_tokens or 0),
+            "request_count": int(row.request_count or 0),
         }
         for row in rows
     ]

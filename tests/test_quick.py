@@ -3,7 +3,8 @@
 """Quick test for new services"""
 import asyncio
 import sys
-sys.path.insert(0, '.')
+
+sys.path.insert(0, ".")
 
 from src.services.fear_greed_service import FearGreedService
 
@@ -22,5 +23,5 @@ async def test_fear_greed():
         print("❌ FAILED")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(test_fear_greed())

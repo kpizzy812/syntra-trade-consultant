@@ -1,6 +1,7 @@
 """
 /help command handler
 """
+
 import logging
 
 from aiogram import Router
@@ -11,11 +12,11 @@ from src.utils.i18n import i18n
 
 
 logger = logging.getLogger(__name__)
-router = Router(name='help')
+router = Router(name="help")
 
 
-@router.message(Command('help'))
-async def cmd_help(message: Message, user_language: str = 'ru'):
+@router.message(Command("help"))
+async def cmd_help(message: Message, user_language: str = "ru"):
     """
     Handle /help command - show available commands and usage
 

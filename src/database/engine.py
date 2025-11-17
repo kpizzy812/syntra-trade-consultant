@@ -37,7 +37,7 @@ def get_engine() -> AsyncEngine:
 
     if engine is None:
         # Production vs Development settings
-        is_production = ENVIRONMENT == 'production'
+        is_production = ENVIRONMENT == "production"
 
         engine = create_async_engine(
             DATABASE_URL,
@@ -47,24 +47,22 @@ def get_engine() -> AsyncEngine:
             max_overflow=20 if is_production else 10,
             pool_pre_ping=True,  # Verify connections before using
             pool_recycle=3600,  # Recycle connections every hour
-
             # Logging (disabled - using loguru)
             echo=False,  # Don't spam SQL queries
             echo_pool=False,  # Don't log pool operations
-
             # Performance
             connect_args={
-                'statement_cache_size': 0,  # Disable prepared statement cache
-                'server_settings': {
-                    'application_name': 'syntra_bot',
-                    'jit': 'off',  # Disable JIT for better performance with small queries
-                }
-            }
+                "statement_cache_size": 0,  # Disable prepared statement cache
+                "server_settings": {
+                    "application_name": "syntra_bot",
+                    "jit": "off",  # Disable JIT for better performance with small queries
+                },
+            },
         )
 
         logger.info(
-            f'Database engine created - Environment: {ENVIRONMENT}, '
-            f'Pool size: {engine.pool.size()}, Max overflow: {engine.pool.overflow()}'
+            f"Database engine created - Environment: {ENVIRONMENT}, "
+            f"Pool size: {engine.pool.size()}, Max overflow: {engine.pool.overflow()}"
         )
 
     return engine
@@ -89,7 +87,7 @@ def get_session_maker() -> async_sessionmaker[AsyncSession]:
             autocommit=False,
         )
 
-        logger.info('Session maker created')
+        logger.info("Session maker created")
 
     return AsyncSessionLocal
 
@@ -111,7 +109,7 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
             yield session
         except Exception as e:
             await session.rollback()
-            logger.error(f'Session error: {e}', exc_info=True)
+            logger.error(f"Session error: {e}", exc_info=True)
             raise
         finally:
             await session.close()
@@ -126,12 +124,12 @@ async def init_db() -> None:
     """
     eng = get_engine()
 
-    logger.info('Creating database tables...')
+    logger.info("Creating database tables...")
 
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
-    logger.info('Database tables created successfully')
+    logger.info("Database tables created successfully")
 
 
 async def drop_db() -> None:
@@ -141,17 +139,17 @@ async def drop_db() -> None:
     WARNING: This deletes all data! Use with caution.
     Only for development/testing.
     """
-    if ENVIRONMENT == 'production':
-        raise RuntimeError('Cannot drop database in production environment!')
+    if ENVIRONMENT == "production":
+        raise RuntimeError("Cannot drop database in production environment!")
 
     eng = get_engine()
 
-    logger.warning('Dropping all database tables...')
+    logger.warning("Dropping all database tables...")
 
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
 
-    logger.warning('Database tables dropped')
+    logger.warning("Database tables dropped")
 
 
 async def dispose_engine() -> None:
@@ -164,7 +162,7 @@ async def dispose_engine() -> None:
 
     if engine is not None:
         await engine.dispose()
-        logger.info('Database engine disposed')
+        logger.info("Database engine disposed")
         engine = None
         AsyncSessionLocal = None
 
@@ -180,15 +178,15 @@ async def check_connection() -> bool:
     try:
         eng = get_engine()
         async with eng.connect() as conn:
-            await conn.execute('SELECT 1')
-        logger.info('Database connection check: OK')
+            await conn.execute("SELECT 1")
+        logger.info("Database connection check: OK")
         return True
     except Exception as e:
-        logger.error(f'Database connection check failed: {e}', exc_info=True)
+        logger.error(f"Database connection check failed: {e}", exc_info=True)
         return False
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Test database connection
     import asyncio
     from config.logging import setup_logging
@@ -196,7 +194,7 @@ if __name__ == '__main__':
     setup_logging()
 
     async def test():
-        print('Testing database connection...')
+        print("Testing database connection...")
 
         # Check connection
         is_connected = await check_connection()
@@ -204,12 +202,12 @@ if __name__ == '__main__':
 
         # Initialize tables (use Alembic in production!)
         if is_connected:
-            print('\nCreating tables...')
+            print("\nCreating tables...")
             await init_db()
-            print('✅ Tables created')
+            print("✅ Tables created")
 
         # Cleanup
         await dispose_engine()
-        print('\n✅ Engine disposed')
+        print("\n✅ Engine disposed")
 
     asyncio.run(test())

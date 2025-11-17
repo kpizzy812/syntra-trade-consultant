@@ -14,10 +14,10 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_random_exponential,
-    retry_if_exception_type
+    retry_if_exception_type,
 )
 
-from config.config import CRYPTOPANIC_TOKEN
+from config.config import CRYPTOPANIC_TOKEN, CACHE_TTL_CRYPTOPANIC
 
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ class CryptoPanicService:
         """
         self.api_token = api_token
         self.cache: Dict[str, tuple[Any, datetime]] = {}
-        self.cache_ttl = timedelta(minutes=5)  # 5 minutes cache
+        self.cache_ttl = timedelta(seconds=CACHE_TTL_CRYPTOPANIC)  # Use config TTL
 
     def _get_from_cache(self, key: str) -> Optional[Any]:
         """
@@ -79,12 +79,10 @@ class CryptoPanicService:
     @retry(
         retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
         wait=wait_random_exponential(min=1, max=10),
-        stop=stop_after_attempt(3)
+        stop=stop_after_attempt(3),
     )
     async def _make_request(
-        self,
-        endpoint: str,
-        params: Optional[Dict[str, Any]] = None
+        self, endpoint: str, params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Make API request to CryptoPanic
@@ -103,13 +101,15 @@ class CryptoPanicService:
             params = {}
 
         # Add auth token
-        params['auth_token'] = self.api_token
+        params["auth_token"] = self.api_token
 
         url = f"{self.BASE_URL}{endpoint}"
 
         async with aiohttp.ClientSession() as session:
             try:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                async with session.get(
+                    url, params=params, timeout=aiohttp.ClientTimeout(total=10)
+                ) as response:
                     response.raise_for_status()
                     data = await response.json()
                     return data
@@ -125,7 +125,7 @@ class CryptoPanicService:
         currencies: Optional[List[str]] = None,
         filter_by: str = "hot",
         kind: Optional[str] = None,
-        limit: int = 10
+        limit: int = 10,
     ) -> List[Dict[str, Any]]:
         """
         Get cryptocurrency news
@@ -147,21 +147,18 @@ class CryptoPanicService:
             return cached
 
         try:
-            params: Dict[str, Any] = {
-                'public': 'true',
-                'filter': filter_by
-            }
+            params: Dict[str, Any] = {"public": "true", "filter": filter_by}
 
             if currencies:
-                params['currencies'] = ','.join(currencies).upper()
+                params["currencies"] = ",".join(currencies).upper()
 
             if kind:
-                params['kind'] = kind
+                params["kind"] = kind
 
-            data = await self._make_request('/posts/', params)
+            data = await self._make_request("/posts/", params)
 
             # Extract news items
-            results = data.get('results', [])
+            results = data.get("results", [])
 
             # Limit results
             news_items = results[:limit]
@@ -170,19 +167,21 @@ class CryptoPanicService:
             processed_news = []
             for item in news_items:
                 news_obj = {
-                    'title': item.get('title', ''),
-                    'published_at': item.get('published_at', ''),
-                    'url': item.get('url', ''),
-                    'source': item.get('source', {}).get('title', 'Unknown'),
-                    'currencies': [c.get('code', '') for c in item.get('currencies', [])],
-                    'kind': item.get('kind', 'news'),
-                    'votes': {
-                        'positive': item.get('votes', {}).get('positive', 0),
-                        'negative': item.get('votes', {}).get('negative', 0),
-                        'important': item.get('votes', {}).get('important', 0),
-                        'liked': item.get('votes', {}).get('liked', 0),
-                        'disliked': item.get('votes', {}).get('disliked', 0)
-                    }
+                    "title": item.get("title", ""),
+                    "published_at": item.get("published_at", ""),
+                    "url": item.get("url", ""),
+                    "source": item.get("source", {}).get("title", "Unknown"),
+                    "currencies": [
+                        c.get("code", "") for c in item.get("currencies", [])
+                    ],
+                    "kind": item.get("kind", "news"),
+                    "votes": {
+                        "positive": item.get("votes", {}).get("positive", 0),
+                        "negative": item.get("votes", {}).get("negative", 0),
+                        "important": item.get("votes", {}).get("important", 0),
+                        "liked": item.get("votes", {}).get("liked", 0),
+                        "disliked": item.get("votes", {}).get("disliked", 0),
+                    },
                 }
                 processed_news.append(news_obj)
 
@@ -197,9 +196,7 @@ class CryptoPanicService:
             return []
 
     async def get_news_for_coin(
-        self,
-        coin_id: str,
-        limit: int = 5
+        self, coin_id: str, limit: int = 5
     ) -> List[Dict[str, Any]]:
         """
         Get news for specific coin
@@ -212,9 +209,7 @@ class CryptoPanicService:
             List of news items
         """
         return await self.get_news(
-            currencies=[coin_id.upper()],
-            filter_by='hot',
-            limit=limit
+            currencies=[coin_id.upper()], filter_by="hot", limit=limit
         )
 
     async def get_trending_news(self, limit: int = 10) -> List[Dict[str, Any]]:
@@ -227,7 +222,7 @@ class CryptoPanicService:
         Returns:
             List of news items
         """
-        return await self.get_news(filter_by='hot', limit=limit)
+        return await self.get_news(filter_by="hot", limit=limit)
 
     async def get_bullish_news(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
@@ -239,7 +234,7 @@ class CryptoPanicService:
         Returns:
             List of news items
         """
-        return await self.get_news(filter_by='bullish', limit=limit)
+        return await self.get_news(filter_by="bullish", limit=limit)
 
     async def get_bearish_news(self, limit: int = 10) -> List[Dict[str, Any]]:
         """
@@ -251,12 +246,10 @@ class CryptoPanicService:
         Returns:
             List of news items
         """
-        return await self.get_news(filter_by='bearish', limit=limit)
+        return await self.get_news(filter_by="bearish", limit=limit)
 
     def format_news_for_display(
-        self,
-        news_items: List[Dict[str, Any]],
-        max_items: int = 5
+        self, news_items: List[Dict[str, Any]], max_items: int = 5
     ) -> str:
         """
         Format news items for display in Telegram
@@ -274,14 +267,14 @@ class CryptoPanicService:
         text = "📰 <b>Последние новости:</b>\n\n"
 
         for i, item in enumerate(news_items[:max_items], 1):
-            title = item['title']
-            source = item['source']
-            url = item['url']
+            title = item["title"]
+            source = item["source"]
+            url = item["url"]
 
             # Get sentiment emoji based on votes
-            votes = item['votes']
-            positive = votes.get('positive', 0)
-            negative = votes.get('negative', 0)
+            votes = item["votes"]
+            positive = votes.get("positive", 0)
+            negative = votes.get("negative", 0)
 
             if positive > negative:
                 emoji = "🟢"
@@ -291,17 +284,17 @@ class CryptoPanicService:
                 emoji = "⚪"
 
             # Format timestamp
-            published = item.get('published_at', '')
+            published = item.get("published_at", "")
             if published:
                 try:
-                    dt = datetime.fromisoformat(published.replace('Z', '+00:00'))
+                    dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
                     time_ago = self._format_time_ago(dt)
                 except:
                     time_ago = ""
             else:
                 time_ago = ""
 
-            text += f"{emoji} <b>{i}.</b> <a href=\"{url}\">{title}</a>\n"
+            text += f'{emoji} <b>{i}.</b> <a href="{url}">{title}</a>\n'
             text += f"   <i>{source}</i>"
             if time_ago:
                 text += f" • {time_ago}"
@@ -340,12 +333,13 @@ import asyncio
 
 # Example usage
 if __name__ == "__main__":
+
     async def test():
         service = CryptoPanicService()
 
         # Test getting Bitcoin news
         print("Bitcoin News:")
-        btc_news = await service.get_news_for_coin('BTC', limit=3)
+        btc_news = await service.get_news_for_coin("BTC", limit=3)
         print(service.format_news_for_display(btc_news))
 
         # Test getting trending news

@@ -1,6 +1,7 @@
 """
 /limits command handler - shows user request limits and remaining requests
 """
+
 import logging
 from datetime import datetime, timezone
 
@@ -15,14 +16,12 @@ from config.config import REQUEST_LIMIT_PER_DAY
 
 
 logger = logging.getLogger(__name__)
-router = Router(name='limits')
+router = Router(name="limits")
 
 
-@router.message(Command('limits'))
+@router.message(Command("limits"))
 async def cmd_limits(
-    message: Message,
-    session: AsyncSession,
-    user_language: str = 'ru'
+    message: Message, session: AsyncSession, user_language: str = "ru"
 ):
     """
     Handle /limits command - show user's request limits and usage
@@ -36,9 +35,7 @@ async def cmd_limits(
 
     if not user:
         # Should not happen if middleware is working correctly
-        await message.answer(
-            i18n.get('errors.user_not_found', user_language)
-        )
+        await message.answer(i18n.get("errors.user_not_found", user_language))
         logger.error(f"User {message.from_user.id} not found in database")
         return
 
@@ -52,6 +49,7 @@ async def cmd_limits(
     if now_utc.hour > 0 or now_utc.minute > 0:
         # Already past midnight today, so next reset is tomorrow
         from datetime import timedelta
+
         next_midnight = next_midnight + timedelta(days=1)
 
     hours_until_reset = int((next_midnight - now_utc).total_seconds() / 3600)
@@ -59,10 +57,10 @@ async def cmd_limits(
     # Build response message
     if has_remaining:
         status_emoji = "✅"
-        status_text = i18n.get('limits.status_available', user_language)
+        status_text = i18n.get("limits.status_available", user_language)
     else:
         status_emoji = "🔴"
-        status_text = i18n.get('limits.status_depleted', user_language)
+        status_text = i18n.get("limits.status_depleted", user_language)
 
     response = f"""{status_emoji} <b>{i18n.get('limits.title', user_language)}</b>
 

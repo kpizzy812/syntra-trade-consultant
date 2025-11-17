@@ -1,6 +1,7 @@
 """
 Internationalization (i18n) utilities for bot localization
 """
+
 import json
 import logging
 from pathlib import Path
@@ -36,7 +37,7 @@ class I18n:
         for locale_file in self.locales_dir.glob("*.json"):
             language = locale_file.stem
             try:
-                with open(locale_file, 'r', encoding='utf-8') as f:
+                with open(locale_file, "r", encoding="utf-8") as f:
                     self.translations[language] = json.load(f)
                 logger.info(f"Loaded translations for language: {language}")
             except Exception as e:
@@ -57,10 +58,12 @@ class I18n:
         lang = language or self.default_language
 
         # Get translations for language, fallback to default
-        trans = self.translations.get(lang, self.translations.get(self.default_language, {}))
+        trans = self.translations.get(
+            lang, self.translations.get(self.default_language, {})
+        )
 
         # Navigate nested keys
-        keys = key.split('.')
+        keys = key.split(".")
         value = trans
         for k in keys:
             if isinstance(value, dict):
@@ -90,7 +93,9 @@ class I18n:
 i18n = I18n()
 
 
-def get_user_language(user_language: Optional[str] = None, telegram_language: Optional[str] = None) -> str:
+def get_user_language(
+    user_language: Optional[str] = None, telegram_language: Optional[str] = None
+) -> str:
     """
     Determine user language with fallback logic
 
@@ -116,12 +121,12 @@ def get_user_language(user_language: Optional[str] = None, telegram_language: Op
         telegram_language = telegram_language.lower()
 
         # English variants
-        if telegram_language.startswith('en'):
-            return 'en'
+        if telegram_language.startswith("en"):
+            return "en"
 
         # Russian is default, but also check explicitly
-        if telegram_language.startswith('ru'):
-            return 'ru'
+        if telegram_language.startswith("ru"):
+            return "ru"
 
     # Default to Russian
-    return 'ru'
+    return "ru"

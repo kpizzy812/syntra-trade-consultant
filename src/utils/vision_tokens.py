@@ -11,10 +11,7 @@ from PIL import Image
 from io import BytesIO
 
 
-def calculate_image_tokens(
-    image_bytes: bytes,
-    detail: str = "high"
-) -> int:
+def calculate_image_tokens(image_bytes: bytes, detail: str = "high") -> int:
     """
     Calculate token cost for an image based on OpenAI's formula
 
@@ -89,7 +86,7 @@ def estimate_vision_cost(
     image_bytes: bytes,
     detail: str = "high",
     prompt_tokens: int = 100,
-    response_tokens: int = 200
+    response_tokens: int = 200,
 ) -> Tuple[int, float]:
     """
     Estimate total tokens and cost for a vision API call

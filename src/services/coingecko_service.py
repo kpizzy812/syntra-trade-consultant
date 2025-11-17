@@ -14,7 +14,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
-    before_sleep_log
+    before_sleep_log,
 )
 
 from config.config import COINGECKO_API_KEY, CACHE_TTL_COINGECKO
@@ -71,12 +71,10 @@ class CoinGeckoService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         before_sleep=before_sleep_log(std_logger, logging.WARNING),
-        reraise=True
+        reraise=True,
     )
     async def _make_request(
-        self,
-        endpoint: str,
-        params: Optional[Dict[str, Any]] = None
+        self, endpoint: str, params: Optional[Dict[str, Any]] = None
     ) -> Optional[Dict[str, Any]]:
         """
         Make request to CoinGecko API with caching and automatic retries
@@ -96,7 +94,7 @@ class CoinGeckoService:
 
         # Add API key if available (for Pro tier)
         if self.api_key:
-            params['x_cg_pro_api_key'] = self.api_key
+            params["x_cg_pro_api_key"] = self.api_key
 
         # Check cache
         cache_key = self._get_cache_key(endpoint, params)
@@ -131,7 +129,7 @@ class CoinGeckoService:
         vs_currency: str = "usd",
         include_24h_change: bool = True,
         include_market_cap: bool = False,
-        include_24h_volume: bool = False
+        include_24h_volume: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """
         Get current price for a cryptocurrency
@@ -186,7 +184,7 @@ class CoinGeckoService:
             "localization": "false",
             "tickers": "false",
             "community_data": "false",
-            "developer_data": "false"
+            "developer_data": "false",
         }
 
         return await self._make_request(f"/coins/{coin_id}", params)
@@ -233,42 +231,46 @@ class CoinGeckoService:
             if not coin_data:
                 return None
 
-            market_data = coin_data.get('market_data', {})
+            market_data = coin_data.get("market_data", {})
             if not market_data:
                 return None
 
             # Extract current price for calculations
-            current_price = market_data.get('current_price', {}).get('usd', 0)
+            current_price = market_data.get("current_price", {}).get("usd", 0)
 
             # Extract ATH/ATL data
-            ath = market_data.get('ath', {}).get('usd')
-            ath_date = market_data.get('ath_date', {}).get('usd')
-            ath_change_percentage = market_data.get('ath_change_percentage', {}).get('usd')
+            ath = market_data.get("ath", {}).get("usd")
+            ath_date = market_data.get("ath_date", {}).get("usd")
+            ath_change_percentage = market_data.get("ath_change_percentage", {}).get(
+                "usd"
+            )
 
-            atl = market_data.get('atl', {}).get('usd')
-            atl_date = market_data.get('atl_date', {}).get('usd')
-            atl_change_percentage = market_data.get('atl_change_percentage', {}).get('usd')
+            atl = market_data.get("atl", {}).get("usd")
+            atl_date = market_data.get("atl_date", {}).get("usd")
+            atl_change_percentage = market_data.get("atl_change_percentage", {}).get(
+                "usd"
+            )
 
             # Extract price changes for different timeframes
-            price_change_7d = market_data.get('price_change_percentage_7d')
-            price_change_30d = market_data.get('price_change_percentage_30d')
-            price_change_60d = market_data.get('price_change_percentage_60d')
-            price_change_1y = market_data.get('price_change_percentage_1y')
+            price_change_7d = market_data.get("price_change_percentage_7d")
+            price_change_30d = market_data.get("price_change_percentage_30d")
+            price_change_60d = market_data.get("price_change_percentage_60d")
+            price_change_1y = market_data.get("price_change_percentage_1y")
 
             # Extract supply metrics
-            total_supply = market_data.get('total_supply')
-            circulating_supply = market_data.get('circulating_supply')
-            max_supply = market_data.get('max_supply')
+            total_supply = market_data.get("total_supply")
+            circulating_supply = market_data.get("circulating_supply")
+            max_supply = market_data.get("max_supply")
 
             # Extract market cap and volume
-            market_cap = market_data.get('market_cap', {}).get('usd', 0)
-            total_volume = market_data.get('total_volume', {}).get('usd', 0)
+            market_cap = market_data.get("market_cap", {}).get("usd", 0)
+            total_volume = market_data.get("total_volume", {}).get("usd", 0)
 
             # Calculate Volume/Market Cap ratio (liquidity indicator)
             volume_to_market_cap = (total_volume / market_cap) if market_cap > 0 else 0
 
             # Get market cap rank (for dominance estimation)
-            market_cap_rank = coin_data.get('market_cap_rank')
+            market_cap_rank = coin_data.get("market_cap_rank")
 
             # Build extended data dict
             extended_data = {
@@ -279,26 +281,22 @@ class CoinGeckoService:
                 "atl": atl,
                 "atl_date": atl_date,
                 "atl_change_percentage": atl_change_percentage,
-
                 # Price changes
                 "price_change_7d": price_change_7d,
                 "price_change_30d": price_change_30d,
                 "price_change_60d": price_change_60d,
                 "price_change_1y": price_change_1y,
-
                 # Supply metrics
                 "total_supply": total_supply,
                 "circulating_supply": circulating_supply,
                 "max_supply": max_supply,
-
                 # Market metrics
                 "market_cap": market_cap,
                 "total_volume": total_volume,
                 "volume_to_market_cap": volume_to_market_cap,
                 "market_cap_rank": market_cap_rank,
-
                 # Current price (for reference)
-                "current_price": current_price
+                "current_price": current_price,
             }
 
             logger.debug(f"Extended market data for {coin_id}: {extended_data}")
@@ -309,10 +307,7 @@ class CoinGeckoService:
             return None
 
     async def get_market_chart(
-        self,
-        coin_id: str,
-        vs_currency: str = "usd",
-        days: int = 7
+        self, coin_id: str, vs_currency: str = "usd", days: int = 7
     ) -> Optional[Dict[str, Any]]:
         """
         Get historical market data (price, volume, market cap)
@@ -325,10 +320,7 @@ class CoinGeckoService:
         Returns:
             Market chart data with prices, volumes, market_caps arrays
         """
-        params = {
-            "vs_currency": vs_currency,
-            "days": days
-        }
+        params = {"vs_currency": vs_currency, "days": days}
 
         return await self._make_request(f"/coins/{coin_id}/market_chart", params)
 
@@ -342,9 +334,7 @@ class CoinGeckoService:
         return await self._make_request("/search/trending")
 
     async def get_top_coins(
-        self,
-        vs_currency: str = "usd",
-        limit: int = 10
+        self, vs_currency: str = "usd", limit: int = 10
     ) -> Optional[List[Dict[str, Any]]]:
         """
         Get top cryptocurrencies by market cap
@@ -361,7 +351,7 @@ class CoinGeckoService:
             "order": "market_cap_desc",
             "per_page": limit,
             "page": 1,
-            "sparkline": "false"
+            "sparkline": "false",
         }
 
         return await self._make_request("/coins/markets", params)
@@ -380,9 +370,7 @@ class CoinGeckoService:
         return await self._make_request("/search", params)
 
     async def get_trending_coins(
-        self,
-        vs_currency: str = "usd",
-        limit: int = 10
+        self, vs_currency: str = "usd", limit: int = 10
     ) -> Optional[List[Dict[str, Any]]]:
         """
         Get trending cryptocurrencies by market cap (alias for get_top_coins)
@@ -411,8 +399,8 @@ class CoinGeckoService:
             return f"5 C40;>AL ?>;CG8BL 40==K5 4;O {coin_id}"
 
         data = coin_data[coin_id]
-        price = data.get('usd', 0)
-        change_24h = data.get('usd_24h_change', 0)
+        price = data.get("usd", 0)
+        change_24h = data.get("usd_24h_change", 0)
 
         # Format price with appropriate precision
         if price >= 1:

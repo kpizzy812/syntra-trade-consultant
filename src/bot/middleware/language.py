@@ -1,6 +1,7 @@
 """
 Language middleware - automatically detects and sets user language
 """
+
 import logging
 from typing import Callable, Dict, Any, Awaitable
 
@@ -25,7 +26,7 @@ class LanguageMiddleware(BaseMiddleware):
         self,
         handler: Callable[[Message | CallbackQuery, Dict[str, Any]], Awaitable[Any]],
         event: Message | CallbackQuery,
-        data: Dict[str, Any]
+        data: Dict[str, Any],
     ) -> Any:
         """
         Process message/callback and detect user language
@@ -39,11 +40,11 @@ class LanguageMiddleware(BaseMiddleware):
             Handler result
         """
         user = event.from_user
-        session: AsyncSession = data.get('session')
+        session: AsyncSession = data.get("session")
 
         if not session or not user:
             # No session or user - skip language detection
-            data['user_language'] = 'ru'
+            data["user_language"] = "ru"
             return await handler(event, data)
 
         try:
@@ -64,11 +65,11 @@ class LanguageMiddleware(BaseMiddleware):
                 )
 
             # Set language in data for handlers
-            data['user_language'] = user_lang
+            data["user_language"] = user_lang
 
         except Exception as e:
             logger.error(f"Error in LanguageMiddleware for user {user.id}: {e}")
             # Fallback to default language
-            data['user_language'] = 'ru'
+            data["user_language"] = "ru"
 
         return await handler(event, data)

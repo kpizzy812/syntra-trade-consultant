@@ -9,7 +9,13 @@ from typing import AsyncGenerator, Optional, List, Tuple, Dict, Any
 from datetime import datetime
 
 import tiktoken
-from openai import AsyncOpenAI, BadRequestError, APIError, RateLimitError, APIConnectionError
+from openai import (
+    AsyncOpenAI,
+    BadRequestError,
+    APIError,
+    RateLimitError,
+    APIConnectionError,
+)
 from openai.types.chat import ChatCompletionMessageParam
 from sqlalchemy.ext.asyncio import AsyncSession
 from tenacity import (
@@ -17,7 +23,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
-    before_sleep_log
+    before_sleep_log,
 )
 
 from config.config import OPENAI_API_KEY, ModelConfig, Pricing
@@ -25,7 +31,7 @@ from config.prompt_selector import (
     get_system_prompt,
     get_vision_analysis_prompt,
     get_enhanced_vision_prompt,
-    get_coin_detection_prompt
+    get_coin_detection_prompt,
 )
 from src.database.crud import add_chat_message, get_chat_history, track_cost
 from src.utils.vision_tokens import calculate_image_tokens, estimate_vision_cost
@@ -80,20 +86,39 @@ class OpenAIService:
 
         # Keywords indicating complex analysis requiring GPT-4o
         complex_keywords = [
-            'анализ', 'стратегия', 'прогноз', 'технический', 'фундаментальный',
-            'analysis', 'strategy', 'forecast', 'technical', 'fundamental',
-            'глубокий', 'подробный', 'детальный', 'deep', 'detailed',
-            'сравни', 'compare', 'объясни сложно', 'explain complex'
+            "анализ",
+            "стратегия",
+            "прогноз",
+            "технический",
+            "фундаментальный",
+            "analysis",
+            "strategy",
+            "forecast",
+            "technical",
+            "fundamental",
+            "глубокий",
+            "подробный",
+            "детальный",
+            "deep",
+            "detailed",
+            "сравни",
+            "compare",
+            "объясни сложно",
+            "explain complex",
         ]
 
         message_lower = user_message.lower()
-        has_complex_keywords = any(keyword in message_lower for keyword in complex_keywords)
+        has_complex_keywords = any(
+            keyword in message_lower for keyword in complex_keywords
+        )
 
         # Use GPT-4o if:
         # 1. Message has complex keywords, OR
         # 2. Total tokens exceed threshold
         if has_complex_keywords or total_tokens > ModelConfig.MODEL_ROUTING_THRESHOLD:
-            logger.info(f"Using GPT-4O (tokens: {total_tokens}, complex: {has_complex_keywords})")
+            logger.info(
+                f"Using GPT-4O (tokens: {total_tokens}, complex: {has_complex_keywords})"
+            )
             return ModelConfig.GPT_4O
         else:
             logger.info(f"Using GPT-4O-MINI (tokens: {total_tokens})")
@@ -104,8 +129,8 @@ class OpenAIService:
         session: AsyncSession,
         user_id: int,
         current_message: str,
-        user_language: str = 'ru',
-        max_history: int = 5
+        user_language: str = "ru",
+        max_history: int = 5,
     ) -> List[ChatCompletionMessageParam]:
         """
         Build context messages from chat history
@@ -129,16 +154,10 @@ class OpenAIService:
 
         # Add history messages (oldest first)
         for msg in reversed(history):
-            messages.append({
-                "role": msg.role,
-                "content": msg.content
-            })
+            messages.append({"role": msg.role, "content": msg.content})
 
         # Add current message
-        messages.append({
-            "role": "user",
-            "content": current_message
-        })
+        messages.append({"role": "user", "content": current_message})
 
         return messages
 
@@ -147,9 +166,9 @@ class OpenAIService:
         session: AsyncSession,
         user_id: int,
         user_message: str,
-        user_language: str = 'ru',
+        user_language: str = "ru",
         model: Optional[str] = None,
-        use_tools: bool = True
+        use_tools: bool = True,
     ) -> AsyncGenerator[str, None]:
         """
         Stream chat completion from OpenAI with Function Calling support
@@ -168,10 +187,7 @@ class OpenAIService:
         try:
             # Build context messages
             messages = await self.get_context_messages(
-                session,
-                user_id,
-                user_message,
-                user_language
+                session, user_id, user_message, user_language
             )
 
             # Calculate history tokens
@@ -184,14 +200,13 @@ class OpenAIService:
 
             # Save user message to history
             await add_chat_message(
-                session,
-                user_id=user_id,
-                role="user",
-                content=user_message
+                session, user_id=user_id, role="user", content=user_message
             )
 
             # Create streaming completion with tools
-            logger.info(f"Starting OpenAI stream for user {user_id} with model {model}, tools: {use_tools}")
+            logger.info(
+                f"Starting OpenAI stream for user {user_id} with model {model}, tools: {use_tools}"
+            )
 
             # Build API call parameters
             api_params = {
@@ -199,7 +214,7 @@ class OpenAIService:
                 "messages": messages,
                 "max_tokens": ModelConfig.MAX_TOKENS_RESPONSE,
                 "temperature": ModelConfig.DEFAULT_TEMPERATURE,
-                "stream": True
+                "stream": True,
             }
 
             # Add tools if enabled
@@ -230,11 +245,13 @@ class OpenAIService:
                         if tool_call_chunk.index is not None:
                             # Ensure we have enough space in tool_calls list
                             while len(tool_calls) <= tool_call_chunk.index:
-                                tool_calls.append({
-                                    "id": "",
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""}
-                                })
+                                tool_calls.append(
+                                    {
+                                        "id": "",
+                                        "type": "function",
+                                        "function": {"name": "", "arguments": ""},
+                                    }
+                                )
                             current_tool_call = tool_calls[tool_call_chunk.index]
 
                         # Accumulate tool call data
@@ -242,9 +259,13 @@ class OpenAIService:
                             current_tool_call["id"] = tool_call_chunk.id
                         if tool_call_chunk.function:
                             if tool_call_chunk.function.name:
-                                current_tool_call["function"]["name"] += tool_call_chunk.function.name
+                                current_tool_call["function"][
+                                    "name"
+                                ] += tool_call_chunk.function.name
                             if tool_call_chunk.function.arguments:
-                                current_tool_call["function"]["arguments"] += tool_call_chunk.function.arguments
+                                current_tool_call["function"][
+                                    "arguments"
+                                ] += tool_call_chunk.function.arguments
 
                 # Handle regular content
                 elif delta.content:
@@ -253,20 +274,20 @@ class OpenAIService:
                     yield content
 
                 # Track token usage if available
-                if hasattr(chunk, 'usage') and chunk.usage:
+                if hasattr(chunk, "usage") and chunk.usage:
                     input_tokens = chunk.usage.prompt_tokens
                     output_tokens = chunk.usage.completion_tokens
 
             # If AI called tools, execute them and continue
             if tool_calls:
-                logger.info(f"AI called {len(tool_calls)} tools: {[tc['function']['name'] for tc in tool_calls]}")
+                logger.info(
+                    f"AI called {len(tool_calls)} tools: {[tc['function']['name'] for tc in tool_calls]}"
+                )
 
                 # Add assistant message with tool calls to conversation
-                messages.append({
-                    "role": "assistant",
-                    "tool_calls": tool_calls,
-                    "content": None
-                })
+                messages.append(
+                    {"role": "assistant", "tool_calls": tool_calls, "content": None}
+                )
 
                 # Execute each tool and add results to messages
                 for tool_call in tool_calls:
@@ -278,27 +299,37 @@ class OpenAIService:
                         tool_args = json.loads(tool_args_json)
 
                         # Execute tool
-                        logger.info(f"Executing tool: {tool_name} with args: {tool_args}")
+                        logger.info(
+                            f"Executing tool: {tool_name} with args: {tool_args}"
+                        )
                         tool_result = await execute_tool(tool_name, tool_args)
 
                         # Add tool result to messages
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call["id"],
-                            "name": tool_name,
-                            "content": tool_result
-                        })
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": tool_name,
+                                "content": tool_result,
+                            }
+                        )
 
                         logger.info(f"Tool {tool_name} executed successfully")
 
                     except json.JSONDecodeError as e:
-                        logger.error(f"Failed to parse tool arguments for {tool_name}: {e}")
-                        messages.append({
-                            "role": "tool",
-                            "tool_call_id": tool_call["id"],
-                            "name": tool_name,
-                            "content": json.dumps({"success": False, "error": "Invalid arguments"})
-                        })
+                        logger.error(
+                            f"Failed to parse tool arguments for {tool_name}: {e}"
+                        )
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": tool_name,
+                                "content": json.dumps(
+                                    {"success": False, "error": "Invalid arguments"}
+                                ),
+                            }
+                        )
 
                 # Make second API call with tool results
                 logger.info("Making second API call with tool results...")
@@ -319,7 +350,7 @@ class OpenAIService:
                         yield content
 
                     # Update token usage
-                    if hasattr(chunk, 'usage') and chunk.usage:
+                    if hasattr(chunk, "usage") and chunk.usage:
                         input_tokens += chunk.usage.prompt_tokens
                         output_tokens += chunk.usage.completion_tokens
 
@@ -333,10 +364,7 @@ class OpenAIService:
 
             # Save assistant response to history
             await add_chat_message(
-                session,
-                user_id=user_id,
-                role="assistant",
-                content=full_response
+                session, user_id=user_id, role="assistant", content=full_response
             )
 
             # Track cost
@@ -347,7 +375,7 @@ class OpenAIService:
                 model=model,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                cost=cost
+                cost=cost,
             )
 
             logger.info(
@@ -363,10 +391,7 @@ class OpenAIService:
             yield ""
 
     def calculate_cost(
-        self,
-        model: str,
-        input_tokens: int,
-        output_tokens: int
+        self, model: str, input_tokens: int, output_tokens: int
     ) -> float:
         """
         Calculate cost for API call
@@ -397,13 +422,13 @@ class OpenAIService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True
+        reraise=True,
     )
     async def simple_completion(
         self,
         prompt: str,
         model: str = ModelConfig.GPT_4O_MINI,
-        temperature: float = ModelConfig.DEFAULT_TEMPERATURE
+        temperature: float = ModelConfig.DEFAULT_TEMPERATURE,
     ) -> str:
         """
         Simple non-streaming completion with automatic retries
@@ -425,7 +450,7 @@ class OpenAIService:
             response = await self.client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=temperature
+                temperature=temperature,
             )
 
             return response.choices[0].message.content or ""
@@ -444,19 +469,17 @@ class OpenAIService:
         Returns:
             Base64 encoded string
         """
-        return base64.b64encode(image_bytes).decode('utf-8')
+        return base64.b64encode(image_bytes).decode("utf-8")
 
     @retry(
         retry=retry_if_exception_type((APIError, RateLimitError, APIConnectionError)),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True
+        reraise=True,
     )
     async def detect_coin_from_image(
-        self,
-        image_bytes: bytes,
-        user_language: str = 'ru'
+        self, image_bytes: bytes, user_language: str = "ru"
     ) -> Optional[str]:
         """
         Detect cryptocurrency name from chart image with automatic retries
@@ -475,21 +498,26 @@ class OpenAIService:
 
             response = await self.client.chat.completions.create(
                 model=ModelConfig.GPT_4O_MINI,  # Use mini for quick detection
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": get_coin_detection_prompt(user_language)},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}",
-                                "detail": "low"  # Low detail is enough for coin detection
-                            }
-                        }
-                    ]
-                }],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": get_coin_detection_prompt(user_language),
+                            },
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}",
+                                    "detail": "low",  # Low detail is enough for coin detection
+                                },
+                            },
+                        ],
+                    }
+                ],
                 max_tokens=50,
-                temperature=0.1  # Low temperature for consistent results
+                temperature=0.1,  # Low temperature for consistent results
             )
 
             coin_name = response.choices[0].message.content.strip()
@@ -509,10 +537,10 @@ class OpenAIService:
         session: AsyncSession,
         user_id: int,
         image_bytes: bytes,
-        user_language: str = 'ru',
+        user_language: str = "ru",
         user_prompt: Optional[str] = None,
         detail: str = ModelConfig.VISION_DETAIL_LEVEL,
-        market_data: Optional[Dict[str, Any]] = None
+        market_data: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream image analysis using GPT-4o Vision with optional market data integration
@@ -538,11 +566,14 @@ class OpenAIService:
                 # Enhanced prompt with market data
                 user_prompt = get_enhanced_vision_prompt(
                     user_language,
-                    coin_name=market_data.get('name', 'криптовалюты' if user_language == 'ru' else 'cryptocurrency'),
-                    current_price=market_data.get('current_price', 0),
-                    change_24h=market_data.get('price_change_percentage_24h', 0),
-                    volume_24h=market_data.get('total_volume'),
-                    market_cap=market_data.get('market_cap')
+                    coin_name=market_data.get(
+                        "name",
+                        "криптовалюты" if user_language == "ru" else "cryptocurrency",
+                    ),
+                    current_price=market_data.get("current_price", 0),
+                    change_24h=market_data.get("price_change_percentage_24h", 0),
+                    volume_24h=market_data.get("total_volume"),
+                    market_cap=market_data.get("market_cap"),
                 )
             else:
                 # Basic prompt without market data
@@ -566,26 +597,20 @@ class OpenAIService:
 
             # Build messages with system prompt for Syntra persona
             messages: List[Dict[str, Any]] = [
-                {
-                    "role": "system",
-                    "content": get_system_prompt(user_language)
-                },
+                {"role": "system", "content": get_system_prompt(user_language)},
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": user_prompt
-                        },
+                        {"type": "text", "text": user_prompt},
                         {
                             "type": "image_url",
                             "image_url": {
                                 "url": f"data:image/jpeg;base64,{base64_image}",
-                                "detail": detail
-                            }
-                        }
-                    ]
-                }
+                                "detail": detail,
+                            },
+                        },
+                    ],
+                },
             ]
 
             # Create streaming completion
@@ -594,7 +619,7 @@ class OpenAIService:
                 messages=messages,
                 max_tokens=ModelConfig.MAX_TOKENS_VISION,
                 temperature=ModelConfig.DEFAULT_TEMPERATURE,
-                stream=True
+                stream=True,
             )
 
             full_response = ""
@@ -609,7 +634,7 @@ class OpenAIService:
                     yield content
 
                 # Track token usage if available
-                if hasattr(chunk, 'usage') and chunk.usage:
+                if hasattr(chunk, "usage") and chunk.usage:
                     input_tokens = chunk.usage.prompt_tokens
                     output_tokens = chunk.usage.completion_tokens
 
@@ -629,7 +654,7 @@ class OpenAIService:
                 model=ModelConfig.GPT_4O,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                cost=cost
+                cost=cost,
             )
 
             logger.info(
@@ -650,17 +675,17 @@ class OpenAIService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True
+        reraise=True,
     )
     async def analyze_image(
         self,
         session: AsyncSession,
         user_id: int,
         image_bytes: bytes,
-        user_language: str = 'ru',
+        user_language: str = "ru",
         user_prompt: Optional[str] = None,
         detail: str = ModelConfig.VISION_DETAIL_LEVEL,
-        market_data: Optional[Dict[str, Any]] = None
+        market_data: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
         Analyze image using GPT-4o Vision with automatic retries
@@ -690,11 +715,14 @@ class OpenAIService:
                 # Enhanced prompt with market data
                 user_prompt = get_enhanced_vision_prompt(
                     user_language,
-                    coin_name=market_data.get('name', 'криптовалюты' if user_language == 'ru' else 'cryptocurrency'),
-                    current_price=market_data.get('current_price', 0),
-                    change_24h=market_data.get('price_change_percentage_24h', 0),
-                    volume_24h=market_data.get('total_volume'),
-                    market_cap=market_data.get('market_cap')
+                    coin_name=market_data.get(
+                        "name",
+                        "криптовалюты" if user_language == "ru" else "cryptocurrency",
+                    ),
+                    current_price=market_data.get("current_price", 0),
+                    change_24h=market_data.get("price_change_percentage_24h", 0),
+                    volume_24h=market_data.get("total_volume"),
+                    market_cap=market_data.get("market_cap"),
                 )
             else:
                 # Basic prompt without market data
@@ -718,26 +746,20 @@ class OpenAIService:
 
             # Build messages with system prompt for Syntra persona
             messages: List[Dict[str, Any]] = [
-                {
-                    "role": "system",
-                    "content": get_system_prompt(user_language)
-                },
+                {"role": "system", "content": get_system_prompt(user_language)},
                 {
                     "role": "user",
                     "content": [
-                        {
-                            "type": "text",
-                            "text": user_prompt
-                        },
+                        {"type": "text", "text": user_prompt},
                         {
                             "type": "image_url",
                             "image_url": {
                                 "url": f"data:image/jpeg;base64,{base64_image}",
-                                "detail": detail
-                            }
-                        }
-                    ]
-                }
+                                "detail": detail,
+                            },
+                        },
+                    ],
+                },
             ]
 
             # Call OpenAI Vision API
@@ -745,7 +767,7 @@ class OpenAIService:
                 model=ModelConfig.GPT_4O,  # Vision requires GPT-4o
                 messages=messages,
                 max_tokens=ModelConfig.MAX_TOKENS_VISION,
-                temperature=ModelConfig.DEFAULT_TEMPERATURE
+                temperature=ModelConfig.DEFAULT_TEMPERATURE,
             )
 
             # Extract response
@@ -774,7 +796,7 @@ class OpenAIService:
                 model=ModelConfig.GPT_4O,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                cost=cost
+                cost=cost,
             )
 
             # Prepare stats
@@ -786,7 +808,7 @@ class OpenAIService:
                 "total_tokens": total_tokens,
                 "cost": cost,
                 "detail": detail,
-                "model": ModelConfig.GPT_4O
+                "model": ModelConfig.GPT_4O,
             }
 
             logger.info(
@@ -804,11 +826,7 @@ class OpenAIService:
             logger.exception(f"Error in vision analysis: {e}")
             raise
 
-    def calculate_vision_cost(
-        self,
-        input_tokens: int,
-        output_tokens: int
-    ) -> float:
+    def calculate_vision_cost(self, input_tokens: int, output_tokens: int) -> float:
         """
         Calculate cost for Vision API call
 

@@ -91,19 +91,21 @@ def normalize_coin_name(coin_name: str) -> Optional[str]:
     coin_name = coin_name.lower().strip()
 
     # Remove common suffixes (USD, USDT, BTC pairs)
-    coin_name = re.sub(r'[/\-_\s]+(usd|usdt|btc|eth|eur|perp|perpetual).*$', '', coin_name)
+    coin_name = re.sub(
+        r"[/\-_\s]+(usd|usdt|btc|eth|eur|perp|perpetual).*$", "", coin_name
+    )
 
     # Remove special characters but keep Cyrillic (а-яА-Я)
-    coin_name = re.sub(r'[^a-z0-9а-я]', '', coin_name)
+    coin_name = re.sub(r"[^a-z0-9а-я]", "", coin_name)
 
     # Direct lookup
     if coin_name in COIN_ID_MAPPING:
         return COIN_ID_MAPPING[coin_name]
 
     # Try with common suffixes removed
-    for suffix in ['usd', 'usdt', 'btc', 'perp']:
+    for suffix in ["usd", "usdt", "btc", "perp"]:
         if coin_name.endswith(suffix):
-            base = coin_name[:-len(suffix)]
+            base = coin_name[: -len(suffix)]
             if base in COIN_ID_MAPPING:
                 return COIN_ID_MAPPING[base]
 
@@ -129,7 +131,7 @@ def extract_coin_from_text(text: str) -> List[str]:
     # Look for exact matches of known coins
     for key, coin_id in COIN_ID_MAPPING.items():
         # Match whole words only
-        pattern = r'\b' + re.escape(key) + r'\b'
+        pattern = r"\b" + re.escape(key) + r"\b"
         if re.search(pattern, text_lower):
             if coin_id not in found_coins:
                 found_coins.append(coin_id)
@@ -155,7 +157,7 @@ def format_coin_name(coin_id: str) -> str:
             break
 
     # Format name
-    name = coin_id.replace('-', ' ').title()
+    name = coin_id.replace("-", " ").title()
 
     if symbol:
         return f"{name} ({symbol})"

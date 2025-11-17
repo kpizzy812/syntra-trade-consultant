@@ -23,15 +23,17 @@ from src.database.crud import get_or_create_user
 from src.utils.i18n import i18n
 
 
-router = Router(name='chat')
+router = Router(name="chat")
 
 # Streaming configuration
 STREAM_UPDATE_INTERVAL = 1.5  # Update message every 1.5 seconds
-MIN_CHARS_FOR_UPDATE = 100    # Or every 100 characters
+MIN_CHARS_FOR_UPDATE = 100  # Or every 100 characters
 
 
-@router.message(F.text & ~F.text.startswith('/'))
-async def handle_text_message(message: Message, session: AsyncSession, user_language: str = 'ru'):
+@router.message(F.text & ~F.text.startswith("/"))
+async def handle_text_message(
+    message: Message, session: AsyncSession, user_language: str = "ru"
+):
     """
     Handle text messages with intelligent AI function calling
 
@@ -57,7 +59,9 @@ async def handle_text_message(message: Message, session: AsyncSession, user_lang
     user = message.from_user
     user_text = message.text
 
-    logger.info(f"[TOOLS] Processing message from user {user.id} (lang: {user_language}): {user_text[:50]}...")
+    logger.info(
+        f"[TOOLS] Processing message from user {user.id} (lang: {user_language}): {user_text[:50]}..."
+    )
 
     # Ensure user exists in database
     db_user, _ = await get_or_create_user(
@@ -66,11 +70,11 @@ async def handle_text_message(message: Message, session: AsyncSession, user_lang
         username=user.username,
         first_name=user.first_name,
         last_name=user.last_name,
-        telegram_language=user.language_code
+        telegram_language=user.language_code,
     )
 
     # Send initial "thinking" message
-    thinking_msg = await message.answer(i18n.get('chat.thinking', user_language))
+    thinking_msg = await message.answer(i18n.get("chat.thinking", user_language))
 
     try:
         # Stream AI response with intelligent tool calling
@@ -83,15 +87,12 @@ async def handle_text_message(message: Message, session: AsyncSession, user_lang
         last_update_time = datetime.now()
         last_update_length = 0
 
-        async with ChatActionSender.typing(
-            bot=message.bot,
-            chat_id=message.chat.id
-        ):
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
             async for chunk in openai_service_with_tools.stream_completion_with_tools(
                 session=session,
                 user_id=db_user.id,
                 user_message=user_text,
-                user_language=user_language
+                user_language=user_language,
             ):
                 full_response += chunk
 
@@ -101,13 +102,15 @@ async def handle_text_message(message: Message, session: AsyncSession, user_lang
                 chars_since_update = len(full_response) - last_update_length
 
                 should_update = (
-                    time_since_update >= STREAM_UPDATE_INTERVAL or
-                    chars_since_update >= MIN_CHARS_FOR_UPDATE
+                    time_since_update >= STREAM_UPDATE_INTERVAL
+                    or chars_since_update >= MIN_CHARS_FOR_UPDATE
                 )
 
                 if should_update and full_response.strip():
                     try:
-                        await thinking_msg.edit_text(full_response, parse_mode="Markdown")
+                        await thinking_msg.edit_text(
+                            full_response, parse_mode="Markdown"
+                        )
                         last_update_time = now
                         last_update_length = len(full_response)
                     except Exception as e:
@@ -125,18 +128,14 @@ async def handle_text_message(message: Message, session: AsyncSession, user_lang
             except Exception as e:
                 logger.error(f"Failed to send final response: {e}")
                 await thinking_msg.edit_text(
-                    i18n.get('chat.error_sending', user_language)
+                    i18n.get("chat.error_sending", user_language)
                 )
         else:
-            await thinking_msg.edit_text(
-                i18n.get('chat.no_response', user_language)
-            )
+            await thinking_msg.edit_text(i18n.get("chat.no_response", user_language))
 
     except Exception as e:
         logger.exception(f"[TOOLS] Error handling message from user {user.id}: {e}")
         try:
-            await thinking_msg.edit_text(
-                i18n.get('chat.critical_error', user_language)
-            )
+            await thinking_msg.edit_text(i18n.get("chat.critical_error", user_language))
         except Exception:
             pass

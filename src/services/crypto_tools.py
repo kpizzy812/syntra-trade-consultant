@@ -57,13 +57,13 @@ CRYPTO_TOOLS = [
                             "'bitcoin', 'ethereum', 'solana', etc. "
                             "If user says BTC, use 'bitcoin'. ETH -> 'ethereum'. "
                             "SOL -> 'solana', DOGE -> 'dogecoin', etc."
-                        )
+                        ),
                     }
                 },
                 "required": ["coin_id"],
-                "additionalProperties": False
-            }
-        }
+                "additionalProperties": False,
+            },
+        },
     },
     {
         "type": "function",
@@ -83,20 +83,20 @@ CRYPTO_TOOLS = [
                             "Cryptocurrency symbol (ticker). Use UPPERCASE: "
                             "'BTC', 'ETH', 'SOL', 'DOGE', etc. "
                             "Bitcoin -> BTC, Ethereum -> ETH, Solana -> SOL."
-                        )
+                        ),
                     },
                     "limit": {
                         "type": "integer",
                         "description": "Number of news items to return (1-10). Default: 5",
                         "default": 5,
                         "minimum": 1,
-                        "maximum": 10
-                    }
+                        "maximum": 10,
+                    },
                 },
                 "required": ["coin_symbol"],
-                "additionalProperties": False
-            }
-        }
+                "additionalProperties": False,
+            },
+        },
     },
     {
         "type": "function",
@@ -118,13 +118,13 @@ CRYPTO_TOOLS = [
                             "Use CoinGecko format: ['bitcoin', 'ethereum'], etc."
                         ),
                         "minItems": 2,
-                        "maxItems": 3
+                        "maxItems": 3,
                     }
                 },
                 "required": ["coin_ids"],
-                "additionalProperties": False
-            }
-        }
+                "additionalProperties": False,
+            },
+        },
     },
     {
         "type": "function",
@@ -143,13 +143,13 @@ CRYPTO_TOOLS = [
                         "description": "Number of top coins to return (5-20). Default: 10",
                         "default": 10,
                         "minimum": 5,
-                        "maximum": 20
+                        "maximum": 20,
                     }
                 },
                 "required": [],
-                "additionalProperties": False
-            }
-        }
+                "additionalProperties": False,
+            },
+        },
     },
     {
         "type": "function",
@@ -165,9 +165,9 @@ CRYPTO_TOOLS = [
                 "type": "object",
                 "properties": {},
                 "required": [],
-                "additionalProperties": False
-            }
-        }
+                "additionalProperties": False,
+            },
+        },
     },
     {
         "type": "function",
@@ -177,8 +177,8 @@ CRYPTO_TOOLS = [
                 "Get comprehensive technical analysis for a cryptocurrency. "
                 "Use this when user asks for 'analysis', 'indicators', 'technical analysis', or 'TA'. "
                 "Returns: RSI, MACD, EMAs, Bollinger Bands, candlestick patterns, ATH/ATL, "
-                "Fear & Greed Index, and extended market metrics. "
-                "This is the MOST POWERFUL tool for deep crypto analysis."
+                "Fear & Greed Index, latest news (24h delay, cached), and extended market metrics. "
+                "This is the MOST POWERFUL tool for deep crypto analysis with all data sources."
             ),
             "parameters": {
                 "type": "object",
@@ -188,7 +188,7 @@ CRYPTO_TOOLS = [
                         "description": (
                             "Cryptocurrency identifier. Use CoinGecko ID format: "
                             "'bitcoin', 'ethereum', 'solana', etc."
-                        )
+                        ),
                     },
                     "timeframe": {
                         "type": "string",
@@ -198,20 +198,21 @@ CRYPTO_TOOLS = [
                             "Default: '4h' for balanced analysis."
                         ),
                         "enum": ["1h", "4h", "1d"],
-                        "default": "4h"
-                    }
+                        "default": "4h",
+                    },
                 },
                 "required": ["coin_id"],
-                "additionalProperties": False
-            }
-        }
-    }
+                "additionalProperties": False,
+            },
+        },
+    },
 ]
 
 
 # ============================================================================
 # TOOL IMPLEMENTATIONS
 # ============================================================================
+
 
 async def get_crypto_price(coin_id: str) -> Dict[str, Any]:
     """
@@ -232,38 +233,42 @@ async def get_crypto_price(coin_id: str) -> Dict[str, Any]:
             normalized_id,
             include_24h_change=True,
             include_market_cap=True,
-            include_24h_volume=True
+            include_24h_volume=True,
         )
 
         if not price_data or normalized_id not in price_data:
             return {
                 "success": False,
-                "error": f"Cryptocurrency '{coin_id}' not found. Check the ID and try again."
+                "error": f"Cryptocurrency '{coin_id}' not found. Check the ID and try again.",
             }
 
         data = price_data[normalized_id]
 
         # Get coin details for proper name
         coin_details = await coingecko_service.get_coin_data(normalized_id)
-        coin_name = coin_details.get('name', normalized_id.title()) if coin_details else normalized_id.title()
-        symbol = coin_details.get('symbol', '').upper() if coin_details else ''
+        coin_name = (
+            coin_details.get("name", normalized_id.title())
+            if coin_details
+            else normalized_id.title()
+        )
+        symbol = coin_details.get("symbol", "").upper() if coin_details else ""
 
         return {
             "success": True,
             "coin_id": normalized_id,
             "name": coin_name,
             "symbol": symbol,
-            "price_usd": data.get('usd', 0),
-            "change_24h_percent": data.get('usd_24h_change', 0),
-            "market_cap_usd": data.get('usd_market_cap', 0),
-            "volume_24h_usd": data.get('usd_24h_vol', 0)
+            "price_usd": data.get("usd", 0),
+            "change_24h_percent": data.get("usd_24h_change", 0),
+            "market_cap_usd": data.get("usd_market_cap", 0),
+            "volume_24h_usd": data.get("usd_24h_vol", 0),
         }
 
     except Exception as e:
         logger.error(f"Error in get_crypto_price for {coin_id}: {e}")
         return {
             "success": False,
-            "error": f"Failed to fetch data for {coin_id}: {str(e)}"
+            "error": f"Failed to fetch data for {coin_id}: {str(e)}",
         }
 
 
@@ -284,8 +289,7 @@ async def get_crypto_news(coin_symbol: str, limit: int = 5) -> Dict[str, Any]:
 
         # Get news
         news_items = await cryptopanic_service.get_news_for_coin(
-            coin_symbol.upper(),
-            limit=limit
+            coin_symbol.upper(), limit=limit
         )
 
         if not news_items:
@@ -293,32 +297,34 @@ async def get_crypto_news(coin_symbol: str, limit: int = 5) -> Dict[str, Any]:
                 "success": True,
                 "coin_symbol": coin_symbol.upper(),
                 "news": [],
-                "message": f"No recent news found for {coin_symbol}"
+                "message": f"No recent news found for {coin_symbol}",
             }
 
         # Format news
         formatted_news = []
         for item in news_items:
-            formatted_news.append({
-                "title": item.get('title', 'No title'),
-                "source": item.get('source', 'Unknown'),
-                "published_at": item.get('published_at', ''),
-                "url": item.get('url', ''),
-                "votes": item.get('votes', {})
-            })
+            formatted_news.append(
+                {
+                    "title": item.get("title", "No title"),
+                    "source": item.get("source", "Unknown"),
+                    "published_at": item.get("published_at", ""),
+                    "url": item.get("url", ""),
+                    "votes": item.get("votes", {}),
+                }
+            )
 
         return {
             "success": True,
             "coin_symbol": coin_symbol.upper(),
             "news": formatted_news,
-            "count": len(formatted_news)
+            "count": len(formatted_news),
         }
 
     except Exception as e:
         logger.error(f"Error in get_crypto_news for {coin_symbol}: {e}")
         return {
             "success": False,
-            "error": f"Failed to fetch news for {coin_symbol}: {str(e)}"
+            "error": f"Failed to fetch news for {coin_symbol}: {str(e)}",
         }
 
 
@@ -335,37 +341,31 @@ async def compare_cryptos(coin_ids: List[str]) -> Dict[str, Any]:
     try:
         # Validate input
         if len(coin_ids) < 2 or len(coin_ids) > 3:
-            return {
-                "success": False,
-                "error": "Please provide 2-3 coins to compare"
-            }
+            return {"success": False, "error": "Please provide 2-3 coins to compare"}
 
         # Get data for each coin
         comparison_data = []
 
         for coin_id in coin_ids:
             price_result = await get_crypto_price(coin_id)
-            if price_result.get('success'):
+            if price_result.get("success"):
                 comparison_data.append(price_result)
 
         if not comparison_data:
             return {
                 "success": False,
-                "error": "Failed to fetch data for any of the specified coins"
+                "error": "Failed to fetch data for any of the specified coins",
             }
 
         return {
             "success": True,
             "coins": comparison_data,
-            "count": len(comparison_data)
+            "count": len(comparison_data),
         }
 
     except Exception as e:
         logger.error(f"Error in compare_cryptos for {coin_ids}: {e}")
-        return {
-            "success": False,
-            "error": f"Failed to compare cryptos: {str(e)}"
-        }
+        return {"success": False, "error": f"Failed to compare cryptos: {str(e)}"}
 
 
 async def get_top_cryptos(limit: int = 10) -> Dict[str, Any]:
@@ -386,35 +386,31 @@ async def get_top_cryptos(limit: int = 10) -> Dict[str, Any]:
         top_coins = await coingecko_service.get_trending_coins(limit=limit)
 
         if not top_coins:
-            return {
-                "success": False,
-                "error": "Failed to fetch top cryptocurrencies"
-            }
+            return {"success": False, "error": "Failed to fetch top cryptocurrencies"}
 
         # Format data
         formatted_coins = []
         for coin in top_coins:
-            formatted_coins.append({
-                "name": coin.get('name', 'Unknown'),
-                "symbol": coin.get('symbol', '').upper(),
-                "price_usd": coin.get('current_price', 0),
-                "change_24h_percent": coin.get('price_change_percentage_24h', 0),
-                "market_cap_usd": coin.get('market_cap', 0),
-                "rank": coin.get('market_cap_rank', 0)
-            })
+            formatted_coins.append(
+                {
+                    "name": coin.get("name", "Unknown"),
+                    "symbol": coin.get("symbol", "").upper(),
+                    "price_usd": coin.get("current_price", 0),
+                    "change_24h_percent": coin.get("price_change_percentage_24h", 0),
+                    "market_cap_usd": coin.get("market_cap", 0),
+                    "rank": coin.get("market_cap_rank", 0),
+                }
+            )
 
         return {
             "success": True,
             "coins": formatted_coins,
-            "count": len(formatted_coins)
+            "count": len(formatted_coins),
         }
 
     except Exception as e:
         logger.error(f"Error in get_top_cryptos: {e}")
-        return {
-            "success": False,
-            "error": f"Failed to fetch top cryptos: {str(e)}"
-        }
+        return {"success": False, "error": f"Failed to fetch top cryptos: {str(e)}"}
 
 
 async def get_market_overview() -> Dict[str, Any]:
@@ -431,24 +427,23 @@ async def get_market_overview() -> Dict[str, Any]:
         # Format news
         formatted_news = []
         for item in news_items[:5]:  # Top 5 news
-            formatted_news.append({
-                "title": item.get('title', 'No title'),
-                "source": item.get('source', 'Unknown'),
-                "currencies": item.get('currencies', [])
-            })
+            formatted_news.append(
+                {
+                    "title": item.get("title", "No title"),
+                    "source": item.get("source", "Unknown"),
+                    "currencies": item.get("currencies", []),
+                }
+            )
 
         return {
             "success": True,
             "trending_news": formatted_news,
-            "news_count": len(formatted_news)
+            "news_count": len(formatted_news),
         }
 
     except Exception as e:
         logger.error(f"Error in get_market_overview: {e}")
-        return {
-            "success": False,
-            "error": f"Failed to fetch market overview: {str(e)}"
-        }
+        return {"success": False, "error": f"Failed to fetch market overview: {str(e)}"}
 
 
 async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[str, Any]:
@@ -458,6 +453,7 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
     Combines:
     - Extended market data (ATH/ATL, price changes, tokenomics)
     - Fear & Greed Index
+    - Latest news (24h delay, cached for 24h)
     - Technical indicators (RSI, MACD, EMAs, Bollinger Bands, etc.)
     - Candlestick patterns
 
@@ -480,11 +476,25 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
         # 2. Get Fear & Greed Index
         fear_greed = await fear_greed_service.get_current()
 
-        # 3. Get candlestick data from Binance
+        # 3. Get latest news (24h delay, cached for 24h - perfect!)
+        news = []
+        try:
+            coin_details = await coingecko_service.get_coin_data(normalized_id)
+            symbol = (
+                coin_details.get("symbol", "").upper()
+                if coin_details
+                else normalized_id.upper()
+            )
+            news = await cryptopanic_service.get_news_for_coin(symbol, limit=5)
+        except Exception as e:
+            logger.warning(f"Could not fetch news for {normalized_id}: {e}")
+            # News are optional, continue without them
+
+        # 4. Get candlestick data from Binance
         klines_df = await binance_service.get_klines_by_coin_id(
             normalized_id,
             interval=timeframe,
-            limit=200  # Need enough data for indicators
+            limit=200,  # Need enough data for indicators
         )
 
         # Initialize result dict
@@ -494,9 +504,10 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
             "timeframe": timeframe,
             "extended_data": extended_data or {},
             "fear_greed": fear_greed or {},
+            "news": news or [],
             "technical_indicators": {},
             "candlestick_patterns": {},
-            "data_sources": []
+            "data_sources": [],
         }
 
         # Track what data we got
@@ -504,8 +515,10 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
             result["data_sources"].append("extended_market_data")
         if fear_greed:
             result["data_sources"].append("fear_greed_index")
+        if news:
+            result["data_sources"].append("news")
 
-        # 4. Calculate technical indicators (if klines available)
+        # 5. Calculate technical indicators (if klines available)
         if klines_df is not None and len(klines_df) >= 20:
             result["data_sources"].append("technical_indicators")
             result["data_sources"].append("candlestick_patterns")
@@ -541,13 +554,14 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
         logger.exception(f"Error in get_technical_analysis for {coin_id}: {e}")
         return {
             "success": False,
-            "error": f"Failed to perform technical analysis for {coin_id}: {str(e)}"
+            "error": f"Failed to perform technical analysis for {coin_id}: {str(e)}",
         }
 
 
 # ============================================================================
 # TOOL EXECUTOR
 # ============================================================================
+
 
 async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
     """
@@ -577,16 +591,13 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
         elif tool_name == "get_technical_analysis":
             result = await get_technical_analysis(**arguments)
         else:
-            result = {
-                "success": False,
-                "error": f"Unknown tool: {tool_name}"
-            }
+            result = {"success": False, "error": f"Unknown tool: {tool_name}"}
 
         return json.dumps(result, ensure_ascii=False)
 
     except Exception as e:
         logger.exception(f"Error executing tool {tool_name}: {e}")
-        return json.dumps({
-            "success": False,
-            "error": f"Tool execution failed: {str(e)}"
-        }, ensure_ascii=False)
+        return json.dumps(
+            {"success": False, "error": f"Tool execution failed: {str(e)}"},
+            ensure_ascii=False,
+        )

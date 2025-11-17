@@ -7,7 +7,12 @@ from datetime import datetime, timedelta, date
 from typing import Optional
 
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from aiogram.filters import Command, CommandObject
 from aiogram.utils.chat_action import ChatActionSender
 from sqlalchemy import select
@@ -30,7 +35,7 @@ from src.database.models import User
 
 
 logger = logging.getLogger(__name__)
-router = Router(name='admin')
+router = Router(name="admin")
 
 
 def get_admin_main_menu() -> InlineKeyboardMarkup:
@@ -40,20 +45,26 @@ def get_admin_main_menu() -> InlineKeyboardMarkup:
     Returns:
         InlineKeyboardMarkup with admin menu buttons
     """
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"),
-            InlineKeyboardButton(text="👥 Пользователи", callback_data="admin_users_page_0"),
-        ],
-        [
-            InlineKeyboardButton(text="💰 Расходы", callback_data="admin_costs"),
-            InlineKeyboardButton(text="📈 Графики", callback_data="admin_charts"),
-        ],
-        [
-            InlineKeyboardButton(text="⚙️ Настройки", callback_data="admin_settings"),
-            InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_refresh"),
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats"),
+                InlineKeyboardButton(
+                    text="👥 Пользователи", callback_data="admin_users_page_0"
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="💰 Расходы", callback_data="admin_costs"),
+                InlineKeyboardButton(text="📈 Графики", callback_data="admin_charts"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⚙️ Настройки", callback_data="admin_settings"
+                ),
+                InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_refresh"),
+            ],
         ]
-    ])
+    )
     return keyboard
 
 
@@ -67,19 +78,29 @@ def get_period_selector(callback_prefix: str) -> InlineKeyboardMarkup:
     Returns:
         InlineKeyboardMarkup with period buttons
     """
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="Сегодня", callback_data=f"{callback_prefix}_today"),
-            InlineKeyboardButton(text="7 дней", callback_data=f"{callback_prefix}_7d"),
-        ],
-        [
-            InlineKeyboardButton(text="30 дней", callback_data=f"{callback_prefix}_30d"),
-            InlineKeyboardButton(text="Все время", callback_data=f"{callback_prefix}_all"),
-        ],
-        [
-            InlineKeyboardButton(text="« Назад", callback_data="admin_refresh"),
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Сегодня", callback_data=f"{callback_prefix}_today"
+                ),
+                InlineKeyboardButton(
+                    text="7 дней", callback_data=f"{callback_prefix}_7d"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="30 дней", callback_data=f"{callback_prefix}_30d"
+                ),
+                InlineKeyboardButton(
+                    text="Все время", callback_data=f"{callback_prefix}_all"
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="« Назад", callback_data="admin_refresh"),
+            ],
         ]
-    ])
+    )
     return keyboard
 
 
@@ -127,7 +148,9 @@ async def cmd_admin(message: Message, session: AsyncSession):
             response += f"├ Токенов: <b>{week_costs['total_tokens']:,}</b>\n"
             response += f"└ Стоимость: <b>${week_costs['total_cost']:.4f}</b>\n\n"
 
-            response += f"<i>Обновлено: {datetime.utcnow().strftime('%H:%M:%S UTC')}</i>"
+            response += (
+                f"<i>Обновлено: {datetime.utcnow().strftime('%H:%M:%S UTC')}</i>"
+            )
 
             await message.answer(response, reply_markup=get_admin_main_menu())
 
@@ -136,7 +159,7 @@ async def cmd_admin(message: Message, session: AsyncSession):
                 session,
                 admin_id=user_id,
                 action="view_stats",
-                details="Viewed admin panel"
+                details="Viewed admin panel",
             )
 
     except Exception as e:
@@ -206,8 +229,7 @@ async def admin_stats_callback(callback: CallbackQuery, session: AsyncSession):
     response += "Выберите период для просмотра статистики:"
 
     await callback.message.edit_text(
-        response,
-        reply_markup=get_period_selector("admin_stats_period")
+        response, reply_markup=get_period_selector("admin_stats_period")
     )
     await callback.answer()
 
@@ -260,23 +282,29 @@ async def admin_stats_period_callback(callback: CallbackQuery, session: AsyncSes
         if costs_by_service:
             response += "📈 <b>По сервисам:</b>\n"
             for service_data in costs_by_service:
-                service = service_data['service']
-                model = service_data['model'] or 'N/A'
-                cost = service_data['total_cost']
+                service = service_data["service"]
+                model = service_data["model"] or "N/A"
+                cost = service_data["total_cost"]
                 response += f"├ {service} ({model}): <b>${cost:.4f}</b>\n"
             response += "\n"
 
         # Average cost per request
-        if costs['request_count'] > 0:
-            avg_cost = costs['total_cost'] / costs['request_count']
+        if costs["request_count"] > 0:
+            avg_cost = costs["total_cost"] / costs["request_count"]
             response += f"💵 <b>Средняя стоимость запроса:</b> ${avg_cost:.4f}\n\n"
 
         response += f"<i>Обновлено: {datetime.utcnow().strftime('%H:%M:%S UTC')}</i>"
 
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="« Назад к выбору периода", callback_data="admin_stats")],
-            [InlineKeyboardButton(text="« В меню", callback_data="admin_refresh")]
-        ])
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="« Назад к выбору периода", callback_data="admin_stats"
+                    )
+                ],
+                [InlineKeyboardButton(text="« В меню", callback_data="admin_refresh")],
+            ]
+        )
 
         await callback.message.edit_text(response, reply_markup=keyboard)
         await callback.answer()
@@ -286,7 +314,7 @@ async def admin_stats_period_callback(callback: CallbackQuery, session: AsyncSes
             session,
             admin_id=user_id,
             action="view_stats_period",
-            details=f"Period: {period}"
+            details=f"Period: {period}",
         )
 
     except Exception as e:
@@ -308,7 +336,9 @@ async def admin_users_page_callback(callback: CallbackQuery, session: AsyncSessi
         # Get users
         users_per_page = 5  # Reduced to fit buttons
         offset = page * users_per_page
-        users = await get_all_users(session, offset=offset, limit=users_per_page, order_by='last_activity')
+        users = await get_all_users(
+            session, offset=offset, limit=users_per_page, order_by="last_activity"
+        )
         total_users = await get_users_count(session)
         total_pages = (total_users + users_per_page - 1) // users_per_page
 
@@ -324,7 +354,11 @@ async def admin_users_page_callback(callback: CallbackQuery, session: AsyncSessi
         buttons = []
         for i, user in enumerate(users, start=1):
             status = "✅" if user.is_subscribed else "❌"
-            last_active = user.last_activity.strftime('%d.%m %H:%M') if user.last_activity else 'Никогда'
+            last_active = (
+                user.last_activity.strftime("%d.%m %H:%M")
+                if user.last_activity
+                else "Никогда"
+            )
 
             # Display info in message
             response += f"{status} <b>{i}.</b> "
@@ -338,29 +372,47 @@ async def admin_users_page_callback(callback: CallbackQuery, session: AsyncSessi
             # Add button for user
             user_label = user.first_name or user.username or f"ID {user.telegram_id}"
             user_label = user_label[:20]  # Limit label length
-            buttons.append([
-                InlineKeyboardButton(
-                    text=f"{status} {user_label}",
-                    callback_data=f"admin_user_view_{user.id}"
-                )
-            ])
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        text=f"{status} {user_label}",
+                        callback_data=f"admin_user_view_{user.id}",
+                    )
+                ]
+            )
 
         response += f"<i>Всего пользователей: {total_users}</i>"
 
         # Navigation buttons
         nav_row = []
         if page > 0:
-            nav_row.append(InlineKeyboardButton(text="⬅️", callback_data=f"admin_users_page_{page-1}"))
-        nav_row.append(InlineKeyboardButton(text=f"{page+1}/{total_pages}", callback_data="admin_users_noop"))
+            nav_row.append(
+                InlineKeyboardButton(
+                    text="⬅️", callback_data=f"admin_users_page_{page-1}"
+                )
+            )
+        nav_row.append(
+            InlineKeyboardButton(
+                text=f"{page+1}/{total_pages}", callback_data="admin_users_noop"
+            )
+        )
         if page < total_pages - 1:
-            nav_row.append(InlineKeyboardButton(text="➡️", callback_data=f"admin_users_page_{page+1}"))
+            nav_row.append(
+                InlineKeyboardButton(
+                    text="➡️", callback_data=f"admin_users_page_{page+1}"
+                )
+            )
         buttons.append(nav_row)
 
         # Action buttons
-        buttons.append([
-            InlineKeyboardButton(text="🔍 Поиск", callback_data="admin_users_search"),
-            InlineKeyboardButton(text="« В меню", callback_data="admin_refresh"),
-        ])
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text="🔍 Поиск", callback_data="admin_users_search"
+                ),
+                InlineKeyboardButton(text="« В меню", callback_data="admin_refresh"),
+            ]
+        )
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -389,8 +441,7 @@ async def admin_costs_callback(callback: CallbackQuery, session: AsyncSession):
     response += "Выберите период для просмотра расходов:"
 
     await callback.message.edit_text(
-        response,
-        reply_markup=get_period_selector("admin_costs_period")
+        response, reply_markup=get_period_selector("admin_costs_period")
     )
     await callback.answer()
 
@@ -443,11 +494,11 @@ async def admin_costs_period_callback(callback: CallbackQuery, session: AsyncSes
         if costs_by_service:
             response += "🔧 <b>По сервисам:</b>\n"
             for service_data in costs_by_service[:5]:  # Top 5
-                service = service_data['service']
-                model = service_data['model'] or 'Unknown'
-                cost = service_data['total_cost']
-                tokens = service_data['total_tokens']
-                count = service_data['request_count']
+                service = service_data["service"]
+                model = service_data["model"] or "Unknown"
+                cost = service_data["total_cost"]
+                tokens = service_data["total_tokens"]
+                count = service_data["request_count"]
                 response += f"├ <b>{service}</b> ({model})\n"
                 response += f"│  ├ Запросов: {count}\n"
                 response += f"│  ├ Токенов: {tokens:,}\n"
@@ -457,45 +508,48 @@ async def admin_costs_period_callback(callback: CallbackQuery, session: AsyncSes
         if top_users:
             response += "👑 <b>Топ пользователей по расходам:</b>\n"
             for i, user_data in enumerate(top_users, start=1):
-                name = user_data['first_name'] or user_data['username'] or 'Unknown'
-                cost = user_data['total_cost']
-                requests = user_data['request_count']
+                name = user_data["first_name"] or user_data["username"] or "Unknown"
+                cost = user_data["total_cost"]
+                requests = user_data["request_count"]
                 response += f"{i}. {name}: <b>${cost:.4f}</b> ({requests} зап.)\n"
             response += "\n"
 
         if daily_costs and len(daily_costs) > 1:
             response += "📅 <b>По дням (последние 5):</b>\n"
             for day_data in daily_costs[:5]:
-                day_date = day_data['date']
-                day_cost = day_data['total_cost']
-                day_requests = day_data['request_count']
+                day_date = day_data["date"]
+                day_cost = day_data["total_cost"]
+                day_requests = day_data["request_count"]
                 response += f"├ {day_date}: ${day_cost:.4f} ({day_requests} зап.)\n"
             response += "\n"
 
         # Average cost per request
-        if total_costs['request_count'] > 0:
-            avg_cost = total_costs['total_cost'] / total_costs['request_count']
-            avg_tokens = total_costs['total_tokens'] / total_costs['request_count']
+        if total_costs["request_count"] > 0:
+            avg_cost = total_costs["total_cost"] / total_costs["request_count"]
+            avg_tokens = total_costs["total_tokens"] / total_costs["request_count"]
             response += "💵 <b>Средние показатели:</b>\n"
             response += f"├ За запрос: <b>${avg_cost:.4f}</b>\n"
             response += f"└ Токенов за запрос: <b>{avg_tokens:.0f}</b>\n\n"
 
         response += f"<i>Обновлено: {datetime.utcnow().strftime('%H:%M:%S UTC')}</i>"
 
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="« Назад к выбору периода", callback_data="admin_costs")],
-            [InlineKeyboardButton(text="« В меню", callback_data="admin_refresh")]
-        ])
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="« Назад к выбору периода", callback_data="admin_costs"
+                    )
+                ],
+                [InlineKeyboardButton(text="« В меню", callback_data="admin_refresh")],
+            ]
+        )
 
         await callback.message.edit_text(response, reply_markup=keyboard)
         await callback.answer()
 
         # Log admin action
         await log_admin_action(
-            session,
-            admin_id=user_id,
-            action="view_costs",
-            details=f"Period: {period}"
+            session, admin_id=user_id, action="view_costs", details=f"Period: {period}"
         )
 
     except Exception as e:
@@ -516,9 +570,11 @@ async def admin_charts_callback(callback: CallbackQuery):
     response += "• Распределение запросов по времени\n"
     response += "• Статистика использования моделей\n"
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="« В меню", callback_data="admin_refresh")]
-    ])
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="« В меню", callback_data="admin_refresh")]
+        ]
+    )
 
     await callback.message.edit_text(response, reply_markup=keyboard)
     await callback.answer("Функция скоро будет доступна", show_alert=True)
@@ -533,19 +589,26 @@ async def admin_settings_callback(callback: CallbackQuery, session: AsyncSession
 
     response = "⚙️ <b>Настройки бота</b>\n\n"
     response += "📊 <b>Глобальные параметры:</b>\n"
-    response += f"├ Лимит запросов (по умолчанию): <b>{REQUEST_LIMIT_PER_DAY}</b>/день\n"
+    response += (
+        f"├ Лимит запросов (по умолчанию): <b>{REQUEST_LIMIT_PER_DAY}</b>/день\n"
+    )
     response += f"└ Активных пользователей: <b>{await get_users_count(session)}</b>\n\n"
 
     response += "💡 <i>Здесь можно настроить глобальные параметры бота</i>"
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="📈 Изменить глобальный лимит", callback_data="admin_settings_global_limit"),
-        ],
-        [
-            InlineKeyboardButton(text="« В меню", callback_data="admin_refresh"),
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📈 Изменить глобальный лимит",
+                    callback_data="admin_settings_global_limit",
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="« В меню", callback_data="admin_refresh"),
+            ],
         ]
-    ])
+    )
 
     await callback.message.edit_text(response, reply_markup=keyboard)
     await callback.answer()
@@ -563,15 +626,21 @@ async def admin_settings_global_limit_callback(callback: CallbackQuery):
     response += "⚙️ <b>Как изменить:</b>\n"
     response += "1. Откройте файл <code>.env</code>\n"
     response += "2. Найдите параметр <code>REQUEST_LIMIT_PER_DAY</code>\n"
-    response += "3. Измените значение (например: <code>REQUEST_LIMIT_PER_DAY=10</code>)\n"
+    response += (
+        "3. Измените значение (например: <code>REQUEST_LIMIT_PER_DAY=10</code>)\n"
+    )
     response += "4. Перезапустите бота\n\n"
     response += "💡 <i>Новый лимит будет применен для всех новых пользователей.\n"
-    response += "Для существующих пользователей нужно установить индивидуальный лимит.</i>"
+    response += (
+        "Для существующих пользователей нужно установить индивидуальный лимит.</i>"
+    )
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="« Назад", callback_data="admin_settings")],
-        [InlineKeyboardButton(text="« В меню", callback_data="admin_refresh")]
-    ])
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="« Назад", callback_data="admin_settings")],
+            [InlineKeyboardButton(text="« В меню", callback_data="admin_refresh")],
+        ]
+    )
 
     await callback.message.edit_text(response, reply_markup=keyboard)
     await callback.answer()
@@ -601,7 +670,9 @@ async def admin_user_view_callback(callback: CallbackQuery, session: AsyncSessio
             return
 
         # Get user stats
-        has_remaining, current_count, limit = await check_request_limit(session, user.id)
+        has_remaining, current_count, limit = await check_request_limit(
+            session, user.id
+        )
         remaining = limit - current_count
 
         # Format message
@@ -623,7 +694,11 @@ async def admin_user_view_callback(callback: CallbackQuery, session: AsyncSessio
         admin_emoji = "👑" if user.is_admin else "👤"
         response += f"├ Роль: {admin_emoji} {'Администратор' if user.is_admin else 'Пользователь'}\n"
 
-        last_activity_str = user.last_activity.strftime('%d.%m.%Y %H:%M') if user.last_activity else 'Никогда'
+        last_activity_str = (
+            user.last_activity.strftime("%d.%m.%Y %H:%M")
+            if user.last_activity
+            else "Никогда"
+        )
         response += f"└ Последняя активность: {last_activity_str}\n\n"
 
         # Limits
@@ -637,27 +712,50 @@ async def admin_user_view_callback(callback: CallbackQuery, session: AsyncSessio
             response += f"└ Статус: 🔴 <b>Исчерпан</b>\n"
 
         # Build action buttons
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🔄 Сбросить лимиты", callback_data=f"admin_user_reset_{user.id}"),
-            ],
-            [
-                InlineKeyboardButton(text="📝 Установить лимит: 5", callback_data=f"admin_user_setlimit_{user.id}_5"),
-                InlineKeyboardButton(text="10", callback_data=f"admin_user_setlimit_{user.id}_10"),
-            ],
-            [
-                InlineKeyboardButton(text="15", callback_data=f"admin_user_setlimit_{user.id}_15"),
-                InlineKeyboardButton(text="20", callback_data=f"admin_user_setlimit_{user.id}_20"),
-                InlineKeyboardButton(text="50", callback_data=f"admin_user_setlimit_{user.id}_50"),
-            ],
-            [
-                InlineKeyboardButton(text="♾️ Безлимит (999)", callback_data=f"admin_user_setlimit_{user.id}_999"),
-            ],
-            [
-                InlineKeyboardButton(text="« К списку", callback_data="admin_users_page_0"),
-                InlineKeyboardButton(text="« В меню", callback_data="admin_refresh"),
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔄 Сбросить лимиты",
+                        callback_data=f"admin_user_reset_{user.id}",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="📝 Установить лимит: 5",
+                        callback_data=f"admin_user_setlimit_{user.id}_5",
+                    ),
+                    InlineKeyboardButton(
+                        text="10", callback_data=f"admin_user_setlimit_{user.id}_10"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="15", callback_data=f"admin_user_setlimit_{user.id}_15"
+                    ),
+                    InlineKeyboardButton(
+                        text="20", callback_data=f"admin_user_setlimit_{user.id}_20"
+                    ),
+                    InlineKeyboardButton(
+                        text="50", callback_data=f"admin_user_setlimit_{user.id}_50"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="♾️ Безлимит (999)",
+                        callback_data=f"admin_user_setlimit_{user.id}_999",
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="« К списку", callback_data="admin_users_page_0"
+                    ),
+                    InlineKeyboardButton(
+                        text="« В меню", callback_data="admin_refresh"
+                    ),
+                ],
             ]
-        ])
+        )
 
         await callback.message.edit_text(response, reply_markup=keyboard)
         await callback.answer()
@@ -697,7 +795,7 @@ async def admin_user_reset_callback(callback: CallbackQuery, session: AsyncSessi
             admin_id=callback.from_user.id,
             action="reset_limits",
             target_user_id=user.telegram_id,
-            details=f"Reset limits via button for {user.telegram_id} (@{user.username})"
+            details=f"Reset limits via button for {user.telegram_id} (@{user.username})",
         )
 
         await callback.answer("✅ Лимиты сброшены!", show_alert=True)
@@ -709,9 +807,9 @@ async def admin_user_reset_callback(callback: CallbackQuery, session: AsyncSessi
                 from_user=callback.from_user,
                 chat_instance=callback.chat_instance,
                 message=callback.message,
-                data=f"admin_user_view_{user_id}"
+                data=f"admin_user_view_{user_id}",
             ),
-            session
+            session,
         )
 
     except Exception as e:
@@ -744,6 +842,7 @@ async def admin_user_setlimit_callback(callback: CallbackQuery, session: AsyncSe
 
         # Set custom limit
         from src.database.crud import set_user_limit
+
         await set_user_limit(session, user.id, new_limit)
 
         # Log action
@@ -752,7 +851,7 @@ async def admin_user_setlimit_callback(callback: CallbackQuery, session: AsyncSe
             admin_id=callback.from_user.id,
             action="set_limit",
             target_user_id=user.telegram_id,
-            details=f"Set limit to {new_limit} for {user.telegram_id} (@{user.username})"
+            details=f"Set limit to {new_limit} for {user.telegram_id} (@{user.username})",
         )
 
         limit_text = "Безлимит" if new_limit >= 999 else f"{new_limit} запросов/день"
@@ -765,9 +864,9 @@ async def admin_user_setlimit_callback(callback: CallbackQuery, session: AsyncSe
                 from_user=callback.from_user,
                 chat_instance=callback.chat_instance,
                 message=callback.message,
-                data=f"admin_user_view_{user_id}"
+                data=f"admin_user_view_{user_id}",
             ),
-            session
+            session,
         )
 
     except Exception as e:
@@ -776,7 +875,9 @@ async def admin_user_setlimit_callback(callback: CallbackQuery, session: AsyncSe
 
 
 @router.message(Command("admin_limits"))
-async def cmd_admin_limits(message: Message, command: CommandObject, session: AsyncSession):
+async def cmd_admin_limits(
+    message: Message, command: CommandObject, session: AsyncSession
+):
     """
     Manage user request limits
 
@@ -824,7 +925,10 @@ async def cmd_admin_limits(message: Message, command: CommandObject, session: As
 
             # Get current limits
             from src.database.crud import check_request_limit
-            has_remaining, current_count, limit = await check_request_limit(session, user.id)
+
+            has_remaining, current_count, limit = await check_request_limit(
+                session, user.id
+            )
             remaining = limit - current_count
 
             if action == "reset":
@@ -837,7 +941,7 @@ async def cmd_admin_limits(message: Message, command: CommandObject, session: As
                     admin_id=admin_id,
                     action="reset_limits",
                     target_user_id=telegram_id,
-                    details=f"Reset limits for user {telegram_id} (@{user.username})"
+                    details=f"Reset limits for user {telegram_id} (@{user.username})",
                 )
 
                 response = f"✅ <b>Лимиты сброшены</b>\n\n"
@@ -862,7 +966,9 @@ async def cmd_admin_limits(message: Message, command: CommandObject, session: As
                     response += f" (@{user.username})"
                 response += f"\n"
                 response += f"🆔 Telegram ID: <code>{telegram_id}</code>\n"
-                response += f"📅 Регистрация: {user.created_at.strftime('%d.%m.%Y')}\n\n"
+                response += (
+                    f"📅 Регистрация: {user.created_at.strftime('%d.%m.%Y')}\n\n"
+                )
 
                 response += f"📈 <b>Текущие лимиты:</b>\n"
                 response += f"├ Использовано: <b>{current_count} из {limit}</b>\n"
@@ -885,7 +991,7 @@ async def cmd_admin_limits(message: Message, command: CommandObject, session: As
                     admin_id=admin_id,
                     action="view_limits",
                     target_user_id=telegram_id,
-                    details=f"Viewed limits for user {telegram_id}"
+                    details=f"Viewed limits for user {telegram_id}",
                 )
 
     except Exception as e:
@@ -897,7 +1003,9 @@ async def cmd_admin_limits(message: Message, command: CommandObject, session: As
 
 
 @router.message(Command("admin_users"))
-async def cmd_admin_users(message: Message, command: CommandObject, session: AsyncSession):
+async def cmd_admin_users(
+    message: Message, command: CommandObject, session: AsyncSession
+):
     """
     Search users by ID or username
 
@@ -912,6 +1020,7 @@ async def cmd_admin_users(message: Message, command: CommandObject, session: Asy
         await message.answer("Перехожу к списку пользователей...")
         # Simulate callback
         from aiogram.types import CallbackQuery as FakeCallback
+
         # This is a workaround - better to refactor into a shared function
         await admin_users_page_callback(
             CallbackQuery(
@@ -919,9 +1028,9 @@ async def cmd_admin_users(message: Message, command: CommandObject, session: Asy
                 from_user=message.from_user,
                 chat_instance="fake",
                 message=message,
-                data="admin_users_page_0"
+                data="admin_users_page_0",
             ),
-            session
+            session,
         )
         return
 
@@ -946,7 +1055,11 @@ async def cmd_admin_users(message: Message, command: CommandObject, session: Asy
 
             for i, user in enumerate(users, start=1):
                 status = "✅" if user.is_subscribed else "❌"
-                last_active = user.last_activity.strftime('%d.%m.%Y %H:%M') if user.last_activity else 'Никогда'
+                last_active = (
+                    user.last_activity.strftime("%d.%m.%Y %H:%M")
+                    if user.last_activity
+                    else "Никогда"
+                )
 
                 response += f"{status} <b>{i}.</b> "
                 if user.first_name:
@@ -965,7 +1078,7 @@ async def cmd_admin_users(message: Message, command: CommandObject, session: Asy
                 session,
                 admin_id=user_id,
                 action="search_users",
-                details=f"Query: {search_query}, Found: {len(users)}"
+                details=f"Query: {search_query}, Found: {len(users)}",
             )
 
     except Exception as e:

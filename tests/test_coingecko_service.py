@@ -1,6 +1,7 @@
 """
 Unit tests for CoinGecko service
 """
+
 import pytest
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 import time
@@ -87,15 +88,12 @@ def test_cache_miss(coingecko_service):
 @pytest.mark.asyncio
 async def test_get_price_mock(coingecko_service):
     """Test get_price with mocked API response"""
-    mock_response = {
-        "bitcoin": {
-            "usd": 50000,
-            "usd_24h_change": 5.2
-        }
-    }
+    mock_response = {"bitcoin": {"usd": 50000, "usd_24h_change": 5.2}}
 
     # Mock the _make_request method
-    with patch.object(coingecko_service, '_make_request', new_callable=AsyncMock) as mock_request:
+    with patch.object(
+        coingecko_service, "_make_request", new_callable=AsyncMock
+    ) as mock_request:
         mock_request.return_value = mock_response
 
         result = await coingecko_service.get_price("bitcoin", "usd")
@@ -107,12 +105,7 @@ async def test_get_price_mock(coingecko_service):
 @pytest.mark.asyncio
 async def test_get_price_with_cache(coingecko_service):
     """Test that get_price uses cache"""
-    mock_response = {
-        "bitcoin": {
-            "usd": 50000,
-            "usd_24h_change": 5.2
-        }
-    }
+    mock_response = {"bitcoin": {"usd": 50000, "usd_24h_change": 5.2}}
 
     # Manually set cache to test caching behavior (use correct parameter name!)
     cache_key = coingecko_service._get_cache_key(
@@ -120,8 +113,8 @@ async def test_get_price_with_cache(coingecko_service):
         {
             "ids": "bitcoin",
             "vs_currencies": "usd",
-            "include_24hr_change": "true"  # Note: "24hr" not "24h"
-        }
+            "include_24hr_change": "true",  # Note: "24hr" not "24h"
+        },
     )
     coingecko_service._set_cache(cache_key, mock_response)
 
@@ -150,7 +143,7 @@ async def test_make_request_success():
     mock_session.__aenter__ = AsyncMock(return_value=mock_session)
     mock_session.__aexit__ = AsyncMock()
 
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         result = await service._make_request("/simple/price", {"ids": "bitcoin"})
 
         assert result == mock_response_data
@@ -171,7 +164,7 @@ async def test_make_request_error():
     mock_session.get = AsyncMock()
     mock_session.get.return_value.__aenter__.return_value = mock_response
 
-    with patch('aiohttp.ClientSession', return_value=mock_session):
+    with patch("aiohttp.ClientSession", return_value=mock_session):
         result = await service._make_request("/simple/price", {"ids": "invalid"})
 
         assert result is None

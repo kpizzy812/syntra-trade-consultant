@@ -11,7 +11,7 @@ from config import prompts_en
 from config import vision_prompts_en
 
 
-def get_system_prompt(language: str = 'ru', mode: str = 'medium') -> str:
+def get_system_prompt(language: str = "ru", mode: str = "medium") -> str:
     """
     Get system prompt in user's language
 
@@ -22,14 +22,14 @@ def get_system_prompt(language: str = 'ru', mode: str = 'medium') -> str:
     Returns:
         System prompt in appropriate language
     """
-    if language == 'en':
+    if language == "en":
         # For English, we don't have get_system_prompt_with_mode yet, so just return basic prompt
         return prompts_en.SYNTRA_SYSTEM_PROMPT
     else:
         return prompts_ru.get_system_prompt_with_mode(mode)
 
 
-def get_vision_analysis_prompt(language: str = 'ru') -> str:
+def get_vision_analysis_prompt(language: str = "ru") -> str:
     """
     Get vision analysis prompt in user's language
 
@@ -39,7 +39,7 @@ def get_vision_analysis_prompt(language: str = 'ru') -> str:
     Returns:
         Vision analysis prompt in appropriate language
     """
-    if language == 'en':
+    if language == "en":
         return vision_prompts_en.BASIC_ANALYSIS_PROMPT
     else:
         return vision_prompts_ru.BASIC_ANALYSIS_PROMPT
@@ -51,7 +51,7 @@ def get_enhanced_vision_prompt(
     current_price: float,
     change_24h: float,
     volume_24h: float = None,
-    market_cap: float = None
+    market_cap: float = None,
 ) -> str:
     """
     Get enhanced vision analysis prompt with market data
@@ -67,7 +67,7 @@ def get_enhanced_vision_prompt(
     Returns:
         Enhanced vision prompt in appropriate language
     """
-    if language == 'en':
+    if language == "en":
         return vision_prompts_en.get_enhanced_analysis_prompt(
             coin_name, current_price, change_24h, volume_24h, market_cap
         )
@@ -82,7 +82,7 @@ def get_question_vision_prompt(
     user_question: str,
     coin_name: str = None,
     current_price: float = None,
-    change_24h: float = None
+    change_24h: float = None,
 ) -> str:
     """
     Get question analysis prompt for vision
@@ -97,7 +97,7 @@ def get_question_vision_prompt(
     Returns:
         Question analysis prompt in appropriate language
     """
-    if language == 'en':
+    if language == "en":
         return vision_prompts_en.get_question_analysis_prompt(
             user_question, coin_name, current_price, change_24h
         )
@@ -114,7 +114,7 @@ def get_price_analysis_prompt(
     change_24h: float,
     market_cap: float,
     volume_24h: float,
-    news: str
+    news: str,
 ) -> str:
     """
     Get price analysis prompt
@@ -131,14 +131,14 @@ def get_price_analysis_prompt(
     Returns:
         Price analysis prompt in appropriate language
     """
-    if language == 'en':
+    if language == "en":
         return prompts_en.PRICE_ANALYSIS_PROMPT_TEMPLATE.format(
             coin_name=coin_name,
             current_price=current_price,
             change_24h=change_24h,
             market_cap=market_cap,
             volume_24h=volume_24h,
-            news=news
+            news=news,
         )
     else:
         return prompts_ru.PRICE_ANALYSIS_PROMPT_TEMPLATE.format(
@@ -147,11 +147,11 @@ def get_price_analysis_prompt(
             change_24h=change_24h,
             market_cap=market_cap,
             volume_24h=volume_24h,
-            news=news
+            news=news,
         )
 
 
-def get_general_question_prompt(language: str = 'ru') -> str:
+def get_general_question_prompt(language: str = "ru") -> str:
     """
     Get general question prompt
 
@@ -161,13 +161,13 @@ def get_general_question_prompt(language: str = 'ru') -> str:
     Returns:
         General question prompt in appropriate language
     """
-    if language == 'en':
+    if language == "en":
         return prompts_en.GENERAL_QUESTION_PROMPT
     else:
         return prompts_ru.GENERAL_QUESTION_PROMPT
 
 
-def get_coin_detection_prompt(language: str = 'ru') -> str:
+def get_coin_detection_prompt(language: str = "ru") -> str:
     """
     Get coin detection prompt for vision
 
@@ -177,7 +177,7 @@ def get_coin_detection_prompt(language: str = 'ru') -> str:
     Returns:
         Coin detection prompt in appropriate language
     """
-    if language == 'en':
+    if language == "en":
         return vision_prompts_en.COIN_DETECTION_PROMPT
     else:
         return vision_prompts_ru.COIN_DETECTION_PROMPT

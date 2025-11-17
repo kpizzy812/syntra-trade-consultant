@@ -1,11 +1,18 @@
 """
 Subscription middleware - checks if user is subscribed to required channel
 """
+
 from typing import Callable, Dict, Any, Awaitable
 import logging
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject, Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    TelegramObject,
+    Message,
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import TelegramBadRequest
 
@@ -23,7 +30,7 @@ class SubscriptionMiddleware(BaseMiddleware):
     """
 
     # Commands that work without subscription
-    ALLOWED_COMMANDS = {'/start', '/help'}
+    ALLOWED_COMMANDS = {"/start", "/help"}
 
     async def check_subscription(self, bot, user_id: int) -> bool:
         """
@@ -42,15 +49,14 @@ class SubscriptionMiddleware(BaseMiddleware):
 
         try:
             member = await bot.get_chat_member(
-                chat_id=REQUIRED_CHANNEL,
-                user_id=user_id
+                chat_id=REQUIRED_CHANNEL, user_id=user_id
             )
 
             # Check if user is member, admin or creator
             return member.status in {
                 ChatMemberStatus.MEMBER,
                 ChatMemberStatus.ADMINISTRATOR,
-                ChatMemberStatus.CREATOR
+                ChatMemberStatus.CREATOR,
             }
 
         except TelegramBadRequest as e:
@@ -66,14 +72,20 @@ class SubscriptionMiddleware(BaseMiddleware):
                 # In development mode, can skip subscription check (SKIP_SUBSCRIPTION_CHECK=true)
                 # In production, MUST fail closed (SKIP_SUBSCRIPTION_CHECK=false or unset)
                 if SKIP_SUBSCRIPTION_CHECK:
-                    logger.warning("⚠️ SKIP_SUBSCRIPTION_CHECK is enabled - allowing access without verification!")
+                    logger.warning(
+                        "⚠️ SKIP_SUBSCRIPTION_CHECK is enabled - allowing access without verification!"
+                    )
                     return True
                 else:
-                    logger.error("🔒 Subscription check failed - denying access (production mode)")
+                    logger.error(
+                        "🔒 Subscription check failed - denying access (production mode)"
+                    )
                     return False
 
             # For other Telegram errors, deny access (fail closed)
-            logger.error(f"Telegram error checking subscription for user {user_id}: {e}")
+            logger.error(
+                f"Telegram error checking subscription for user {user_id}: {e}"
+            )
             return False
 
         except Exception as e:
@@ -85,7 +97,7 @@ class SubscriptionMiddleware(BaseMiddleware):
         self,
         handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
-        data: Dict[str, Any]
+        data: Dict[str, Any],
     ) -> Any:
         """
         Check subscription before calling handler
@@ -113,7 +125,7 @@ class SubscriptionMiddleware(BaseMiddleware):
             return await handler(event, data)
 
         # Get bot
-        bot = data.get('bot')
+        bot = data.get("bot")
 
         if not user:
             return await handler(event, data)
@@ -123,47 +135,54 @@ class SubscriptionMiddleware(BaseMiddleware):
 
         if is_subscribed:
             # Update subscription status in handler data
-            data['is_subscribed'] = True
+            data["is_subscribed"] = True
             return await handler(event, data)
 
         # User not subscribed - send subscription prompt
         logger.info(f"User {user.id} (@{user.username}) is not subscribed")
 
         # Get user language from data (set by LanguageMiddleware)
-        user_lang = data.get('user_language', 'ru')
+        user_lang = data.get("user_language", "ru")
 
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="📢 " + ("Subscribe to channel" if user_lang == 'en' else "Подписаться на канал"),
-                    url=f"https://t.me/{REQUIRED_CHANNEL.lstrip('@')}"
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=i18n.get('subscription.check_button', user_lang),
-                    callback_data="check_subscription"
-                )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="📢 "
+                        + (
+                            "Subscribe to channel"
+                            if user_lang == "en"
+                            else "Подписаться на канал"
+                        ),
+                        url=f"https://t.me/{REQUIRED_CHANNEL.lstrip('@')}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=i18n.get("subscription.check_button", user_lang),
+                        callback_data="check_subscription",
+                    )
+                ],
             ]
-        ])
+        )
 
-        subscription_text = i18n.get('subscription.required', user_lang, channel=f"@{REQUIRED_CHANNEL.lstrip('@')}")
+        subscription_text = i18n.get(
+            "subscription.required",
+            user_lang,
+            channel=f"@{REQUIRED_CHANNEL.lstrip('@')}",
+        )
 
         # Send different messages for Message vs CallbackQuery
         if isinstance(event, Message):
-            await event.answer(
-                subscription_text,
-                reply_markup=keyboard
-            )
+            await event.answer(subscription_text, reply_markup=keyboard)
         elif isinstance(event, CallbackQuery):
             await event.answer(
-                i18n.get('subscription.not_found', user_lang).split('.')[0],  # Short message for alert
-                show_alert=True
+                i18n.get("subscription.not_found", user_lang).split(".")[
+                    0
+                ],  # Short message for alert
+                show_alert=True,
             )
-            await event.message.answer(
-                subscription_text,
-                reply_markup=keyboard
-            )
+            await event.message.answer(subscription_text, reply_markup=keyboard)
 
         # Block further processing
         return None

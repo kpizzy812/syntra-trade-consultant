@@ -19,7 +19,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
-    before_sleep_log
+    before_sleep_log,
 )
 
 
@@ -92,7 +92,7 @@ class FearGreedService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True
+        reraise=True,
     )
     async def get_current(self) -> Optional[Dict[str, Any]]:
         """
@@ -121,17 +121,21 @@ class FearGreedService:
                         if data and "data" in data and len(data["data"]) > 0:
                             fng_data = data["data"][0]
                             value = int(fng_data.get("value", 50))
-                            classification = fng_data.get("value_classification", "Unknown")
+                            classification = fng_data.get(
+                                "value_classification", "Unknown"
+                            )
                             timestamp = fng_data.get("timestamp", "")
 
                             result = {
                                 "value": value,
                                 "value_classification": classification,
                                 "emoji": self.get_emoji(value),
-                                "timestamp": timestamp
+                                "timestamp": timestamp,
                             }
 
-                            logger.info(f"Fear & Greed Index: {value} ({classification})")
+                            logger.info(
+                                f"Fear & Greed Index: {value} ({classification})"
+                            )
                             return result
                         else:
                             logger.warning("Fear & Greed API returned empty data")
@@ -149,7 +153,7 @@ class FearGreedService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True
+        reraise=True,
     )
     async def get_historical(self, limit: int = 7) -> Optional[list]:
         """
@@ -181,17 +185,25 @@ class FearGreedService:
                             historical = []
                             for item in data["data"]:
                                 value = int(item.get("value", 50))
-                                historical.append({
-                                    "value": value,
-                                    "classification": item.get("value_classification", "Unknown"),
-                                    "emoji": self.get_emoji(value),
-                                    "timestamp": item.get("timestamp", "")
-                                })
+                                historical.append(
+                                    {
+                                        "value": value,
+                                        "classification": item.get(
+                                            "value_classification", "Unknown"
+                                        ),
+                                        "emoji": self.get_emoji(value),
+                                        "timestamp": item.get("timestamp", ""),
+                                    }
+                                )
 
-                            logger.info(f"Fetched {len(historical)} days of Fear & Greed historical data")
+                            logger.info(
+                                f"Fetched {len(historical)} days of Fear & Greed historical data"
+                            )
                             return historical
                         else:
-                            logger.warning("Fear & Greed API returned empty historical data")
+                            logger.warning(
+                                "Fear & Greed API returned empty historical data"
+                            )
                             return None
                     else:
                         logger.error(f"Fear & Greed API error: {response.status}")

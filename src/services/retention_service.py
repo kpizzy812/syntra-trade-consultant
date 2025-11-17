@@ -23,7 +23,7 @@ from config.prompts import (
     REMINDER_7_DAYS_INACTIVE,
     REMINDER_14_DAYS_INACTIVE,
     ACTIVE_USER_MOTIVATION,
-    get_random_catchphrase
+    get_random_catchphrase,
 )
 from config.config import REQUIRED_CHANNEL
 from src.database.engine import get_session
@@ -99,7 +99,7 @@ class RetentionService:
             trigger=IntervalTrigger(hours=1),
             id="check_non_subscribers",
             name="Check non-subscribers for follow-ups",
-            replace_existing=True
+            replace_existing=True,
         )
 
         # Check inactive users daily at 10:00 UTC
@@ -108,7 +108,7 @@ class RetentionService:
             trigger=CronTrigger(hour=10, minute=0),
             id="check_inactive_users",
             name="Check inactive users for reminders",
-            replace_existing=True
+            replace_existing=True,
         )
 
         # Check subscription status every 6 hours
@@ -117,16 +117,16 @@ class RetentionService:
             trigger=IntervalTrigger(hours=6),
             id="check_subscription_status",
             name="Verify user subscription status",
-            replace_existing=True
+            replace_existing=True,
         )
 
         # Send motivation to active users weekly on Sunday at 12:00 UTC
         self.scheduler.add_job(
             self.motivate_active_users,
-            trigger=CronTrigger(day_of_week='sun', hour=12, minute=0),
+            trigger=CronTrigger(day_of_week="sun", hour=12, minute=0),
             id="motivate_active_users",
             name="Send motivation to active users",
-            replace_existing=True
+            replace_existing=True,
         )
 
         logger.info("Scheduled 4 retention jobs")
@@ -160,7 +160,7 @@ class RetentionService:
                     and_(
                         User.is_subscribed == False,
                         User.created_at >= one_hour_ago - one_hour_window,
-                        User.created_at <= one_hour_ago + one_hour_window
+                        User.created_at <= one_hour_ago + one_hour_window,
                     )
                 )
                 result_1h = await session.execute(stmt_1h)
@@ -172,21 +172,26 @@ class RetentionService:
                             channel_link=f"https://t.me/{REQUIRED_CHANNEL.lstrip('@')}"
                         )
                         await self.bot.send_message(
-                            chat_id=user.telegram_id,
-                            text=message
+                            chat_id=user.telegram_id, text=message
                         )
                         logger.info(f"Sent 1h follow-up to user {user.telegram_id}")
                     except (TelegramForbiddenError, TelegramBadRequest) as e:
-                        logger.warning(f"Failed to send 1h follow-up to {user.telegram_id}: {e}")
+                        logger.warning(
+                            f"Failed to send 1h follow-up to {user.telegram_id}: {e}"
+                        )
                     except Exception as e:
-                        logger.exception(f"Error sending 1h follow-up to {user.telegram_id}: {e}")
+                        logger.exception(
+                            f"Error sending 1h follow-up to {user.telegram_id}: {e}"
+                        )
 
                 # 24 hour follow-up
                 stmt_24h = select(User).where(
                     and_(
                         User.is_subscribed == False,
-                        User.created_at >= twenty_four_hours_ago - twenty_four_hour_window,
-                        User.created_at <= twenty_four_hours_ago + twenty_four_hour_window
+                        User.created_at
+                        >= twenty_four_hours_ago - twenty_four_hour_window,
+                        User.created_at
+                        <= twenty_four_hours_ago + twenty_four_hour_window,
                     )
                 )
                 result_24h = await session.execute(stmt_24h)
@@ -198,14 +203,17 @@ class RetentionService:
                             channel_link=f"https://t.me/{REQUIRED_CHANNEL.lstrip('@')}"
                         )
                         await self.bot.send_message(
-                            chat_id=user.telegram_id,
-                            text=message
+                            chat_id=user.telegram_id, text=message
                         )
                         logger.info(f"Sent 24h follow-up to user {user.telegram_id}")
                     except (TelegramForbiddenError, TelegramBadRequest) as e:
-                        logger.warning(f"Failed to send 24h follow-up to {user.telegram_id}: {e}")
+                        logger.warning(
+                            f"Failed to send 24h follow-up to {user.telegram_id}: {e}"
+                        )
                     except Exception as e:
-                        logger.exception(f"Error sending 24h follow-up to {user.telegram_id}: {e}")
+                        logger.exception(
+                            f"Error sending 24h follow-up to {user.telegram_id}: {e}"
+                        )
 
                 logger.info(
                     f"Non-subscriber check complete: "
@@ -233,7 +241,8 @@ class RetentionService:
                 # Filter out users who were inactive for exactly 7 days (±1 day)
                 now = datetime.utcnow()
                 users_7d_exact = [
-                    u for u in users_7d
+                    u
+                    for u in users_7d
                     if timedelta(days=6) <= (now - u.last_activity) <= timedelta(days=8)
                 ]
 
@@ -243,12 +252,14 @@ class RetentionService:
                         btc_data = await self.coingecko.get_price(
                             coin_id="bitcoin",
                             vs_currency="usd",
-                            include_24h_change=True
+                            include_24h_change=True,
                         )
 
                         # Calculate BTC change description
                         if btc_data and "bitcoin" in btc_data:
-                            btc_change_pct = btc_data["bitcoin"].get("usd_24h_change", 0)
+                            btc_change_pct = btc_data["bitcoin"].get(
+                                "usd_24h_change", 0
+                            )
                             if btc_change_pct > 5:
                                 btc_change = f"pumping +{btc_change_pct:.1f}%"
                                 market_sentiment = "bullish"
@@ -268,41 +279,53 @@ class RetentionService:
                             # Fallback if API fails
                             btc_change = "stable"
                             market_sentiment = "consolidating"
-                            logger.warning("Failed to fetch BTC data, using fallback values")
+                            logger.warning(
+                                "Failed to fetch BTC data, using fallback values"
+                            )
 
                         # Get user limits
-                        _, current_count, limit = await check_request_limit(session, user.id)
+                        _, current_count, limit = await check_request_limit(
+                            session, user.id
+                        )
                         limits_remaining = limit - current_count
 
                         message = REMINDER_7_DAYS_INACTIVE.format(
                             btc_change=btc_change,
                             market_sentiment=market_sentiment,
-                            limits_remaining=limits_remaining
+                            limits_remaining=limits_remaining,
                         )
 
                         await self.bot.send_message(
-                            chat_id=user.telegram_id,
-                            text=message
+                            chat_id=user.telegram_id, text=message
                         )
                         logger.info(f"Sent 7d reminder to user {user.telegram_id}")
                     except (TelegramForbiddenError, TelegramBadRequest) as e:
-                        logger.warning(f"Failed to send 7d reminder to {user.telegram_id}: {e}")
+                        logger.warning(
+                            f"Failed to send 7d reminder to {user.telegram_id}: {e}"
+                        )
                     except Exception as e:
-                        logger.exception(f"Error sending 7d reminder to {user.telegram_id}: {e}")
+                        logger.exception(
+                            f"Error sending 7d reminder to {user.telegram_id}: {e}"
+                        )
 
                 # Get users inactive for 14 days
                 users_14d = await get_inactive_users(session, days=14)
 
                 # Filter exact 14 days (±1 day)
                 users_14d_exact = [
-                    u for u in users_14d
-                    if timedelta(days=13) <= (now - u.last_activity) <= timedelta(days=15)
+                    u
+                    for u in users_14d
+                    if timedelta(days=13)
+                    <= (now - u.last_activity)
+                    <= timedelta(days=15)
                 ]
 
                 for user in users_14d_exact:
                     try:
                         # Get user limits
-                        _, current_count, limit = await check_request_limit(session, user.id)
+                        _, current_count, limit = await check_request_limit(
+                            session, user.id
+                        )
                         limits_remaining = limit - current_count
 
                         message = REMINDER_14_DAYS_INACTIVE.format(
@@ -310,14 +333,17 @@ class RetentionService:
                         )
 
                         await self.bot.send_message(
-                            chat_id=user.telegram_id,
-                            text=message
+                            chat_id=user.telegram_id, text=message
                         )
                         logger.info(f"Sent 14d reminder to user {user.telegram_id}")
                     except (TelegramForbiddenError, TelegramBadRequest) as e:
-                        logger.warning(f"Failed to send 14d reminder to {user.telegram_id}: {e}")
+                        logger.warning(
+                            f"Failed to send 14d reminder to {user.telegram_id}: {e}"
+                        )
                     except Exception as e:
-                        logger.exception(f"Error sending 14d reminder to {user.telegram_id}: {e}")
+                        logger.exception(
+                            f"Error sending 14d reminder to {user.telegram_id}: {e}"
+                        )
 
                 logger.info(
                     f"Inactive users check complete: "
@@ -353,25 +379,24 @@ class RetentionService:
                         from aiogram.enums import ChatMemberStatus
 
                         member = await self.bot.get_chat_member(
-                            chat_id=REQUIRED_CHANNEL,
-                            user_id=user.telegram_id
+                            chat_id=REQUIRED_CHANNEL, user_id=user.telegram_id
                         )
 
                         is_subscribed = member.status in {
                             ChatMemberStatus.MEMBER,
                             ChatMemberStatus.ADMINISTRATOR,
-                            ChatMemberStatus.CREATOR
+                            ChatMemberStatus.CREATOR,
                         }
 
                         # If user unsubscribed, update database
                         if not is_subscribed:
                             await update_user_subscription(
-                                session,
-                                user.telegram_id,
-                                is_subscribed=False
+                                session, user.telegram_id, is_subscribed=False
                             )
                             unsubscribed_count += 1
-                            logger.info(f"User {user.telegram_id} unsubscribed from channel")
+                            logger.info(
+                                f"User {user.telegram_id} unsubscribed from channel"
+                            )
 
                             # Optionally send unsubscribe message
                             # (commented out to avoid spam)
@@ -392,7 +417,9 @@ class RetentionService:
                         # User might have blocked bot or deleted account
                         pass
                     except Exception as e:
-                        logger.error(f"Error checking subscription for {user.telegram_id}: {e}")
+                        logger.error(
+                            f"Error checking subscription for {user.telegram_id}: {e}"
+                        )
 
                 logger.info(
                     f"Subscription check complete: "
@@ -418,8 +445,7 @@ class RetentionService:
 
                 three_days_ago = datetime.utcnow() - timedelta(days=3)
                 stmt = select(User).where(
-                    User.last_activity >= three_days_ago,
-                    User.is_subscribed == True
+                    User.last_activity >= three_days_ago, User.is_subscribed == True
                 )
                 result = await session.execute(stmt)
                 active_users = list(result.scalars().all())
@@ -429,26 +455,33 @@ class RetentionService:
                 for user in active_users:
                     try:
                         # Get user limits
-                        _, current_count, limit = await check_request_limit(session, user.id)
+                        _, current_count, limit = await check_request_limit(
+                            session, user.id
+                        )
                         limits_remaining = limit - current_count
 
                         message = ACTIVE_USER_MOTIVATION.format(
                             limits_remaining=limits_remaining,
-                            random_catchphrase=get_random_catchphrase()
+                            random_catchphrase=get_random_catchphrase(),
                         )
 
                         await self.bot.send_message(
-                            chat_id=user.telegram_id,
-                            text=message
+                            chat_id=user.telegram_id, text=message
                         )
                         sent_count += 1
                         logger.info(f"Sent motivation to user {user.telegram_id}")
                     except (TelegramForbiddenError, TelegramBadRequest) as e:
-                        logger.warning(f"Failed to send motivation to {user.telegram_id}: {e}")
+                        logger.warning(
+                            f"Failed to send motivation to {user.telegram_id}: {e}"
+                        )
                     except Exception as e:
-                        logger.exception(f"Error sending motivation to {user.telegram_id}: {e}")
+                        logger.exception(
+                            f"Error sending motivation to {user.telegram_id}: {e}"
+                        )
 
-                logger.info(f"Motivation complete: {sent_count}/{len(active_users)} messages sent")
+                logger.info(
+                    f"Motivation complete: {sent_count}/{len(active_users)} messages sent"
+                )
 
         except Exception as e:
             logger.exception(f"Error in active users motivation: {e}")

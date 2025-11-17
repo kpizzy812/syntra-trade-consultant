@@ -1,13 +1,14 @@
 """
 Unit tests for coin parser utilities
 """
+
 import pytest
 
 from src.utils.coin_parser import (
     normalize_coin_name,
     extract_coin_from_text,
     format_coin_name,
-    COIN_ID_MAPPING
+    COIN_ID_MAPPING,
 )
 
 

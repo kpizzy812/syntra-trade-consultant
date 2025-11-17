@@ -29,7 +29,9 @@ coingecko_service = CoinGeckoService()
 
 
 @router.message(F.photo)
-async def handle_photo(message: Message, session: AsyncSession, user_language: str = 'ru'):
+async def handle_photo(
+    message: Message, session: AsyncSession, user_language: str = "ru"
+):
     """
     Handle photo messages - analyze crypto charts with Vision API
 
@@ -46,12 +48,13 @@ async def handle_photo(message: Message, session: AsyncSession, user_language: s
 
     # Get database user
     from src.database.crud import get_or_create_user
+
     db_user, _ = await get_or_create_user(
         session,
         telegram_id=telegram_id,
         username=username,
         first_name=user.first_name,
-        last_name=user.last_name
+        last_name=user.last_name,
     )
 
     # Get photo (largest size)
@@ -63,9 +66,9 @@ async def handle_photo(message: Message, session: AsyncSession, user_language: s
     if file_size and file_size > ModelConfig.VISION_MAX_FILE_SIZE:
         await message.answer(
             i18n.get(
-                'vision.file_too_large',
+                "vision.file_too_large",
                 user_language,
-                max_size=ModelConfig.VISION_MAX_FILE_SIZE // (1024*1024)
+                max_size=ModelConfig.VISION_MAX_FILE_SIZE // (1024 * 1024),
             )
         )
         return
@@ -73,8 +76,7 @@ async def handle_photo(message: Message, session: AsyncSession, user_language: s
     try:
         # Show typing indicator while downloading and preparing
         async with ChatActionSender.upload_photo(
-            bot=message.bot,
-            chat_id=message.chat.id
+            bot=message.bot, chat_id=message.chat.id
         ):
             # Download photo
             file = await message.bot.get_file(file_id)
@@ -98,7 +100,9 @@ async def handle_photo(message: Message, session: AsyncSession, user_language: s
             # If not found in caption, try to detect from image
             if not coin_id:
                 logger.info("Attempting to detect coin from image...")
-                detected_name = await openai_service.detect_coin_from_image(image_bytes, user_language)
+                detected_name = await openai_service.detect_coin_from_image(
+                    image_bytes, user_language
+                )
                 if detected_name:
                     coin_id = normalize_coin_name(detected_name)
                     if coin_id:
@@ -108,24 +112,35 @@ async def handle_photo(message: Message, session: AsyncSession, user_language: s
             if coin_id:
                 logger.info(f"Fetching market data for {coin_id}...")
                 price_data = await coingecko_service.get_price(
-                    coin_id,
-                    include_24h_change=True
+                    coin_id, include_24h_change=True
                 )
 
                 if price_data and coin_id in price_data:
                     market_data = {
-                        'name': coin_id.replace('-', ' ').title(),
-                        'current_price': price_data[coin_id].get('usd', 0),
-                        'price_change_percentage_24h': price_data[coin_id].get('usd_24h_change', 0),
+                        "name": coin_id.replace("-", " ").title(),
+                        "current_price": price_data[coin_id].get("usd", 0),
+                        "price_change_percentage_24h": price_data[coin_id].get(
+                            "usd_24h_change", 0
+                        ),
                     }
 
                     # Try to get additional data
                     coin_details = await coingecko_service.get_coin_data(coin_id)
                     if coin_details:
-                        market_data['total_volume'] = coin_details.get('market_data', {}).get('total_volume', {}).get('usd', 0)
-                        market_data['market_cap'] = coin_details.get('market_data', {}).get('market_cap', {}).get('usd', 0)
+                        market_data["total_volume"] = (
+                            coin_details.get("market_data", {})
+                            .get("total_volume", {})
+                            .get("usd", 0)
+                        )
+                        market_data["market_cap"] = (
+                            coin_details.get("market_data", {})
+                            .get("market_cap", {})
+                            .get("usd", 0)
+                        )
 
-                    logger.info(f"Market data fetched: ${market_data['current_price']:,.2f}")
+                    logger.info(
+                        f"Market data fetched: ${market_data['current_price']:,.2f}"
+                    )
 
             # Step 3: Build custom prompt if user provided caption
             user_prompt = None
@@ -134,52 +149,57 @@ async def handle_photo(message: Message, session: AsyncSession, user_language: s
                 user_prompt = get_question_vision_prompt(
                     language=user_language,
                     user_question=message.caption,
-                    coin_name=market_data['name'] if market_data else None,
-                    current_price=market_data['current_price'] if market_data else None,
-                    change_24h=market_data['price_change_percentage_24h'] if market_data else None
+                    coin_name=market_data["name"] if market_data else None,
+                    current_price=market_data["current_price"] if market_data else None,
+                    change_24h=(
+                        market_data["price_change_percentage_24h"]
+                        if market_data
+                        else None
+                    ),
                 )
 
         # Step 4: Build header for response
-        coin_name_str = f" <b>{market_data['name'] if market_data else coin_id}</b>" if coin_id else ""
+        coin_name_str = (
+            f" <b>{market_data['name'] if market_data else coin_id}</b>"
+            if coin_id
+            else ""
+        )
 
         # Add market data summary if available
         market_data_str = ""
         if market_data:
-            price = market_data['current_price']
-            change = market_data['price_change_percentage_24h']
+            price = market_data["current_price"]
+            change = market_data["price_change_percentage_24h"]
             change_emoji = "🟢" if change > 0 else "🔴"
 
             market_data_str = i18n.get(
-                'vision.current_data',
+                "vision.current_data",
                 user_language,
                 price=f"{price:,.2f}",
                 emoji=change_emoji,
-                change=f"{change:+.2f}"
+                change=f"{change:+.2f}",
             )
 
         # Send initial message
-        initial_msg = i18n.get('vision.analyzing', user_language, coin_name=coin_name_str)
-        thinking_msg = await message.answer(
-            initial_msg,
-            parse_mode="HTML"
+        initial_msg = i18n.get(
+            "vision.analyzing", user_language, coin_name=coin_name_str
         )
+        thinking_msg = await message.answer(initial_msg, parse_mode="HTML")
 
         # Build response header for updates
-        response_header = initial_msg.split('\n\n')[0] + "\n\n" + market_data_str
+        response_header = initial_msg.split("\n\n")[0] + "\n\n" + market_data_str
 
         # Step 5: Stream analysis with real-time updates
         import time
+
         full_analysis = ""
         last_update_time = time.time()
         last_update_length = 0
 
         STREAM_UPDATE_INTERVAL = 1.5  # Update message every 1.5 seconds
-        MIN_CHARS_FOR_UPDATE = 100    # Or every 100 characters
+        MIN_CHARS_FOR_UPDATE = 100  # Or every 100 characters
 
-        async with ChatActionSender.typing(
-            bot=message.bot,
-            chat_id=message.chat.id
-        ):
+        async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
             async for chunk in openai_service.stream_image_analysis(
                 session=session,
                 user_id=db_user.id,
@@ -187,7 +207,7 @@ async def handle_photo(message: Message, session: AsyncSession, user_language: s
                 user_language=user_language,
                 user_prompt=user_prompt,
                 detail=ModelConfig.VISION_DETAIL_LEVEL,
-                market_data=market_data
+                market_data=market_data,
             ):
                 full_analysis += chunk
 
@@ -195,16 +215,16 @@ async def handle_photo(message: Message, session: AsyncSession, user_language: s
                 current_time = time.time()
                 chars_since_update = len(full_analysis) - last_update_length
 
-                if (current_time - last_update_time >= STREAM_UPDATE_INTERVAL) or \
-                   (chars_since_update >= MIN_CHARS_FOR_UPDATE):
+                if (current_time - last_update_time >= STREAM_UPDATE_INTERVAL) or (
+                    chars_since_update >= MIN_CHARS_FOR_UPDATE
+                ):
                     try:
                         # Build current response
                         current_response = response_header + full_analysis
 
                         # Update message
                         await thinking_msg.edit_text(
-                            current_response,
-                            parse_mode="HTML"
+                            current_response, parse_mode="HTML"
                         )
 
                         last_update_time = current_time
@@ -217,11 +237,16 @@ async def handle_photo(message: Message, session: AsyncSession, user_language: s
         # Final update with complete analysis and stats
         # Note: stats are tracked in stream_image_analysis, we need to calculate them here
         from src.utils.vision_tokens import calculate_image_tokens
-        image_tokens = calculate_image_tokens(image_bytes, ModelConfig.VISION_DETAIL_LEVEL)
+
+        image_tokens = calculate_image_tokens(
+            image_bytes, ModelConfig.VISION_DETAIL_LEVEL
+        )
         prompt_tokens = openai_service.count_tokens(user_prompt or "")
         output_tokens = openai_service.count_tokens(full_analysis)
         total_tokens = image_tokens + prompt_tokens + output_tokens
-        cost = openai_service.calculate_vision_cost(image_tokens + prompt_tokens, output_tokens)
+        cost = openai_service.calculate_vision_cost(
+            image_tokens + prompt_tokens, output_tokens
+        )
 
         final_response = response_header + full_analysis
         final_response += f"\n\n<i>Токены: {total_tokens} (~${cost:.4f})</i>"
@@ -239,19 +264,19 @@ async def handle_photo(message: Message, session: AsyncSession, user_language: s
 
         error_msg = str(e).lower()
         if "invalid" in error_msg or "format" in error_msg:
-            await message.answer(i18n.get('vision.error_invalid_format', user_language))
+            await message.answer(i18n.get("vision.error_invalid_format", user_language))
         elif "size" in error_msg or "large" in error_msg:
-            await message.answer(i18n.get('vision.error_size', user_language))
+            await message.answer(i18n.get("vision.error_size", user_language))
         else:
-            await message.answer(i18n.get('vision.error_processing', user_language))
+            await message.answer(i18n.get("vision.error_processing", user_language))
 
     except Exception as e:
         logger.exception(f"Error analyzing photo for user {telegram_id}: {e}")
-        await message.answer(i18n.get('vision.error_general', user_language))
+        await message.answer(i18n.get("vision.error_general", user_language))
 
 
 @router.message(F.document)
-async def handle_document(message: Message, user_language: str = 'ru'):
+async def handle_document(message: Message, user_language: str = "ru"):
     """
     Handle document messages - inform user to send as photo
 
@@ -262,8 +287,8 @@ async def handle_document(message: Message, user_language: str = 'ru'):
         user_language: User's language (from LanguageMiddleware)
     """
     # Check if document is an image
-    if message.document.mime_type and message.document.mime_type.startswith('image/'):
-        await message.answer(i18n.get('vision.send_as_photo', user_language))
+    if message.document.mime_type and message.document.mime_type.startswith("image/"):
+        await message.answer(i18n.get("vision.send_as_photo", user_language))
     else:
         # Not an image document - ignore or handle differently
         pass

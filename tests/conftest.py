@@ -1,6 +1,7 @@
 """
 Pytest configuration and fixtures for Syntra Trade Consultant tests
 """
+
 import pytest
 import asyncio
 from typing import AsyncGenerator
@@ -53,9 +54,7 @@ async def db_session(test_db_engine) -> AsyncGenerator[AsyncSession, None]:
     Create test database session
     """
     async_session_maker = async_sessionmaker(
-        test_db_engine,
-        class_=AsyncSession,
-        expire_on_commit=False
+        test_db_engine, class_=AsyncSession, expire_on_commit=False
     )
 
     async with async_session_maker() as session:

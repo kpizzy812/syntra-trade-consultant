@@ -25,7 +25,23 @@
 
 **API:** https://api.alternative.me/fng/
 
-### 3. Binance Candlestick Data
+### 3. CryptoPanic News Integration
+**File:** `src/services/cryptopanic_service.py` (UPDATED)
+
+**Provides:**
+- Latest cryptocurrency news (24h delay on Development plan)
+- Aggressive 24-hour caching to respect API limits (100 req/month)
+- News sentiment and sources
+- Filtered by coin or trending market news
+
+**Configuration:**
+- API Token: `CRYPTOPANIC_TOKEN` in `.env`
+- Cache TTL: `CACHE_TTL_CRYPTOPANIC=86400` (24 hours)
+- Plan: Development (100 requests/month)
+
+**Note:** News are **optional** in technical analysis - system continues without them if unavailable.
+
+### 4. Binance Candlestick Data
 **File:** `src/services/binance_service.py` (NEW)
 
 **Provides:**
@@ -38,7 +54,7 @@
 - Bitcoin (BTC), Ethereum (ETH), Solana (SOL), Cardano (ADA)
 - XRP, Dogecoin, Polkadot, Litecoin, Chainlink, and more
 
-### 4. Technical Indicators
+### 5. Technical Indicators
 **File:** `src/services/technical_indicators.py` (NEW)
 
 **Uses:** `ta` library (Technical Analysis Library)
@@ -62,7 +78,7 @@
 - Stochastic: Overbought (>80), Oversold (<20), Neutral
 - ADX: Weak (<20), Moderate (20-40), Strong (>40) trend
 
-### 5. Candlestick Pattern Recognition
+### 6. Candlestick Pattern Recognition
 **File:** `src/services/candlestick_patterns.py` (NEW)
 
 **Detects:**
@@ -87,7 +103,7 @@
 - List of detected patterns
 - Overall signal classification: Bullish, Bearish, or Neutral
 
-### 6. OpenAI Function Calling Integration
+### 7. OpenAI Function Calling Integration
 **File:** `src/services/openai_service.py`
 
 **Updated Method:** `stream_completion()` now supports Function Calling

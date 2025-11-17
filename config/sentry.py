@@ -29,28 +29,24 @@ def init_sentry() -> None:
     try:
         sentry_sdk.init(
             dsn=SENTRY_DSN,
-
             # Environment
             environment=ENVIRONMENT,
-
             # Integrations
             integrations=[
                 AsyncioIntegration(),  # Async support
                 SqlalchemyIntegration(),  # Database queries tracking
                 AioHttpIntegration(),  # HTTP requests tracking
             ],
-
             # Performance Monitoring
-            traces_sample_rate=0.1 if ENVIRONMENT == "production" else 1.0,  # 10% in prod, 100% in dev
-
+            traces_sample_rate=(
+                0.1 if ENVIRONMENT == "production" else 1.0
+            ),  # 10% in prod, 100% in dev
             # Error Sampling
             sample_rate=1.0,  # Capture 100% of errors
-
             # Additional options
             attach_stacktrace=True,  # Include stack traces
             send_default_pii=False,  # Don't send personally identifiable info
             max_breadcrumbs=50,  # Number of breadcrumbs to keep
-
             # Before send hook - filter sensitive data
             before_send=before_send_hook,
         )
@@ -71,21 +67,21 @@ def before_send_hook(event, hint):
     - Add custom context
     """
     # Skip certain errors if needed
-    if 'exc_info' in hint:
-        exc_type, exc_value, tb = hint['exc_info']
+    if "exc_info" in hint:
+        exc_type, exc_value, tb = hint["exc_info"]
 
         # Example: Skip KeyboardInterrupt
         if isinstance(exc_value, KeyboardInterrupt):
             return None
 
     # Remove sensitive data from event
-    if event.get('request'):
+    if event.get("request"):
         # Remove auth headers
-        headers = event['request'].get('headers', {})
-        if 'Authorization' in headers:
-            headers['Authorization'] = '[Filtered]'
-        if 'X-API-Key' in headers:
-            headers['X-API-Key'] = '[Filtered]'
+        headers = event["request"].get("headers", {})
+        if "Authorization" in headers:
+            headers["Authorization"] = "[Filtered]"
+        if "X-API-Key" in headers:
+            headers["X-API-Key"] = "[Filtered]"
 
     return event
 
@@ -98,10 +94,7 @@ def set_user_context(user_id: int, username: str = None):
         user_id: Telegram user ID
         username: Telegram username (optional)
     """
-    sentry_sdk.set_user({
-        "id": str(user_id),
-        "username": username or f"user_{user_id}"
-    })
+    sentry_sdk.set_user({"id": str(user_id), "username": username or f"user_{user_id}"})
 
 
 def capture_exception(error: Exception, **extra_context):
@@ -139,7 +132,9 @@ def capture_message(message: str, level: str = "info", **extra_context):
         sentry_sdk.capture_message(message, level=level)
 
 
-def add_breadcrumb(message: str, category: str = "default", level: str = "info", **data):
+def add_breadcrumb(
+    message: str, category: str = "default", level: str = "info", **data
+):
     """
     Add a breadcrumb (for debugging context)
 
@@ -150,8 +145,5 @@ def add_breadcrumb(message: str, category: str = "default", level: str = "info",
         data: Additional data
     """
     sentry_sdk.add_breadcrumb(
-        message=message,
-        category=category,
-        level=level,
-        data=data
+        message=message, category=category, level=level, data=data
     )

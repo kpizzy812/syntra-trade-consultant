@@ -79,7 +79,7 @@ async def cmd_price(message: Message, command: CommandObject, session: AsyncSess
                 coin_id,
                 include_24h_change=True,
                 include_market_cap=True,
-                include_24h_volume=True
+                include_24h_volume=True,
             )
 
             if not price_data or coin_id not in price_data:
@@ -93,14 +93,18 @@ async def cmd_price(message: Message, command: CommandObject, session: AsyncSess
 
             # Get coin details for better name
             coin_details = await coingecko_service.get_coin_data(coin_id)
-            coin_name = coin_details.get('name', coin_id.title()) if coin_details else coin_id.title()
-            symbol = coin_details.get('symbol', '').upper() if coin_details else ''
+            coin_name = (
+                coin_details.get("name", coin_id.title())
+                if coin_details
+                else coin_id.title()
+            )
+            symbol = coin_details.get("symbol", "").upper() if coin_details else ""
 
             # Format price info
-            price = data.get('usd', 0)
-            change_24h = data.get('usd_24h_change', 0)
-            market_cap = data.get('usd_market_cap', 0)
-            volume_24h = data.get('usd_24h_vol', 0)
+            price = data.get("usd", 0)
+            change_24h = data.get("usd_24h_change", 0)
+            market_cap = data.get("usd_market_cap", 0)
+            volume_24h = data.get("usd_24h_vol", 0)
 
             # Emoji based on price change
             if change_24h > 0:
@@ -138,7 +142,12 @@ async def cmd_price(message: Message, command: CommandObject, session: AsyncSess
 
 
 @router.message(Command("analyze"))
-async def cmd_analyze(message: Message, command: CommandObject, session: AsyncSession, user_language: str = 'ru'):
+async def cmd_analyze(
+    message: Message,
+    command: CommandObject,
+    session: AsyncSession,
+    user_language: str = "ru",
+):
     """
     Deep analysis of cryptocurrency with AI
 
@@ -191,7 +200,7 @@ async def cmd_analyze(message: Message, command: CommandObject, session: AsyncSe
                 coin_id,
                 include_24h_change=True,
                 include_market_cap=True,
-                include_24h_volume=True
+                include_24h_volume=True,
             )
 
             if not price_data or coin_id not in price_data:
@@ -204,18 +213,24 @@ async def cmd_analyze(message: Message, command: CommandObject, session: AsyncSe
 
             # Get coin details
             coin_details = await coingecko_service.get_coin_data(coin_id)
-            coin_name = coin_details.get('name', coin_id.title()) if coin_details else coin_id.title()
-            symbol = coin_details.get('symbol', '').upper() if coin_details else ''
+            coin_name = (
+                coin_details.get("name", coin_id.title())
+                if coin_details
+                else coin_id.title()
+            )
+            symbol = coin_details.get("symbol", "").upper() if coin_details else ""
 
             # Get news
             news_items = await cryptopanic_service.get_news_for_coin(symbol, limit=3)
-            news_text = cryptopanic_service.format_news_for_display(news_items, max_items=3)
+            news_text = cryptopanic_service.format_news_for_display(
+                news_items, max_items=3
+            )
 
             # Prepare data for AI
-            price = data.get('usd', 0)
-            change_24h = data.get('usd_24h_change', 0)
-            market_cap = data.get('usd_market_cap', 0)
-            volume_24h = data.get('usd_24h_vol', 0)
+            price = data.get("usd", 0)
+            change_24h = data.get("usd_24h_change", 0)
+            market_cap = data.get("usd_market_cap", 0)
+            volume_24h = data.get("usd_24h_vol", 0)
 
             # Build prompt for AI analysis using localized template
             analysis_prompt = get_price_analysis_prompt(
@@ -225,7 +240,7 @@ async def cmd_analyze(message: Message, command: CommandObject, session: AsyncSe
                 change_24h=change_24h,
                 market_cap=market_cap,
                 volume_24h=volume_24h,
-                news=news_text
+                news=news_text,
             )
 
         # Stream AI analysis
@@ -241,7 +256,7 @@ async def cmd_analyze(message: Message, command: CommandObject, session: AsyncSe
                 user_id=user_id,
                 user_message=analysis_prompt,
                 user_language=user_language,
-                model=ModelConfig.GPT_4O  # Use GPT-4O for detailed analysis
+                model=ModelConfig.GPT_4O,  # Use GPT-4O for detailed analysis
             ):
                 if chunk:
                     full_response += chunk
@@ -298,11 +313,11 @@ async def cmd_market(message: Message, session: AsyncSession):
             response = "📊 <b>Топ-10 криптовалют по капитализации</b>\n\n"
 
             for i, coin in enumerate(top_coins, 1):
-                name = coin.get('name', 'Unknown')
-                symbol = coin.get('symbol', '').upper()
-                price = coin.get('current_price', 0)
-                change_24h = coin.get('price_change_percentage_24h', 0)
-                market_cap = coin.get('market_cap', 0)
+                name = coin.get("name", "Unknown")
+                symbol = coin.get("symbol", "").upper()
+                price = coin.get("current_price", 0)
+                change_24h = coin.get("price_change_percentage_24h", 0)
+                market_cap = coin.get("market_cap", 0)
 
                 # Emoji based on price change
                 if change_24h > 0:
@@ -357,10 +372,20 @@ async def cmd_news(message: Message, command: CommandObject):
             if coin_id:
                 # Get news for specific coin
                 coin_details = await coingecko_service.get_coin_data(coin_id)
-                symbol = coin_details.get('symbol', coin_id).upper() if coin_details else coin_id.upper()
+                symbol = (
+                    coin_details.get("symbol", coin_id).upper()
+                    if coin_details
+                    else coin_id.upper()
+                )
 
-                news_items = await cryptopanic_service.get_news_for_coin(symbol, limit=5)
-                coin_name = coin_details.get('name', coin_id.title()) if coin_details else coin_id.title()
+                news_items = await cryptopanic_service.get_news_for_coin(
+                    symbol, limit=5
+                )
+                coin_name = (
+                    coin_details.get("name", coin_id.title())
+                    if coin_details
+                    else coin_id.title()
+                )
                 header = f"📰 <b>Новости: {coin_name}</b>\n\n"
             else:
                 # Get trending news
@@ -369,8 +394,7 @@ async def cmd_news(message: Message, command: CommandObject):
 
             if not news_items:
                 await message.answer(
-                    "❌ <b>Не удалось загрузить новости</b>\n\n"
-                    "Попробуйте позже."
+                    "❌ <b>Не удалось загрузить новости</b>\n\n" "Попробуйте позже."
                 )
                 return
 

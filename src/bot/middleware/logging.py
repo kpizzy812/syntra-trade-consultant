@@ -1,6 +1,7 @@
 """
 Logging middleware - logs all incoming updates
 """
+
 from typing import Callable, Dict, Any, Awaitable
 import logging
 import time
@@ -21,7 +22,7 @@ class LoggingMiddleware(BaseMiddleware):
         self,
         handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
-        data: Dict[str, Any]
+        data: Dict[str, Any],
     ) -> Any:
         """
         Log update and measure handler execution time
@@ -43,16 +44,12 @@ class LoggingMiddleware(BaseMiddleware):
             user_id = event.from_user.id if event.from_user else None
             username = event.from_user.username if event.from_user else None
             text = event.text or event.caption or f"[{event.content_type}]"
-            logger.info(
-                f"Message from @{username} (ID: {user_id}): {text[:100]}"
-            )
+            logger.info(f"Message from @{username} (ID: {user_id}): {text[:100]}")
 
         elif isinstance(event, CallbackQuery):
             user_id = event.from_user.id
             username = event.from_user.username
-            logger.info(
-                f"Callback from @{username} (ID: {user_id}): {event.data}"
-            )
+            logger.info(f"Callback from @{username} (ID: {user_id}): {event.data}")
 
         # Measure execution time
         start_time = time.time()

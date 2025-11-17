@@ -2,6 +2,7 @@
 Extended unit tests for CRUD operations
 Tests for chat history, cost tracking, and admin functions
 """
+
 import pytest
 from datetime import datetime
 
@@ -23,17 +24,11 @@ from src.database.crud import (
 async def test_add_chat_message(db_session):
     """Test adding chat messages"""
     # Create user first
-    user = await create_user(
-        session=db_session,
-        telegram_id=123456789
-    )
+    user = await create_user(session=db_session, telegram_id=123456789)
 
     # Add user message
     user_msg = await add_chat_message(
-        session=db_session,
-        user_id=user.id,
-        role="user",
-        content="Hello, bot!"
+        session=db_session, user_id=user.id, role="user", content="Hello, bot!"
     )
 
     assert user_msg.role == "user"
@@ -47,7 +42,7 @@ async def test_add_chat_message(db_session):
         role="assistant",
         content="Hello! How can I help?",
         tokens_used=25,
-        model="gpt-4o-mini"
+        model="gpt-4o-mini",
     )
 
     assert assistant_msg.role == "assistant"
@@ -59,10 +54,7 @@ async def test_add_chat_message(db_session):
 async def test_get_chat_history(db_session):
     """Test retrieving chat history"""
     # Create user
-    user = await create_user(
-        session=db_session,
-        telegram_id=123456789
-    )
+    user = await create_user(session=db_session, telegram_id=123456789)
 
     # Add multiple messages
     await add_chat_message(db_session, user.id, "user", "Message 1")
@@ -127,7 +119,7 @@ async def test_track_cost(db_session):
         model="gpt-4o",
         tokens=1000,
         cost=0.025,
-        request_type="chat"
+        request_type="chat",
     )
 
     assert cost_entry.service == "openai"
@@ -147,7 +139,7 @@ async def test_log_admin_action(db_session):
         action="reset_limits",
         target_user_id=123456789,
         details="Reset daily limits",
-        success=True
+        success=True,
     )
 
     assert log.admin_id == 987654321
@@ -182,7 +174,9 @@ async def test_update_user_subscription(db_session):
     assert user.is_subscribed is False
 
     # Update to subscribed (using telegram_id, not user.id)
-    await update_user_subscription(db_session, telegram_id=123456789, is_subscribed=True)
+    await update_user_subscription(
+        db_session, telegram_id=123456789, is_subscribed=True
+    )
 
     # Verify updated
     updated_user = await get_user_by_telegram_id(db_session, 123456789)
@@ -254,7 +248,9 @@ async def test_cost_tracking_multiple_services(db_session):
 
     # Track different services (tokens must not be None or 0.0 - must be int)
     await track_cost(db_session, user.id, "openai", "gpt-4o", 1000, 0.025)
-    await track_cost(db_session, user.id, "coingecko", "api", 1, 0.0)  # 1 API call = 1 "token"
+    await track_cost(
+        db_session, user.id, "coingecko", "api", 1, 0.0
+    )  # 1 API call = 1 "token"
     await track_cost(db_session, user.id, "openai", "gpt-4o-mini", 500, 0.005)
 
     # All should be tracked (we'd need a get function to verify, but the add should succeed)

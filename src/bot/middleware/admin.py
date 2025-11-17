@@ -1,6 +1,7 @@
 """
 Admin middleware - checks if user has admin rights
 """
+
 from typing import Callable, Dict, Any, Awaitable
 import logging
 
@@ -21,12 +22,17 @@ class AdminMiddleware(BaseMiddleware):
 
     # Admin commands that require admin rights
     ADMIN_COMMANDS = {
-        '/admin', '/admin_stats', '/admin_users', '/admin_costs',
-        '/admin_limits', '/admin_logs', '/admin_broadcast'
+        "/admin",
+        "/admin_stats",
+        "/admin_users",
+        "/admin_costs",
+        "/admin_limits",
+        "/admin_logs",
+        "/admin_broadcast",
     }
 
     # Admin callback prefixes
-    ADMIN_CALLBACK_PREFIXES = {'admin_'}
+    ADMIN_CALLBACK_PREFIXES = {"admin_"}
 
     def is_admin(self, user_id: int) -> bool:
         """
@@ -69,13 +75,15 @@ class AdminMiddleware(BaseMiddleware):
         if not callback_data:
             return False
 
-        return any(callback_data.startswith(prefix) for prefix in self.ADMIN_CALLBACK_PREFIXES)
+        return any(
+            callback_data.startswith(prefix) for prefix in self.ADMIN_CALLBACK_PREFIXES
+        )
 
     async def __call__(
         self,
         handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
-        data: Dict[str, Any]
+        data: Dict[str, Any],
     ) -> Any:
         """
         Check admin rights before calling handler
@@ -107,7 +115,7 @@ class AdminMiddleware(BaseMiddleware):
         if not is_admin_action:
             # Still add is_admin flag to data
             if user:
-                data['is_admin'] = self.is_admin(user.id)
+                data["is_admin"] = self.is_admin(user.id)
             return await handler(event, data)
 
         # Admin action - check rights
@@ -116,7 +124,7 @@ class AdminMiddleware(BaseMiddleware):
             return None
 
         user_is_admin = self.is_admin(user.id)
-        data['is_admin'] = user_is_admin
+        data["is_admin"] = user_is_admin
 
         if not user_is_admin:
             # User is not admin - block access
@@ -133,14 +141,11 @@ class AdminMiddleware(BaseMiddleware):
                 )
             elif isinstance(event, CallbackQuery):
                 await event.answer(
-                    "⛔ Доступ запрещен. Только для администраторов.",
-                    show_alert=True
+                    "⛔ Доступ запрещен. Только для администраторов.", show_alert=True
                 )
 
             return None
 
         # User is admin - allow access
-        logger.info(
-            f"Admin {user.id} (@{user.username}) accessing admin feature"
-        )
+        logger.info(f"Admin {user.id} (@{user.username}) accessing admin feature")
         return await handler(event, data)

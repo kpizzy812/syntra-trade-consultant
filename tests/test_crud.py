@@ -1,6 +1,7 @@
 """
 Unit tests for CRUD operations
 """
+
 import pytest
 from datetime import datetime
 
@@ -22,7 +23,7 @@ async def test_create_user(db_session):
         telegram_id=123456789,
         username="test_user",
         first_name="Test",
-        last_name="User"
+        last_name="User",
     )
 
     assert user.telegram_id == 123456789
@@ -30,7 +31,7 @@ async def test_create_user(db_session):
     assert user.first_name == "Test"
     assert user.last_name == "User"
     assert not user.is_admin
-    assert user.language == 'ru'  # default
+    assert user.language == "ru"  # default
 
 
 @pytest.mark.asyncio
@@ -38,9 +39,7 @@ async def test_get_user_by_telegram_id(db_session):
     """Test getting user by Telegram ID"""
     # Create user first
     created_user = await create_user(
-        session=db_session,
-        telegram_id=123456789,
-        username="test_user"
+        session=db_session, telegram_id=123456789, username="test_user"
     )
 
     # Get user
@@ -60,9 +59,7 @@ async def test_get_or_create_user(db_session):
     """Test get_or_create_user function"""
     # Create new user
     user1, created1 = await get_or_create_user(
-        session=db_session,
-        telegram_id=123456789,
-        username="new_user"
+        session=db_session, telegram_id=123456789, username="new_user"
     )
 
     assert created1 is True
@@ -70,9 +67,7 @@ async def test_get_or_create_user(db_session):
 
     # Get existing user
     user2, created2 = await get_or_create_user(
-        session=db_session,
-        telegram_id=123456789,
-        username="new_user"
+        session=db_session, telegram_id=123456789, username="new_user"
     )
 
     assert created2 is False
@@ -83,10 +78,7 @@ async def test_get_or_create_user(db_session):
 async def test_request_limits(db_session):
     """Test request limit operations"""
     # Create user
-    user = await create_user(
-        session=db_session,
-        telegram_id=123456789
-    )
+    user = await create_user(session=db_session, telegram_id=123456789)
 
     # Check initial limits
     has_remaining, count, limit = await check_request_limit(db_session, user.id)

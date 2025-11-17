@@ -15,7 +15,7 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
     retry_if_exception_type,
-    before_sleep_log
+    before_sleep_log,
 )
 
 
@@ -38,40 +38,40 @@ class BinanceService:
 
     # Common trading pairs on Binance
     COMMON_SYMBOLS = {
-        'bitcoin': 'BTCUSDT',
-        'ethereum': 'ETHUSDT',
-        'binancecoin': 'BNBUSDT',
-        'cardano': 'ADAUSDT',
-        'solana': 'SOLUSDT',
-        'ripple': 'XRPUSDT',
-        'polkadot': 'DOTUSDT',
-        'dogecoin': 'DOGEUSDT',
-        'avalanche': 'AVAXUSDT',
-        'polygon': 'MATICUSDT',
-        'chainlink': 'LINKUSDT',
-        'litecoin': 'LTCUSDT',
-        'uniswap': 'UNIUSDT',
-        'stellar': 'XLMUSDT',
-        'algorand': 'ALGOUSDT',
+        "bitcoin": "BTCUSDT",
+        "ethereum": "ETHUSDT",
+        "binancecoin": "BNBUSDT",
+        "cardano": "ADAUSDT",
+        "solana": "SOLUSDT",
+        "ripple": "XRPUSDT",
+        "polkadot": "DOTUSDT",
+        "dogecoin": "DOGEUSDT",
+        "avalanche": "AVAXUSDT",
+        "polygon": "MATICUSDT",
+        "chainlink": "LINKUSDT",
+        "litecoin": "LTCUSDT",
+        "uniswap": "UNIUSDT",
+        "stellar": "XLMUSDT",
+        "algorand": "ALGOUSDT",
     }
 
     # Timeframe intervals
     INTERVALS = {
-        '1m': '1m',
-        '3m': '3m',
-        '5m': '5m',
-        '15m': '15m',
-        '30m': '30m',
-        '1h': '1h',
-        '2h': '2h',
-        '4h': '4h',
-        '6h': '6h',
-        '8h': '8h',
-        '12h': '12h',
-        '1d': '1d',
-        '3d': '3d',
-        '1w': '1w',
-        '1M': '1M',
+        "1m": "1m",
+        "3m": "3m",
+        "5m": "5m",
+        "15m": "15m",
+        "30m": "30m",
+        "1h": "1h",
+        "2h": "2h",
+        "4h": "4h",
+        "6h": "6h",
+        "8h": "8h",
+        "12h": "12h",
+        "1d": "1d",
+        "3d": "3d",
+        "1w": "1w",
+        "1M": "1M",
     }
 
     def __init__(self):
@@ -101,13 +101,10 @@ class BinanceService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True
+        reraise=True,
     )
     async def get_klines(
-        self,
-        symbol: str,
-        interval: str = '1h',
-        limit: int = 100
+        self, symbol: str, interval: str = "1h", limit: int = 100
     ) -> Optional[pd.DataFrame]:
         """
         Get candlestick (klines) data from Binance with automatic retries
@@ -138,20 +135,20 @@ class BinanceService:
         try:
             # Validate interval
             if interval not in self.INTERVALS:
-                logger.error(f"Invalid interval: {interval}. Use: {list(self.INTERVALS.keys())}")
+                logger.error(
+                    f"Invalid interval: {interval}. Use: {list(self.INTERVALS.keys())}"
+                )
                 return None
 
             # Limit max klines
             limit = min(max(1, limit), 1000)
 
-            params = {
-                'symbol': symbol,
-                'interval': interval,
-                'limit': limit
-            }
+            params = {"symbol": symbol, "interval": interval, "limit": limit}
 
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.BASE_URL}/klines", params=params) as response:
+                async with session.get(
+                    f"{self.BASE_URL}/klines", params=params
+                ) as response:
                     if response.status == 200:
                         data = await response.json()
 
@@ -160,25 +157,47 @@ class BinanceService:
                             return None
 
                         # Convert to DataFrame
-                        df = pd.DataFrame(data, columns=[
-                            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                            'close_time', 'quote_volume', 'trades',
-                            'taker_buy_base', 'taker_buy_quote', 'ignore'
-                        ])
+                        df = pd.DataFrame(
+                            data,
+                            columns=[
+                                "timestamp",
+                                "open",
+                                "high",
+                                "low",
+                                "close",
+                                "volume",
+                                "close_time",
+                                "quote_volume",
+                                "trades",
+                                "taker_buy_base",
+                                "taker_buy_quote",
+                                "ignore",
+                            ],
+                        )
 
                         # Convert types
-                        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                        df['close_time'] = pd.to_datetime(df['close_time'], unit='ms')
+                        df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+                        df["close_time"] = pd.to_datetime(df["close_time"], unit="ms")
 
-                        numeric_cols = ['open', 'high', 'low', 'close', 'volume',
-                                        'quote_volume', 'taker_buy_base', 'taker_buy_quote']
+                        numeric_cols = [
+                            "open",
+                            "high",
+                            "low",
+                            "close",
+                            "volume",
+                            "quote_volume",
+                            "taker_buy_base",
+                            "taker_buy_quote",
+                        ]
                         df[numeric_cols] = df[numeric_cols].astype(float)
-                        df['trades'] = df['trades'].astype(int)
+                        df["trades"] = df["trades"].astype(int)
 
                         # Drop ignore column
-                        df = df.drop('ignore', axis=1)
+                        df = df.drop("ignore", axis=1)
 
-                        logger.info(f"Fetched {len(df)} klines for {symbol} ({interval})")
+                        logger.info(
+                            f"Fetched {len(df)} klines for {symbol} ({interval})"
+                        )
                         return df
 
                     elif response.status == 400:
@@ -195,10 +214,7 @@ class BinanceService:
             return None
 
     async def get_klines_by_coin_id(
-        self,
-        coin_id: str,
-        interval: str = '1h',
-        limit: int = 100
+        self, coin_id: str, interval: str = "1h", limit: int = 100
     ) -> Optional[pd.DataFrame]:
         """
         Get klines data using CoinGecko coin ID
@@ -223,7 +239,7 @@ class BinanceService:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         before_sleep=before_sleep_log(logger, logging.WARNING),
-        reraise=True
+        reraise=True,
     )
     async def check_symbol_exists(self, symbol: str) -> bool:
         """
@@ -237,7 +253,9 @@ class BinanceService:
         """
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.BASE_URL}/ticker/price?symbol={symbol}") as response:
+                async with session.get(
+                    f"{self.BASE_URL}/ticker/price?symbol={symbol}"
+                ) as response:
                     return response.status == 200
 
         except Exception as e:
@@ -256,10 +274,12 @@ class BinanceService:
         """
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(f"{self.BASE_URL}/ticker/price?symbol={symbol}") as response:
+                async with session.get(
+                    f"{self.BASE_URL}/ticker/price?symbol={symbol}"
+                ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        return float(data.get('price', 0))
+                        return float(data.get("price", 0))
                     return None
 
         except Exception as e:

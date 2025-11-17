@@ -18,7 +18,7 @@ def setup_logging() -> None:
     logger.remove()
 
     # Create logs directory
-    logs_dir = Path(__file__).parent.parent / 'logs'
+    logs_dir = Path(__file__).parent.parent / "logs"
     logs_dir.mkdir(exist_ok=True)
 
     # Console output with colors and formatting
@@ -66,13 +66,16 @@ def setup_logging() -> None:
 
     # Suppress noisy third-party loggers
     import logging
-    logging.getLogger('aiohttp').setLevel(logging.WARNING)
-    logging.getLogger('aiogram').setLevel(logging.WARNING)
-    logging.getLogger('sqlalchemy.engine').setLevel(logging.ERROR)  # Only errors
-    logging.getLogger('asyncio').setLevel(logging.WARNING)
+
+    logging.getLogger("aiohttp").setLevel(logging.WARNING)
+    logging.getLogger("aiogram").setLevel(logging.WARNING)
+    logging.getLogger("sqlalchemy.engine").setLevel(logging.ERROR)  # Only errors
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
 
     # Startup message
-    logger.info(f"Syntra Bot initialized | Environment: {ENVIRONMENT} | Log level: {LOG_LEVEL}")
+    logger.info(
+        f"Syntra Bot initialized | Environment: {ENVIRONMENT} | Log level: {LOG_LEVEL}"
+    )
 
 
 def sentry_sink(message):
@@ -91,7 +94,7 @@ def sentry_sink(message):
                 "function": record["function"],
                 "file": record["file"].path,
                 "line": record["line"],
-            }
+            },
         )
     elif level == "CRITICAL":
         sentry_sdk.capture_message(
@@ -101,7 +104,7 @@ def sentry_sink(message):
                 "function": record["function"],
                 "file": record["file"].path,
                 "line": record["line"],
-            }
+            },
         )
 
     # If there's an exception, send it to Sentry

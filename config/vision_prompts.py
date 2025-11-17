@@ -11,13 +11,14 @@ COIN_DETECTION_PROMPT = """
 Если не можешь определить - верни "Unknown".
 """
 
+
 # Enhanced analysis prompt with market data
 def get_enhanced_analysis_prompt(
     coin_name: str,
     current_price: float,
     change_24h: float,
     volume_24h: float = None,
-    market_cap: float = None
+    market_cap: float = None,
 ) -> str:
     """
     Get prompt for comprehensive analysis with market data
@@ -67,6 +68,7 @@ def get_enhanced_analysis_prompt(
 """
     return prompt
 
+
 # Basic analysis prompt without market data
 BASIC_ANALYSIS_PROMPT = """
 Проанализируй этот график криптовалюты:
@@ -84,12 +86,13 @@ BASIC_ANALYSIS_PROMPT = """
 Максимум 250 слов.
 """
 
+
 # Prompt for user question + chart analysis
 def get_question_analysis_prompt(
     user_question: str,
     coin_name: str = None,
     current_price: float = None,
-    change_24h: float = None
+    change_24h: float = None,
 ) -> str:
     """
     Get prompt for answering user question about chart

@@ -11,7 +11,8 @@ Tests the complete flow:
 """
 import asyncio
 import sys
-sys.path.insert(0, '.')
+
+sys.path.insert(0, ".")
 
 from src.services.openai_service import OpenAIService
 from src.database.database import async_session
@@ -21,9 +22,7 @@ from sqlalchemy import select
 
 async def get_or_create_test_user(session):
     """Get or create test user"""
-    result = await session.execute(
-        select(User).where(User.telegram_id == 999999999)
-    )
+    result = await session.execute(select(User).where(User.telegram_id == 999999999))
     user = result.scalar_one_or_none()
 
     if not user:
@@ -31,7 +30,7 @@ async def get_or_create_test_user(session):
             telegram_id=999999999,
             username="test_user",
             first_name="Test",
-            language="ru"
+            language="ru",
         )
         session.add(user)
         await session.commit()
@@ -52,16 +51,16 @@ async def test_function_calling():
     test_queries = [
         {
             "query": "Проанализируй Bitcoin, дай полный технический анализ",
-            "description": "Should trigger get_technical_analysis tool"
+            "description": "Should trigger get_technical_analysis tool",
         },
         {
             "query": "Сравни Bitcoin и Ethereum",
-            "description": "Should trigger compare_cryptos tool"
+            "description": "Should trigger compare_cryptos tool",
         },
         {
             "query": "Какая цена у Solana?",
-            "description": "Should trigger get_crypto_price tool"
-        }
+            "description": "Should trigger get_crypto_price tool",
+        },
     ]
 
     async with async_session() as session:
@@ -83,12 +82,12 @@ async def test_function_calling():
                 async for chunk in openai_service.stream_completion(
                     session=session,
                     user_id=user.id,
-                    user_message=test['query'],
-                    user_language='ru',
-                    use_tools=True
+                    user_message=test["query"],
+                    user_language="ru",
+                    use_tools=True,
                 ):
                     if chunk:
-                        print(chunk, end='', flush=True)
+                        print(chunk, end="", flush=True)
                         full_response += chunk
 
                 print("\n")
@@ -102,6 +101,7 @@ async def test_function_calling():
             except Exception as e:
                 print(f"\n❌ Test {i} failed with error: {e}\n")
                 import traceback
+
                 traceback.print_exc()
 
             # Wait between tests
@@ -126,7 +126,9 @@ async def test_tool_execution_directly():
     # Test 1: get_technical_analysis
     print("Test 1: get_technical_analysis for Bitcoin")
     print("-" * 70)
-    result = await execute_tool("get_technical_analysis", {"coin_id": "bitcoin", "timeframe": "4h"})
+    result = await execute_tool(
+        "get_technical_analysis", {"coin_id": "bitcoin", "timeframe": "4h"}
+    )
     parsed = json.loads(result)
 
     if parsed.get("success"):
@@ -143,7 +145,9 @@ async def test_tool_execution_directly():
 
         if parsed.get("fear_greed"):
             fg = parsed["fear_greed"]
-            print(f"\n  😱 Fear & Greed: {fg.get('value')}/100 ({fg.get('value_classification')})")
+            print(
+                f"\n  😱 Fear & Greed: {fg.get('value')}/100 ({fg.get('value_classification')})"
+            )
 
         if parsed.get("technical_indicators"):
             ind = parsed["technical_indicators"]
@@ -153,7 +157,9 @@ async def test_tool_execution_directly():
             if ind.get("macd"):
                 print(f"    MACD: {ind.get('macd_crossover')}")
 
-        if parsed.get("candlestick_patterns") and parsed["candlestick_patterns"].get("patterns_found"):
+        if parsed.get("candlestick_patterns") and parsed["candlestick_patterns"].get(
+            "patterns_found"
+        ):
             patterns = parsed["candlestick_patterns"]
             print(f"\n  🕯️ Patterns: {', '.join(patterns['patterns_found'])}")
     else:
@@ -164,7 +170,7 @@ async def test_tool_execution_directly():
     print("=" * 70)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     print("\n🚀 Starting OpenAI Function Calling Tests\n")
 
     # First test tools directly

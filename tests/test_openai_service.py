@@ -1,6 +1,7 @@
 """
 Unit tests for OpenAI service
 """
+
 import pytest
 from unittest.mock import Mock, AsyncMock, patch
 
@@ -11,7 +12,7 @@ from config.config import ModelConfig
 @pytest.fixture
 def openai_service():
     """Create OpenAI service instance for testing"""
-    with patch('src.services.openai_service.AsyncOpenAI'):
+    with patch("src.services.openai_service.AsyncOpenAI"):
         service = OpenAIService()
         return service
 
@@ -96,8 +97,8 @@ def test_select_model_russian_keywords(openai_service):
     # Messages with explicit complex keywords that should trigger GPT-4O
     test_cases = [
         "Дай глубокий анализ рынка",  # 'глубокий' keyword
-        "Сделай подробный анализ",     # 'анализ' keyword
-        "Какая стратегия лучше?",      # 'стратегия' keyword
+        "Сделай подробный анализ",  # 'анализ' keyword
+        "Какая стратегия лучше?",  # 'стратегия' keyword
     ]
 
     for message in test_cases:

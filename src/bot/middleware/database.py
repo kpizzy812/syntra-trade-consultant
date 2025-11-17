@@ -1,6 +1,7 @@
 """
 Database middleware - provides database session to handlers
 """
+
 from typing import Callable, Dict, Any, Awaitable
 import logging
 
@@ -27,7 +28,7 @@ class DatabaseMiddleware(BaseMiddleware):
         self,
         handler: Callable[[TelegramObject, Dict[str, Any]], Awaitable[Any]],
         event: TelegramObject,
-        data: Dict[str, Any]
+        data: Dict[str, Any],
     ) -> Any:
         """
         Create database session and pass it to handler
@@ -44,7 +45,7 @@ class DatabaseMiddleware(BaseMiddleware):
         session_maker = get_session_maker()
         async with session_maker() as session:
             # Add session to handler data
-            data['session'] = session
+            data["session"] = session
 
             try:
                 # Call next handler

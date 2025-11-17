@@ -54,7 +54,9 @@ class CandlestickPatterns:
         """
         try:
             if df is None or len(df) < 3:
-                logger.warning("Insufficient data for pattern detection (need at least 3 candles)")
+                logger.warning(
+                    "Insufficient data for pattern detection (need at least 3 candles)"
+                )
                 return {}
 
             patterns = {}
@@ -69,62 +71,62 @@ class CandlestickPatterns:
 
             # Doji
             if self._is_doji(last):
-                patterns['doji'] = True
-                patterns_found.append('doji')
+                patterns["doji"] = True
+                patterns_found.append("doji")
 
             # Hammer
             if self._is_hammer(last):
-                patterns['hammer'] = True
-                patterns_found.append('hammer')
+                patterns["hammer"] = True
+                patterns_found.append("hammer")
 
             # Inverted Hammer
             if self._is_inverted_hammer(last):
-                patterns['inverted_hammer'] = True
-                patterns_found.append('inverted_hammer')
+                patterns["inverted_hammer"] = True
+                patterns_found.append("inverted_hammer")
 
             # Shooting Star
             if self._is_shooting_star(last):
-                patterns['shooting_star'] = True
-                patterns_found.append('shooting_star')
+                patterns["shooting_star"] = True
+                patterns_found.append("shooting_star")
 
             # === Two Candle Patterns ===
             if prev is not None:
                 # Bullish Engulfing
                 if self._is_bullish_engulfing(prev, last):
-                    patterns['engulfing_bullish'] = True
-                    patterns_found.append('engulfing_bullish')
+                    patterns["engulfing_bullish"] = True
+                    patterns_found.append("engulfing_bullish")
 
                 # Bearish Engulfing
                 if self._is_bearish_engulfing(prev, last):
-                    patterns['engulfing_bearish'] = True
-                    patterns_found.append('engulfing_bearish')
+                    patterns["engulfing_bearish"] = True
+                    patterns_found.append("engulfing_bearish")
 
             # === Three Candle Patterns ===
             if prev is not None and prev2 is not None:
                 # Morning Star
                 if self._is_morning_star(prev2, prev, last):
-                    patterns['morning_star'] = True
-                    patterns_found.append('morning_star')
+                    patterns["morning_star"] = True
+                    patterns_found.append("morning_star")
 
                 # Evening Star
                 if self._is_evening_star(prev2, prev, last):
-                    patterns['evening_star'] = True
-                    patterns_found.append('evening_star')
+                    patterns["evening_star"] = True
+                    patterns_found.append("evening_star")
 
                 # Three White Soldiers
                 if self._is_three_white_soldiers(prev2, prev, last):
-                    patterns['three_white_soldiers'] = True
-                    patterns_found.append('three_white_soldiers')
+                    patterns["three_white_soldiers"] = True
+                    patterns_found.append("three_white_soldiers")
 
                 # Three Black Crows
                 if self._is_three_black_crows(prev2, prev, last):
-                    patterns['three_black_crows'] = True
-                    patterns_found.append('three_black_crows')
+                    patterns["three_black_crows"] = True
+                    patterns_found.append("three_black_crows")
 
             # Summary
-            patterns['patterns_found'] = patterns_found
-            patterns['last_pattern'] = patterns_found[-1] if patterns_found else None
-            patterns['pattern_signal'] = self._classify_pattern_signal(patterns_found)
+            patterns["patterns_found"] = patterns_found
+            patterns["last_pattern"] = patterns_found[-1] if patterns_found else None
+            patterns["pattern_signal"] = self._classify_pattern_signal(patterns_found)
 
             if patterns_found:
                 logger.info(f"Detected patterns: {patterns_found}")
@@ -143,8 +145,8 @@ class CandlestickPatterns:
         Doji: Open ≈ Close (small body, long shadows)
         Indicates indecision
         """
-        body = abs(candle['close'] - candle['open'])
-        range_size = candle['high'] - candle['low']
+        body = abs(candle["close"] - candle["open"])
+        range_size = candle["high"] - candle["low"]
         return body / range_size < 0.1 if range_size > 0 else False
 
     @staticmethod
@@ -153,10 +155,10 @@ class CandlestickPatterns:
         Hammer: Small body at top, long lower shadow
         Bullish reversal signal
         """
-        body = abs(candle['close'] - candle['open'])
-        upper_shadow = candle['high'] - max(candle['open'], candle['close'])
-        lower_shadow = min(candle['open'], candle['close']) - candle['low']
-        range_size = candle['high'] - candle['low']
+        body = abs(candle["close"] - candle["open"])
+        upper_shadow = candle["high"] - max(candle["open"], candle["close"])
+        lower_shadow = min(candle["open"], candle["close"]) - candle["low"]
+        range_size = candle["high"] - candle["low"]
 
         if range_size == 0:
             return False
@@ -164,9 +166,9 @@ class CandlestickPatterns:
         # Lower shadow should be at least 2x the body
         # Upper shadow should be very small
         return (
-            lower_shadow > body * 2 and
-            upper_shadow < body * 0.1 and
-            body / range_size < 0.3
+            lower_shadow > body * 2
+            and upper_shadow < body * 0.1
+            and body / range_size < 0.3
         )
 
     @staticmethod
@@ -175,10 +177,10 @@ class CandlestickPatterns:
         Inverted Hammer: Small body at bottom, long upper shadow
         Bullish reversal signal
         """
-        body = abs(candle['close'] - candle['open'])
-        upper_shadow = candle['high'] - max(candle['open'], candle['close'])
-        lower_shadow = min(candle['open'], candle['close']) - candle['low']
-        range_size = candle['high'] - candle['low']
+        body = abs(candle["close"] - candle["open"])
+        upper_shadow = candle["high"] - max(candle["open"], candle["close"])
+        lower_shadow = min(candle["open"], candle["close"]) - candle["low"]
+        range_size = candle["high"] - candle["low"]
 
         if range_size == 0:
             return False
@@ -186,9 +188,9 @@ class CandlestickPatterns:
         # Upper shadow should be at least 2x the body
         # Lower shadow should be very small
         return (
-            upper_shadow > body * 2 and
-            lower_shadow < body * 0.1 and
-            body / range_size < 0.3
+            upper_shadow > body * 2
+            and lower_shadow < body * 0.1
+            and body / range_size < 0.3
         )
 
     @staticmethod
@@ -197,18 +199,18 @@ class CandlestickPatterns:
         Shooting Star: Small body at bottom, long upper shadow
         Bearish reversal signal (similar to inverted hammer but in uptrend)
         """
-        body = abs(candle['close'] - candle['open'])
-        upper_shadow = candle['high'] - max(candle['open'], candle['close'])
-        lower_shadow = min(candle['open'], candle['close']) - candle['low']
-        range_size = candle['high'] - candle['low']
+        body = abs(candle["close"] - candle["open"])
+        upper_shadow = candle["high"] - max(candle["open"], candle["close"])
+        lower_shadow = min(candle["open"], candle["close"]) - candle["low"]
+        range_size = candle["high"] - candle["low"]
 
         if range_size == 0:
             return False
 
         return (
-            upper_shadow > body * 2 and
-            lower_shadow < body * 0.1 and
-            candle['close'] < candle['open']  # Bearish candle
+            upper_shadow > body * 2
+            and lower_shadow < body * 0.1
+            and candle["close"] < candle["open"]  # Bearish candle
         )
 
     @staticmethod
@@ -216,13 +218,10 @@ class CandlestickPatterns:
         """
         Bullish Engulfing: Current bullish candle completely engulfs previous bearish candle
         """
-        prev_bearish = prev['close'] < prev['open']
-        current_bullish = current['close'] > current['open']
+        prev_bearish = prev["close"] < prev["open"]
+        current_bullish = current["close"] > current["open"]
 
-        engulfs = (
-            current['open'] <= prev['close'] and
-            current['close'] >= prev['open']
-        )
+        engulfs = current["open"] <= prev["close"] and current["close"] >= prev["open"]
 
         return prev_bearish and current_bullish and engulfs
 
@@ -231,13 +230,10 @@ class CandlestickPatterns:
         """
         Bearish Engulfing: Current bearish candle completely engulfs previous bullish candle
         """
-        prev_bullish = prev['close'] > prev['open']
-        current_bearish = current['close'] < current['open']
+        prev_bullish = prev["close"] > prev["open"]
+        current_bearish = current["close"] < current["open"]
 
-        engulfs = (
-            current['open'] >= prev['close'] and
-            current['close'] <= prev['open']
-        )
+        engulfs = current["open"] >= prev["close"] and current["close"] <= prev["open"]
 
         return prev_bullish and current_bearish and engulfs
 
@@ -247,12 +243,15 @@ class CandlestickPatterns:
         Morning Star: Bearish candle → Small candle (doji) → Bullish candle
         Bullish reversal signal
         """
-        first_bearish = first['close'] < first['open']
-        second_small = abs(second['close'] - second['open']) < abs(first['close'] - first['open']) * 0.3
-        third_bullish = third['close'] > third['open']
+        first_bearish = first["close"] < first["open"]
+        second_small = (
+            abs(second["close"] - second["open"])
+            < abs(first["close"] - first["open"]) * 0.3
+        )
+        third_bullish = third["close"] > third["open"]
 
         # Third candle should close above midpoint of first
-        third_closes_high = third['close'] > (first['open'] + first['close']) / 2
+        third_closes_high = third["close"] > (first["open"] + first["close"]) / 2
 
         return first_bearish and second_small and third_bullish and third_closes_high
 
@@ -262,49 +261,54 @@ class CandlestickPatterns:
         Evening Star: Bullish candle → Small candle (doji) → Bearish candle
         Bearish reversal signal
         """
-        first_bullish = first['close'] > first['open']
-        second_small = abs(second['close'] - second['open']) < abs(first['close'] - first['open']) * 0.3
-        third_bearish = third['close'] < third['open']
+        first_bullish = first["close"] > first["open"]
+        second_small = (
+            abs(second["close"] - second["open"])
+            < abs(first["close"] - first["open"]) * 0.3
+        )
+        third_bearish = third["close"] < third["open"]
 
         # Third candle should close below midpoint of first
-        third_closes_low = third['close'] < (first['open'] + first['close']) / 2
+        third_closes_low = third["close"] < (first["open"] + first["close"]) / 2
 
         return first_bullish and second_small and third_bearish and third_closes_low
 
     @staticmethod
-    def _is_three_white_soldiers(first: pd.Series, second: pd.Series, third: pd.Series) -> bool:
+    def _is_three_white_soldiers(
+        first: pd.Series, second: pd.Series, third: pd.Series
+    ) -> bool:
         """
         Three White Soldiers: Three consecutive bullish candles with higher closes
         Strong bullish continuation signal
         """
         all_bullish = (
-            first['close'] > first['open'] and
-            second['close'] > second['open'] and
-            third['close'] > third['open']
+            first["close"] > first["open"]
+            and second["close"] > second["open"]
+            and third["close"] > third["open"]
         )
 
         consecutive_higher = (
-            second['close'] > first['close'] and
-            third['close'] > second['close']
+            second["close"] > first["close"] and third["close"] > second["close"]
         )
 
         return all_bullish and consecutive_higher
 
     @staticmethod
-    def _is_three_black_crows(first: pd.Series, second: pd.Series, third: pd.Series) -> bool:
+    def _is_three_black_crows(
+        first: pd.Series, second: pd.Series, third: pd.Series
+    ) -> bool:
         """
         Three Black Crows: Three consecutive bearish candles with lower closes
         Strong bearish continuation signal
         """
         all_bearish = (
-            first['close'] < first['open'] and
-            second['close'] < second['open'] and
-            third['close'] < third['open']
+            first["close"] < first["open"]
+            and second["close"] < second["open"]
+            and third["close"] < third["open"]
         )
 
         consecutive_lower = (
-            second['close'] < first['close'] and
-            third['close'] < second['close']
+            second["close"] < first["close"] and third["close"] < second["close"]
         )
 
         return all_bearish and consecutive_lower
@@ -315,12 +319,17 @@ class CandlestickPatterns:
         Classify overall pattern signal as bullish, bearish, or neutral
         """
         bullish_patterns = [
-            'hammer', 'inverted_hammer', 'engulfing_bullish',
-            'morning_star', 'three_white_soldiers'
+            "hammer",
+            "inverted_hammer",
+            "engulfing_bullish",
+            "morning_star",
+            "three_white_soldiers",
         ]
         bearish_patterns = [
-            'shooting_star', 'engulfing_bearish',
-            'evening_star', 'three_black_crows'
+            "shooting_star",
+            "engulfing_bearish",
+            "evening_star",
+            "three_black_crows",
         ]
 
         bullish_count = sum(1 for p in patterns if p in bullish_patterns)
@@ -343,33 +352,29 @@ class CandlestickPatterns:
         Returns:
             Formatted string with detected patterns
         """
-        if not patterns or not patterns.get('patterns_found'):
+        if not patterns or not patterns.get("patterns_found"):
             return "Свечные паттерны не обнаружены."
 
-        patterns_found = patterns.get('patterns_found', [])
-        signal = patterns.get('pattern_signal', 'neutral')
+        patterns_found = patterns.get("patterns_found", [])
+        signal = patterns.get("pattern_signal", "neutral")
 
         # Pattern names in Russian
         pattern_names = {
-            'doji': 'Doji (нерешительность)',
-            'hammer': 'Hammer (бычий разворот)',
-            'inverted_hammer': 'Inverted Hammer (бычий разворот)',
-            'shooting_star': 'Shooting Star (медвежий разворот)',
-            'engulfing_bullish': 'Bullish Engulfing (бычье поглощение)',
-            'engulfing_bearish': 'Bearish Engulfing (медвежье поглощение)',
-            'morning_star': 'Morning Star (утренняя звезда)',
-            'evening_star': 'Evening Star (вечерняя звезда)',
-            'three_white_soldiers': 'Three White Soldiers (три белых солдата)',
-            'three_black_crows': 'Three Black Crows (три черных вороны)',
+            "doji": "Doji (нерешительность)",
+            "hammer": "Hammer (бычий разворот)",
+            "inverted_hammer": "Inverted Hammer (бычий разворот)",
+            "shooting_star": "Shooting Star (медвежий разворот)",
+            "engulfing_bullish": "Bullish Engulfing (бычье поглощение)",
+            "engulfing_bearish": "Bearish Engulfing (медвежье поглощение)",
+            "morning_star": "Morning Star (утренняя звезда)",
+            "evening_star": "Evening Star (вечерняя звезда)",
+            "three_white_soldiers": "Three White Soldiers (три белых солдата)",
+            "three_black_crows": "Three Black Crows (три черных вороны)",
         }
 
         formatted_patterns = [pattern_names.get(p, p) for p in patterns_found]
 
-        signal_emoji = {
-            'bullish': '🟢',
-            'bearish': '🔴',
-            'neutral': '⚪'
-        }
+        signal_emoji = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}
 
         return (
             f"{signal_emoji.get(signal, '⚪')} Обнаруженные паттерны: {', '.join(formatted_patterns)}\n"

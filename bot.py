@@ -1,6 +1,7 @@
 """
 Syntra Trade Consultant - Main Bot Entry Point
 """
+
 import asyncio
 import logging
 import sys
@@ -24,7 +25,10 @@ from src.bot.middleware.request_limit import RequestLimitMiddleware
 from src.bot.middleware.logging import LoggingMiddleware
 from src.bot.middleware.admin import AdminMiddleware
 from src.bot.middleware.language import LanguageMiddleware
-from src.services.retention_service import start_retention_service, stop_retention_service
+from src.services.retention_service import (
+    start_retention_service,
+    stop_retention_service,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -95,7 +99,9 @@ async def main() -> None:
     setup_logging()
 
     # Suppress aiogram ChatActionSender warning
-    warnings.filterwarnings("ignore", message="coroutine 'Event.wait' was never awaited")
+    warnings.filterwarnings(
+        "ignore", message="coroutine 'Event.wait' was never awaited"
+    )
 
     # Initialize Sentry error monitoring
     init_sentry()
@@ -111,9 +117,8 @@ async def main() -> None:
     bot = Bot(
         token=BOT_TOKEN,
         default=DefaultBotProperties(
-            parse_mode=ParseMode.HTML,
-            link_preview_is_disabled=True
-        )
+            parse_mode=ParseMode.HTML, link_preview_is_disabled=True
+        ),
     )
 
     # Create dispatcher with FSM storage
@@ -149,7 +154,9 @@ async def main() -> None:
     dp.include_router(admin.router)  # Admin panel (before help to catch admin commands)
     dp.include_router(help_cmd.router)
     dp.include_router(limits.router)  # Limits command (/limits)
-    dp.include_router(crypto.router)  # Crypto commands (/price, /analyze, /market, /news)
+    dp.include_router(
+        crypto.router
+    )  # Crypto commands (/price, /analyze, /market, /news)
     dp.include_router(vision.router)  # Vision handler for photos
     dp.include_router(chat.router)  # General chat handler (must be last)
 
@@ -163,7 +170,7 @@ async def main() -> None:
         await dp.start_polling(
             bot,
             allowed_updates=dp.resolve_used_update_types(),
-            drop_pending_updates=True  # Skip old updates on startup
+            drop_pending_updates=True,  # Skip old updates on startup
         )
     except Exception as e:
         logger.exception(f"Critical error during bot operation: {e}")

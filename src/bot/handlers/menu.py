@@ -1,11 +1,18 @@
 """
 Menu callback handlers - handle inline keyboard button clicks
 """
+
 import logging
 from pathlib import Path
 
 from aiogram import Router, F
-from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, InputMediaPhoto
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    FSInputFile,
+    InputMediaPhoto,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.crud import (
@@ -17,10 +24,10 @@ from src.utils.i18n import i18n
 
 
 logger = logging.getLogger(__name__)
-router = Router(name='menu')
+router = Router(name="menu")
 
 
-def get_back_to_menu_button(language: str = 'ru') -> InlineKeyboardMarkup:
+def get_back_to_menu_button(language: str = "ru") -> InlineKeyboardMarkup:
     """
     Create 'Back to menu' button
 
@@ -30,9 +37,15 @@ def get_back_to_menu_button(language: str = 'ru') -> InlineKeyboardMarkup:
     Returns:
         InlineKeyboardMarkup with back button
     """
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n.get('menu.back', language), callback_data="menu_back")]
-    ])
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.get("menu.back", language), callback_data="menu_back"
+                )
+            ]
+        ]
+    )
     return keyboard
 
 
@@ -41,7 +54,7 @@ async def safe_edit_or_resend(
     text: str,
     reply_markup: InlineKeyboardMarkup = None,
     with_photo: bool = False,
-    photo_path: str = "assets/images/start.png"
+    photo_path: str = "assets/images/start.png",
 ):
     """
     Safely edit message or delete and resend if editing fails
@@ -60,7 +73,9 @@ async def safe_edit_or_resend(
             if image_path.exists():
                 photo = FSInputFile(image_path)
                 media = InputMediaPhoto(media=photo, caption=text)
-                await callback.message.edit_media(media=media, reply_markup=reply_markup)
+                await callback.message.edit_media(
+                    media=media, reply_markup=reply_markup
+                )
             else:
                 # No image, just edit text
                 await callback.message.edit_text(text, reply_markup=reply_markup)
@@ -80,9 +95,7 @@ async def safe_edit_or_resend(
             if image_path.exists():
                 photo = FSInputFile(image_path)
                 await callback.message.answer_photo(
-                    photo=photo,
-                    caption=text,
-                    reply_markup=reply_markup
+                    photo=photo, caption=text, reply_markup=reply_markup
                 )
             else:
                 await callback.message.answer(text, reply_markup=reply_markup)
@@ -91,7 +104,7 @@ async def safe_edit_or_resend(
 
 
 @router.callback_query(F.data == "menu_help")
-async def menu_help_callback(callback: CallbackQuery, user_language: str = 'ru'):
+async def menu_help_callback(callback: CallbackQuery, user_language: str = "ru"):
     """
     Handle 'Help' button click - show help information
     """
@@ -124,23 +137,25 @@ async def menu_help_callback(callback: CallbackQuery, user_language: str = 'ru')
 """
 
     await safe_edit_or_resend(
-        callback,
-        help_text,
-        reply_markup=get_back_to_menu_button(user_language)
+        callback, help_text, reply_markup=get_back_to_menu_button(user_language)
     )
     await callback.answer()
     logger.info(f"Help shown to user {callback.from_user.id} via menu")
 
 
 @router.callback_query(F.data == "menu_profile")
-async def menu_profile_callback(callback: CallbackQuery, session: AsyncSession, user_language: str = 'ru'):
+async def menu_profile_callback(
+    callback: CallbackQuery, session: AsyncSession, user_language: str = "ru"
+):
     """
     Handle 'Profile' button click - show user profile and statistics
     """
     user = await get_user_by_telegram_id(session, callback.from_user.id)
 
     if not user:
-        await callback.answer(i18n.get('profile.error_not_found', user_language), show_alert=True)
+        await callback.answer(
+            i18n.get("profile.error_not_found", user_language), show_alert=True
+        )
         return
 
     # Get request limits
@@ -151,10 +166,18 @@ async def menu_profile_callback(callback: CallbackQuery, session: AsyncSession, 
     reg_date = user.created_at.strftime("%d.%m.%Y")
 
     # Language display
-    lang_display = i18n.get('profile.language_ru', user_language) if user.language == 'ru' else i18n.get('profile.language_en', user_language)
+    lang_display = (
+        i18n.get("profile.language_ru", user_language)
+        if user.language == "ru"
+        else i18n.get("profile.language_en", user_language)
+    )
 
     # Status display
-    status_display = i18n.get('profile.status_premium', user_language) if user.is_admin else i18n.get('profile.status_free', user_language)
+    status_display = (
+        i18n.get("profile.status_premium", user_language)
+        if user.is_admin
+        else i18n.get("profile.status_free", user_language)
+    )
 
     profile_text = f"""{i18n.get('profile.title', user_language)}
 
@@ -174,38 +197,58 @@ async def menu_profile_callback(callback: CallbackQuery, session: AsyncSession, 
 """
 
     # Add language change button
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n.get('profile.change_language', user_language), callback_data="change_language")],
-        [InlineKeyboardButton(text=i18n.get('menu.back', user_language), callback_data="menu_back")]
-    ])
-
-    await safe_edit_or_resend(
-        callback,
-        profile_text,
-        reply_markup=keyboard
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.get("profile.change_language", user_language),
+                    callback_data="change_language",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=i18n.get("menu.back", user_language), callback_data="menu_back"
+                )
+            ],
+        ]
     )
+
+    await safe_edit_or_resend(callback, profile_text, reply_markup=keyboard)
     await callback.answer()
     logger.info(f"Profile shown to user {callback.from_user.id}")
 
 
 @router.callback_query(F.data == "change_language")
-async def change_language_callback(callback: CallbackQuery, user_language: str = 'ru'):
+async def change_language_callback(callback: CallbackQuery, user_language: str = "ru"):
     """
     Handle 'Change Language' button click - show language selection
     """
-    language_text = i18n.get('language.select', user_language)
+    language_text = i18n.get("language.select", user_language)
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n.get('language.russian', user_language), callback_data="set_language_ru")],
-        [InlineKeyboardButton(text=i18n.get('language.english', user_language), callback_data="set_language_en")],
-        [InlineKeyboardButton(text=i18n.get('menu.back', user_language), callback_data="menu_profile")]
-    ])
-
-    await safe_edit_or_resend(
-        callback,
-        language_text,
-        reply_markup=keyboard
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.get("language.russian", user_language),
+                    callback_data="set_language_ru",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=i18n.get("language.english", user_language),
+                    callback_data="set_language_en",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=i18n.get("menu.back", user_language),
+                    callback_data="menu_profile",
+                )
+            ],
+        ]
     )
+
+    await safe_edit_or_resend(callback, language_text, reply_markup=keyboard)
     await callback.answer()
     logger.info(f"Language selection shown to user {callback.from_user.id}")
 
@@ -216,16 +259,19 @@ async def set_language_callback(callback: CallbackQuery, session: AsyncSession):
     Handle language selection
     """
     # Extract language code from callback data (set_language_ru -> ru)
-    new_language = callback.data.split('_')[-1]
+    new_language = callback.data.split("_")[-1]
 
     # Update user language in database
     await update_user_language(session, callback.from_user.id, new_language)
 
     # Show confirmation
-    lang_name = i18n.get('language.russian', new_language) if new_language == 'ru' else i18n.get('language.english', new_language)
+    lang_name = (
+        i18n.get("language.russian", new_language)
+        if new_language == "ru"
+        else i18n.get("language.english", new_language)
+    )
     await callback.answer(
-        i18n.get('language.changed', new_language, lang=lang_name),
-        show_alert=True
+        i18n.get("language.changed", new_language, lang=lang_name), show_alert=True
     )
 
     # Return to profile with new language
@@ -233,8 +279,16 @@ async def set_language_callback(callback: CallbackQuery, session: AsyncSession):
     _, current_count, limit = await check_request_limit(session, user.id)
     remaining = limit - current_count
     reg_date = user.created_at.strftime("%d.%m.%Y")
-    lang_display = i18n.get('profile.language_ru', new_language) if user.language == 'ru' else i18n.get('profile.language_en', new_language)
-    status_display = i18n.get('profile.status_premium', new_language) if user.is_admin else i18n.get('profile.status_free', new_language)
+    lang_display = (
+        i18n.get("profile.language_ru", new_language)
+        if user.language == "ru"
+        else i18n.get("profile.language_en", new_language)
+    )
+    status_display = (
+        i18n.get("profile.status_premium", new_language)
+        if user.is_admin
+        else i18n.get("profile.status_free", new_language)
+    )
 
     profile_text = f"""{i18n.get('profile.title', new_language)}
 
@@ -253,28 +307,39 @@ async def set_language_callback(callback: CallbackQuery, session: AsyncSession):
 {i18n.get('profile.premium_hint', new_language)}
 """
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n.get('profile.change_language', new_language), callback_data="change_language")],
-        [InlineKeyboardButton(text=i18n.get('menu.back', new_language), callback_data="menu_back")]
-    ])
-
-    await safe_edit_or_resend(
-        callback,
-        profile_text,
-        reply_markup=keyboard
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.get("profile.change_language", new_language),
+                    callback_data="change_language",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=i18n.get("menu.back", new_language), callback_data="menu_back"
+                )
+            ],
+        ]
     )
+
+    await safe_edit_or_resend(callback, profile_text, reply_markup=keyboard)
     logger.info(f"User {callback.from_user.id} language changed to {new_language}")
 
 
 @router.callback_query(F.data == "menu_referral")
-async def menu_referral_callback(callback: CallbackQuery, session: AsyncSession, user_language: str = 'ru'):
+async def menu_referral_callback(
+    callback: CallbackQuery, session: AsyncSession, user_language: str = "ru"
+):
     """
     Handle 'Referral System' button click
     """
     user = await get_user_by_telegram_id(session, callback.from_user.id)
 
     if not user:
-        await callback.answer(i18n.get('profile.error_not_found', user_language), show_alert=True)
+        await callback.answer(
+            i18n.get("profile.error_not_found", user_language), show_alert=True
+        )
         return
 
     # Get bot info to generate referral link
@@ -304,16 +369,14 @@ async def menu_referral_callback(callback: CallbackQuery, session: AsyncSession,
 """
 
     await safe_edit_or_resend(
-        callback,
-        referral_text,
-        reply_markup=get_back_to_menu_button(user_language)
+        callback, referral_text, reply_markup=get_back_to_menu_button(user_language)
     )
     await callback.answer()
     logger.info(f"Referral info shown to user {callback.from_user.id}")
 
 
 @router.callback_query(F.data == "menu_premium")
-async def menu_premium_callback(callback: CallbackQuery, user_language: str = 'ru'):
+async def menu_premium_callback(callback: CallbackQuery, user_language: str = "ru"):
     """
     Handle 'Premium' button click - show premium subscription info
     """
@@ -341,33 +404,43 @@ async def menu_premium_callback(callback: CallbackQuery, user_language: str = 'r
 {i18n.get('premium.support', user_language)}
 """
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=i18n.get('premium.subscribe_button', user_language), callback_data="premium_subscribe")],
-        [InlineKeyboardButton(text=i18n.get('menu.back', user_language), callback_data="menu_back")]
-    ])
-
-    await safe_edit_or_resend(
-        callback,
-        premium_text,
-        reply_markup=keyboard
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=i18n.get("premium.subscribe_button", user_language),
+                    callback_data="premium_subscribe",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=i18n.get("menu.back", user_language), callback_data="menu_back"
+                )
+            ],
+        ]
     )
+
+    await safe_edit_or_resend(callback, premium_text, reply_markup=keyboard)
     await callback.answer()
     logger.info(f"Premium info shown to user {callback.from_user.id}")
 
 
 @router.callback_query(F.data == "premium_subscribe")
-async def premium_subscribe_callback(callback: CallbackQuery, user_language: str = 'ru'):
+async def premium_subscribe_callback(
+    callback: CallbackQuery, user_language: str = "ru"
+):
     """
     Handle premium subscription attempt
     """
     await callback.answer(
-        i18n.get('premium.subscribe_alert', user_language),
-        show_alert=True
+        i18n.get("premium.subscribe_alert", user_language), show_alert=True
     )
 
 
 @router.callback_query(F.data == "check_subscription")
-async def check_subscription_callback(callback: CallbackQuery, session: AsyncSession, user_language: str = 'ru'):
+async def check_subscription_callback(
+    callback: CallbackQuery, session: AsyncSession, user_language: str = "ru"
+):
     """
     Handle 'Check Subscription' button - verify and grant access
     """
@@ -382,40 +455,42 @@ async def check_subscription_callback(callback: CallbackQuery, session: AsyncSes
 
         # Check subscription
         member = await callback.bot.get_chat_member(
-            chat_id=REQUIRED_CHANNEL,
-            user_id=callback.from_user.id
+            chat_id=REQUIRED_CHANNEL, user_id=callback.from_user.id
         )
 
-        if member.status in {ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}:
+        if member.status in {
+            ChatMemberStatus.MEMBER,
+            ChatMemberStatus.ADMINISTRATOR,
+            ChatMemberStatus.CREATOR,
+        }:
             # User is subscribed - show welcome
-            greeting = i18n.get('subscription.verified', lang, name=callback.from_user.first_name)
+            greeting = i18n.get(
+                "subscription.verified", lang, name=callback.from_user.first_name
+            )
 
             await safe_edit_or_resend(
-                callback,
-                greeting,
-                reply_markup=get_main_menu(lang),
-                with_photo=True
+                callback, greeting, reply_markup=get_main_menu(lang), with_photo=True
             )
-            await callback.answer(i18n.get('subscription.verified_alert', lang))
+            await callback.answer(i18n.get("subscription.verified_alert", lang))
             logger.info(f"User {callback.from_user.id} subscription verified")
         else:
             await callback.answer(
-                i18n.get('subscription.not_found', lang),
-                show_alert=True
+                i18n.get("subscription.not_found", lang), show_alert=True
             )
 
     except Exception as e:
-        logger.error(f"Error verifying subscription for user {callback.from_user.id}: {e}")
+        logger.error(
+            f"Error verifying subscription for user {callback.from_user.id}: {e}"
+        )
         user = await get_user_by_telegram_id(session, callback.from_user.id)
         lang = user.language if user else user_language
-        await callback.answer(
-            i18n.get('subscription.error', lang),
-            show_alert=True
-        )
+        await callback.answer(i18n.get("subscription.error", lang), show_alert=True)
 
 
 @router.callback_query(F.data == "menu_back")
-async def menu_back_callback(callback: CallbackQuery, session: AsyncSession, user_language: str = 'ru'):
+async def menu_back_callback(
+    callback: CallbackQuery, session: AsyncSession, user_language: str = "ru"
+):
     """
     Handle 'Back to menu' button - return to main menu
     """
@@ -425,13 +500,10 @@ async def menu_back_callback(callback: CallbackQuery, session: AsyncSession, use
     user = await get_user_by_telegram_id(session, callback.from_user.id)
     lang = user.language if user else user_language
 
-    greeting = i18n.get('menu.back_text', lang, name=callback.from_user.first_name)
+    greeting = i18n.get("menu.back_text", lang, name=callback.from_user.first_name)
 
     await safe_edit_or_resend(
-        callback,
-        greeting,
-        reply_markup=get_main_menu(lang),
-        with_photo=True
+        callback, greeting, reply_markup=get_main_menu(lang), with_photo=True
     )
     await callback.answer()
     logger.info(f"User {callback.from_user.id} returned to main menu")

@@ -1,6 +1,7 @@
 """
 Unit tests for i18n utilities
 """
+
 import pytest
 import json
 import tempfile
@@ -90,7 +91,7 @@ def test_i18n_with_temp_locale():
         test_locale = {"test": {"key": "Test Value", "formatted": "Hello {name}"}}
 
         locale_file = Path(tmpdir) / "en.json"
-        with open(locale_file, 'w', encoding='utf-8') as f:
+        with open(locale_file, "w", encoding="utf-8") as f:
             json.dump(test_locale, f)
 
         # Initialize i18n with temp directory
