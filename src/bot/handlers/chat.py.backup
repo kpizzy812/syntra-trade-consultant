@@ -1,0 +1,179 @@
+# coding: utf-8
+"""
+Chat handler - processes user messages with AI streaming
+"""
+from datetime import datetime
+from loguru import logger
+
+from aiogram import Router, F
+from aiogram.types import Message
+from aiogram.utils.chat_action import ChatActionSender
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src.services.openai_service import OpenAIService
+from src.services.coingecko_service import CoinGeckoService
+from src.database.crud import get_or_create_user
+from src.utils.coin_parser import extract_coin_from_text
+
+
+router = Router(name='chat')
+
+# Initialize services
+openai_service = OpenAIService()
+coingecko_service = CoinGeckoService()
+
+# Streaming configuration
+STREAM_UPDATE_INTERVAL = 1.5  # Update message every 1.5 seconds
+MIN_CHARS_FOR_UPDATE = 100    # Or every 100 characters
+
+
+async def extract_and_enrich_crypto_data(user_text: str) -> str:
+    """
+    Extract crypto mentions from text and enrich with current market data
+
+    Args:
+        user_text: User's message text
+
+    Returns:
+        Enriched context string with market data or empty string
+    """
+    # Find mentioned coins using centralized coin parser
+    mentioned_coins = extract_coin_from_text(user_text)
+
+    if not mentioned_coins:
+        return ""
+
+    # Fetch data for mentioned coins
+    enriched_data = []
+
+    for coin_id in mentioned_coins[:3]:  # Limit to 3 coins max
+        try:
+            # Get price data
+            price_data = await coingecko_service.get_price(
+                coin_id,
+                include_24h_change=True
+            )
+
+            if price_data and coin_id in price_data:
+                data = price_data[coin_id]
+                price = data.get('usd', 0)
+                change_24h = data.get('usd_24h_change', 0)
+
+                enriched_data.append(
+                    f"{coin_id.upper()}: ${price:,.2f} "
+                    f"(24h: {change_24h:+.2f}%)"
+                )
+
+                logger.info(f"Enriched with {coin_id} price data: ${price:,.2f}")
+
+        except Exception as e:
+            logger.error(f"Error fetching {coin_id} data: {e}")
+            continue
+
+    if enriched_data:
+        return (
+            "\n\n[CURRENT MARKET DATA]\n" +
+            "\n".join(enriched_data) +
+            "\n[END MARKET DATA]\n\n"
+            "Use this fresh market data to provide accurate analysis."
+        )
+
+    return ""
+
+
+@router.message(F.text & ~F.text.startswith('/'))
+async def handle_text_message(message: Message, session: AsyncSession):
+    """
+    Handle text messages from users with AI streaming response
+
+    Args:
+        message: Incoming message
+        session: Database session (from middleware)
+    """
+    user = message.from_user
+    user_text = message.text
+
+    logger.info(f"Processing message from user {user.id}: {user_text[:50]}...")
+
+    # Ensure user exists in database
+    await get_or_create_user(
+        session,
+        telegram_id=user.id,
+        username=user.username,
+        first_name=user.first_name,
+        last_name=user.last_name
+    )
+
+    # Send initial "thinking" message
+    thinking_msg = await message.answer("🤔 Думаю...")
+
+    try:
+        # Enrich message with crypto data if mentioned
+        enriched_context = await extract_and_enrich_crypto_data(user_text)
+
+        # Combine user message with enriched data
+        enriched_message = user_text
+        if enriched_context:
+            enriched_message = enriched_context + "\nUser question: " + user_text
+            logger.info("Message enriched with market data")
+
+        # Stream AI response with typing indicator
+        full_response = ""
+        last_update_time = datetime.now()
+        last_update_length = 0
+
+        async with ChatActionSender.typing(
+            bot=message.bot,
+            chat_id=message.chat.id
+        ):
+            async for chunk in openai_service.stream_completion(
+                session=session,
+                user_id=user.id,
+                user_message=enriched_message
+            ):
+                full_response += chunk
+
+                # Update message periodically
+                now = datetime.now()
+                time_since_update = (now - last_update_time).total_seconds()
+                chars_since_update = len(full_response) - last_update_length
+
+                should_update = (
+                    time_since_update >= STREAM_UPDATE_INTERVAL or
+                    chars_since_update >= MIN_CHARS_FOR_UPDATE
+                )
+
+                if should_update and full_response.strip():
+                    try:
+                        await thinking_msg.edit_text(full_response)
+                        last_update_time = now
+                        last_update_length = len(full_response)
+                    except Exception as e:
+                        # Ignore edit errors (message not modified, etc.)
+                        logger.debug(f"Message edit error (ignored): {e}")
+
+        # Final update with complete response
+        if full_response.strip():
+            try:
+                await thinking_msg.edit_text(full_response)
+                logger.info(f"Response sent to user {user.id} ({len(full_response)} chars)")
+            except Exception as e:
+                logger.error(f"Failed to send final response: {e}")
+                await thinking_msg.edit_text(
+                    "Произошла ошибка при отправке ответа. Попробуйте еще раз."
+                )
+        else:
+            await thinking_msg.edit_text(
+                "Не удалось сгенерировать ответ. Попробуйте переформулировать вопрос."
+            )
+
+    except Exception as e:
+        logger.exception(f"Error handling message from user {user.id}: {e}")
+        try:
+            await thinking_msg.edit_text(
+                "Произошла критическая ошибка. Пожалуйста, попробуйте позже."
+            )
+        except Exception:
+            pass
+
+

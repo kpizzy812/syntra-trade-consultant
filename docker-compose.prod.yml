@@ -1,0 +1,117 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: syntra-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-syntra_bot}
+      POSTGRES_USER: ${POSTGRES_USER:-syntra}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - syntra-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-syntra}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "127.0.0.1:5433:5432"  # Expose only to localhost for debugging
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: syntra-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-syntra_redis_pass}
+    volumes:
+      - redis_data:/data
+    networks:
+      - syntra-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "127.0.0.1:6379:6379"  # Expose only to localhost
+
+  # Syntra Trade Consultant Bot
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: syntra-bot
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Telegram Bot
+      BOT_TOKEN: ${BOT_TOKEN:?BOT_TOKEN is required}
+      REQUIRED_CHANNEL: ${REQUIRED_CHANNEL:?REQUIRED_CHANNEL is required}
+      ADMIN_IDS: ${ADMIN_IDS:?ADMIN_IDS is required}
+
+      # Database
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-syntra}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-syntra_bot}
+
+      # APIs
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY:-}
+      CRYPTOPANIC_TOKEN: ${CRYPTOPANIC_TOKEN:-}
+
+      # Configuration
+      REQUEST_LIMIT_PER_DAY: ${REQUEST_LIMIT_PER_DAY:-5}
+      CACHE_TTL_COINGECKO: ${CACHE_TTL_COINGECKO:-60}
+      CACHE_TTL_CRYPTOPANIC: ${CACHE_TTL_CRYPTOPANIC:-300}
+      SKIP_SUBSCRIPTION_CHECK: ${SKIP_SUBSCRIPTION_CHECK:-false}
+
+      # Environment
+      ENVIRONMENT: production
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-syntra_redis_pass}@redis:6379/0
+
+      # Sentry (optional)
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - syntra-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Adminer (optional - database management tool)
+  # Uncomment to enable web-based database management
+  # adminer:
+  #   image: adminer:latest
+  #   container_name: syntra-adminer
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - postgres
+  #   environment:
+  #     ADMINER_DEFAULT_SERVER: postgres
+  #   networks:
+  #     - syntra-network
+  #   ports:
+  #     - "127.0.0.1:8080:8080"  # Access at http://localhost:8080
+
+networks:
+  syntra-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local

@@ -1,0 +1,126 @@
+{
+  "start": {
+    "welcome_new": "Hey, {name}! I'm <b>Syntra</b>, your personal crypto consultant with attitude.\n\nI'll help you navigate the crypto market with a mix of sarcasm and professionalism. I can analyze:\n• Charts (send a screenshot)\n• Prices and technical analysis\n• Market news\n• Fundamental analysis of projects\n\n<i>I'm not a financial advisor, but I can provide solid insights.</i>\n\nUse /help for command list.",
+    "welcome_back": "Welcome back, {name}!\n\nReady for new crypto analysis? Send me a question or chart.\n\nCommands: /help"
+  },
+  "menu": {
+    "help": "ℹ️ Help",
+    "profile": "👤 Profile",
+    "referral": "🤝 Referral",
+    "premium": "⭐ Premium",
+    "back": "« Back to menu",
+    "back_text": "Hey, {name}!\n\nChoose a section from the menu below or just send me your question."
+  },
+  "help": {
+    "title": "<b>Syntra Trade Consultant - Help</b>",
+    "commands_title": "<b>Main commands:</b>",
+    "command_start": "/start - Start using the bot",
+    "command_help": "/help - Show this help",
+    "features_title": "<b>What I can do:</b>",
+    "feature_charts": "📊 <b>Chart Analysis</b>\nSend a chart screenshot and I'll analyze technical patterns, support/resistance levels, and provide a forecast.",
+    "feature_price": "💰 <b>Price Analysis</b>\nAsk me about any cryptocurrency price and I'll provide current information with technical analysis.\nExample: \"What's the Bitcoin price?\"",
+    "feature_news": "📰 <b>Market News</b>\nGet the latest news about coins you're interested in.\nExample: \"Ethereum news\"",
+    "feature_analysis": "🔍 <b>Fundamental Analysis</b>\nAsk any question about crypto projects, technology, or the market.",
+    "features_list_title": "<b>Features:</b>",
+    "features_list": "• Professional analysis with a touch of sarcasm\n• Conversation context awareness\n• Fast responses\n• Real-time data",
+    "disclaimer": "<i>⚠️ I'm not a financial advisor. All my responses are informational, not recommendations.</i>",
+    "limits_title": "<b>Limits:</b>",
+    "limits_text": "Free: 5 requests per day\nFor unlimited access: /premium (coming soon)",
+    "footer": "Just send a message or chart, and I'll help! 🚀"
+  },
+  "profile": {
+    "title": "<b>👤 Your Profile</b>",
+    "name": "<b>Name:</b> {name}",
+    "username": "<b>Username:</b> @{username}",
+    "registration": "<b>Registration date:</b> {date}",
+    "usage_title": "<b>📊 Today's usage:</b>",
+    "requests": "<b>Requests:</b> {current}/{limit}",
+    "remaining": "<b>Remaining:</b> {remaining} request(s)",
+    "status": "<b>Status:</b> {status}",
+    "status_premium": "⭐ Premium",
+    "status_free": "🆓 Free",
+    "language": "<b>Language:</b> {lang}",
+    "language_ru": "🇷🇺 Русский",
+    "language_en": "🇬🇧 English",
+    "change_language": "🌐 Change language",
+    "premium_hint": "<i>For unlimited access, click the Premium button</i>",
+    "error_not_found": "Error: user not found"
+  },
+  "language": {
+    "select": "<b>🌐 Language Selection</b>\n\nChoose your preferred interface language:",
+    "changed": "✅ Language changed to: {lang}",
+    "russian": "🇷🇺 Русский",
+    "english": "🇬🇧 English"
+  },
+  "referral": {
+    "title": "<b>🤝 Referral System</b>",
+    "link_title": "<b>Your referral link:</b>",
+    "how_it_works": "<b>How it works:</b>",
+    "you_get_title": "🎁 <b>You get:</b>",
+    "you_get_bonus": "• +5 additional requests for each invited friend",
+    "you_get_premium": "• 10% of friend's premium subscription as bonus requests",
+    "friend_gets_title": "🎁 <b>Your friend gets:</b>",
+    "friend_gets_bonus": "• +3 additional requests when registering via your link",
+    "stats_title": "<b>Your statistics:</b>",
+    "stats_invited": "👥 Friends invited: <b>{count}</b>",
+    "stats_bonus": "🎁 Bonus requests: <b>{bonus}</b>",
+    "coming_soon": "<i>💡 Referral system is under development and will be activated soon!</i>"
+  },
+  "premium": {
+    "title": "<b>⭐ Premium Subscription</b>",
+    "features_title": "<b>Premium includes:</b>",
+    "feature_unlimited": "✨ <b>Unlimited requests</b>\nNo restrictions on questions and analysis",
+    "feature_priority": "🚀 <b>Priority processing</b>\nYour requests are processed first",
+    "feature_analytics": "📊 <b>Advanced analytics</b>\nAccess to additional analysis tools",
+    "feature_notifications": "🔔 <b>Personal notifications</b>\nCustomizable alerts for important market movements",
+    "feature_exclusive": "💎 <b>Exclusive content</b>\nAccess to private channel with in-depth analysis",
+    "pricing_title": "<b>Pricing:</b>",
+    "pricing_month": "• 1 month - $9.99",
+    "pricing_3months": "• 3 months - $24.99 (save 17%)",
+    "pricing_year": "• 1 year - $79.99 (save 33%)",
+    "coming_soon": "<i>💡 Premium subscription will be available very soon!</i>\n<i>Stay tuned for updates in our channel.</i>",
+    "support": "<b>Questions?</b> Contact support: @syntra_support",
+    "subscribe_button": "💳 Get Premium (coming soon)",
+    "subscribe_alert": "💡 Premium subscription coming soon! Stay tuned for updates."
+  },
+  "subscription": {
+    "required": "⚠️ <b>To use the bot, you need to subscribe to our channel:</b>\n\n{channel}\n\nAfter subscribing, click the button below to verify.",
+    "check_button": "✅ I subscribed",
+    "verified": "✅ <b>Great! You're subscribed.</b>\n\nHey, {name}!\n\nChoose a section from the menu below or just send me your question.",
+    "verified_alert": "Subscription verified! ✅",
+    "not_found": "❌ Subscription not found. Please subscribe to the channel and try again.",
+    "error": "Error verifying subscription. Please try again later."
+  },
+  "limits": {
+    "title": "Your Request Limits",
+    "usage": "Usage",
+    "used": "Used: <b>{count} of {limit}</b>",
+    "remaining": "Remaining: <b>{count}</b> request(s)",
+    "reset": "Limit Reset",
+    "reset_time": "In <b>{hours}</b> h (00:00 UTC)",
+    "status_available": "💡 You still have available requests. Use them wisely!",
+    "status_depleted": "⚠️ You've reached your daily limit.\n\nLimits will reset at 00:00 UTC.\nFor unlimited access: /premium (coming soon)"
+  },
+  "errors": {
+    "general": "An error occurred. Please try again later.",
+    "rate_limit": "⚠️ You've reached your daily request limit ({limit}).\n\nTry again tomorrow or get Premium subscription for unlimited access.",
+    "no_value": "Not specified",
+    "user_not_found": "Error: user not found in database."
+  },
+  "chat": {
+    "thinking": "🤔 Thinking...",
+    "error_sending": "Error sending response. Please try again.",
+    "no_response": "Failed to generate response. Please rephrase your question.",
+    "critical_error": "A critical error occurred. Please try again later."
+  },
+  "vision": {
+    "file_too_large": "❌ <b>Image too large</b>\n\nMaximum size: {max_size} MB\nPlease send a smaller image.",
+    "analyzing": "📊 <b>Chart Analysis</b>{coin_name}\n\n🤔 <i>Analyzing chart...</i>",
+    "current_data": "💰 <b>Current data:</b>\nPrice: <b>${price}</b> ({emoji} {change}%)\n\n",
+    "error_invalid_format": "❌ <b>Unsupported image format</b>\n\nSupported formats: JPEG, PNG, WebP\nPlease try sending the image in a different format.",
+    "error_size": "❌ <b>Image too large</b>\n\nPlease compress the image or send a smaller screenshot.",
+    "error_processing": "❌ <b>Image processing error</b>\n\nPlease try sending a different image or try again later.",
+    "error_general": "❌ <b>An error occurred while analyzing the image</b>\n\nPlease try again later or contact the administrator.",
+    "send_as_photo": "ℹ️ <b>Send image as photo</b>\n\nYou sent the image as a file. For chart analysis, please send the image as a <b>photo</b> (📷 button in Telegram).\n\nThis will allow the bot to process the image correctly."
+  }
+}

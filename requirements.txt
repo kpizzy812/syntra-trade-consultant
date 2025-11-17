@@ -1,0 +1,42 @@
+# Telegram Bot
+aiogram
+aiohttp
+
+# Database
+sqlalchemy[asyncio]
+asyncpg
+alembic
+psycopg2-binary
+
+# AI/ML
+openai
+tiktoken
+
+# Crypto APIs
+pycoingecko
+
+# Utilities
+python-dotenv
+tenacity
+APScheduler
+loguru
+
+# Data Processing
+pandas
+Pillow
+ta  # Technical Analysis Library for indicators (RSI, MACD, Bollinger Bands, etc.)
+
+# Testing
+pytest
+pytest-asyncio
+pytest-cov
+pytest-mock
+
+# Code Quality
+black
+flake8
+mypy
+isort
+
+# Monitoring (optional)
+sentry-sdk
