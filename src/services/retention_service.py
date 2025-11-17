@@ -526,3 +526,4 @@ async def stop_retention_service():
 
     if _retention_service is not None:
         await _retention_service.stop()
+        _retention_service = None
