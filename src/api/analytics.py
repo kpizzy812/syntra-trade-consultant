@@ -16,7 +16,7 @@ from src.services.coingecko_service import CoinGeckoService
 from src.services.technical_indicators import TechnicalIndicators
 
 # Create router
-router = APIRouter(prefix="/api/analytics", tags=["analytics"])
+router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 # Initialize services
 binance_service = BinanceService()

@@ -15,7 +15,7 @@ from src.api.auth import get_current_user
 from sqlalchemy import select
 
 # Create router
-router = APIRouter(prefix="/api/profile", tags=["profile"])
+router = APIRouter(prefix="/profile", tags=["profile"])
 
 
 @router.get("")

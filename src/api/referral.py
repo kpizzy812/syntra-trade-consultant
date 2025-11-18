@@ -19,7 +19,7 @@ from src.database.crud import (
 from sqlalchemy import select
 
 # Create router
-router = APIRouter(prefix="/api/referral", tags=["referral"])
+router = APIRouter(prefix="/referral", tags=["referral"])
 
 
 @router.get("/stats")

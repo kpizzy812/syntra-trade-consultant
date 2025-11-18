@@ -23,7 +23,7 @@ from src.database.crud import (
 )
 
 # Create router
-router = APIRouter(prefix="/api/chat", tags=["chat"])
+router = APIRouter(prefix="/chat", tags=["chat"])
 
 # Initialize OpenAI service
 openai_service = OpenAIService()

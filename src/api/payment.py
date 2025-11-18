@@ -27,7 +27,7 @@ import os
 logger = logging.getLogger(__name__)
 
 # Create router
-router = APIRouter(prefix="/api/payment", tags=["payment"])
+router = APIRouter(prefix="/payment", tags=["payment"])
 
 # Initialize payment services
 stars_service = TelegramStarsService()

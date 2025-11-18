@@ -20,7 +20,7 @@ from src.database.crud import (
 )
 
 # Create router
-router = APIRouter(prefix="/api/market", tags=["market"])
+router = APIRouter(prefix="/market", tags=["market"])
 
 # Initialize services
 fear_greed_service = FearGreedService()

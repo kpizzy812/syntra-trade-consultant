@@ -14,11 +14,6 @@ from config.config import validate_config
 from config.logging import setup_logging
 from src.database.engine import init_db, dispose_engine
 from src.api.router import router as api_router
-from src.api.market import router as market_router
-from src.api.chat import router as chat_router
-from src.api.analytics import router as analytics_router
-from src.api.referral import router as referral_router
-from src.api.profile import router as profile_router
 
 
 logger = logging.getLogger(__name__)
@@ -70,13 +65,8 @@ app.add_middleware(
 )
 
 
-# Подключаем API routers
+# Подключаем API router (уже включает все sub-роутеры)
 app.include_router(api_router)
-app.include_router(market_router)
-app.include_router(chat_router)
-app.include_router(analytics_router)
-app.include_router(referral_router)
-app.include_router(profile_router)
 
 
 # Root endpoint
