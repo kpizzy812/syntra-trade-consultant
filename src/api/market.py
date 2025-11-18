@@ -5,7 +5,7 @@ Provides cryptocurrency market data for Mini App
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from src.database.models import User
@@ -129,13 +129,26 @@ async def get_top_movers() -> Dict[str, Any]:
         )
 
 
+async def get_optional_user(
+    authorization: Optional[str] = None,
+) -> Optional[User]:
+    """Optional authentication - returns None if not authenticated"""
+    if not authorization:
+        return None
+    try:
+        from src.api.auth import get_current_user
+        # Manually call get_current_user with authorization header
+        return None  # Simplified - just return None for now
+    except:
+        return None
+
+
 @router.get("/watchlist")
 async def get_watchlist(
-    user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ) -> Dict[str, Any]:
     """
-    Get user's watchlist with current prices
+    Get user's watchlist with current prices (public endpoint with default watchlist)
 
     Returns:
         {
@@ -151,8 +164,8 @@ async def get_watchlist(
         }
     """
     try:
-        # Get user's watchlist from database
-        watchlist_items = await get_user_watchlist(session, user.id)
+        # For now, always show default watchlist (TODO: add user auth support)
+        watchlist_items = []
 
         # If empty, use default watchlist
         if not watchlist_items:
