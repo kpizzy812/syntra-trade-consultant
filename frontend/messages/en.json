@@ -1,0 +1,157 @@
+{
+  "common": {
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "close": "Close",
+    "save": "Save",
+    "back": "Back",
+    "next": "Next",
+    "select": "Select",
+    "currency": "Currency"
+  },
+
+  "premium": {
+    "title": "Upgrade to Premium",
+    "subtitle": "Choose your payment method",
+    "step": "Step",
+    "of": "of",
+
+    "tiers": {
+      "basic": {
+        "name": "Basic",
+        "features": {
+          "requests": "20 requests per day",
+          "indicators": "Basic technical indicators",
+          "support": "Email support"
+        }
+      },
+      "premium": {
+        "name": "Premium",
+        "features": {
+          "requests": "100 requests per day",
+          "indicators": "Advanced indicators + Liquidation data",
+          "support": "Priority support"
+        }
+      },
+      "vip": {
+        "name": "VIP",
+        "features": {
+          "requests": "Unlimited requests",
+          "indicators": "All indicators + Real-time feeds",
+          "support": "24/7 VIP support"
+        }
+      }
+    },
+
+    "duration": {
+      "monthly": "Monthly",
+      "quarterly": "3 months",
+      "yearly": "Annual",
+      "save": "Save {percent}%"
+    },
+
+    "payment_methods": {
+      "title": "Select Payment Method",
+      "telegram_stars": {
+        "name": "Telegram Stars",
+        "description": "Fast payment via Telegram"
+      },
+      "ton_connect": {
+        "name": "TON Connect",
+        "description": "Direct TON or USDT transfer"
+      },
+      "crypto_bot": {
+        "name": "Crypto Bot",
+        "description": "Multiple cryptocurrencies",
+        "coming_soon": "Coming Soon"
+      }
+    },
+
+    "plan_selection": {
+      "title": "Select Your Plan",
+      "select_tier": "Choose tier",
+      "select_duration": "Choose duration",
+      "total": "Total",
+      "month_short": "mo"
+    },
+
+    "confirmation": {
+      "title": "Confirm Purchase",
+      "plan": "Plan",
+      "duration": "Duration",
+      "months": "{count} month(s)",
+      "total_price": "Total Price",
+      "referral_discount": "Referral Discount",
+      "final_price": "Final Price",
+      "proceed": "Proceed to Payment"
+    },
+
+    "ton_payment": {
+      "title": "TON Payment",
+      "connect_wallet": "Connect your TON wallet",
+      "select_currency": "Select Currency",
+      "deposit_address": "Deposit Address",
+      "amount": "Amount to Send",
+      "memo": "Memo (Required!)",
+      "memo_warning": "⚠️ Important: Include this memo with your transaction or payment will not be processed!",
+      "copy_address": "Copy Address",
+      "copy_memo": "Copy Memo",
+      "send_payment": "Send Payment",
+      "waiting": "Confirming... ({current}/{max})",
+      "payment_sent": "Payment sent! Waiting for confirmation...",
+      "payment_confirmed": "🎉 Subscription activated! {tier} until {date}",
+      "payment_failed": "Payment failed. Please try again or contact support.",
+      "payment_timeout": "Payment confirmation timeout. Please check your transaction or contact support.",
+      "wallet_required": "Please connect your TON wallet first",
+      "transaction_cancelled": "Transaction cancelled"
+    }
+  },
+
+  "home": {
+    "welcome": "Welcome to Syntra",
+    "subtitle": "AI-Powered Crypto Trading Assistant",
+    "cta": "Get Started",
+    "open_chat": "Open Chat",
+    "features": {
+      "analysis": "Market Analysis",
+      "indicators": "Technical Indicators",
+      "alerts": "Price Alerts"
+    }
+  },
+
+  "chat": {
+    "input_placeholder": "Ask about crypto markets...",
+    "upgrade_prompt": "Upgrade to Premium →",
+    "requests_left": "{count} requests left today",
+    "unlimited": "Unlimited requests"
+  },
+
+  "profile": {
+    "title": "Profile",
+    "subscription": "Subscription",
+    "tier": "Tier",
+    "status": "Status",
+    "active": "Active",
+    "inactive": "Inactive",
+    "expires": "Expires",
+    "upgrade": "Upgrade"
+  },
+
+  "referral": {
+    "title": "Referral Program",
+    "your_code": "Your Referral Code",
+    "share": "Share",
+    "earnings": "Earnings",
+    "total_referrals": "Total Referrals",
+    "active_referrals": "Active Referrals"
+  },
+
+  "errors": {
+    "network": "Network error. Please try again.",
+    "unknown": "An unknown error occurred",
+    "validation": "Please check your input"
+  }
+}

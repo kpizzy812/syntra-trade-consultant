@@ -26,6 +26,10 @@
 - 😱 **Fear & Greed Index** - Индекс страха и жадности криптовалютного рынка
 - 📉 **Рыночная капитализация** - Топ криптовалют по капитализации
 - 📊 **Исторические данные** - OHLC данные для технического анализа
+- 💸 **Funding Rates** - Ставки финансирования фьючерсов (настроения трейдеров, Binance Futures)
+- 🌈 **Cycle Analysis** - Анализ рыночных циклов для Bitcoin (Rainbow Chart, Pi Cycle Top)
+- ⛓️ **On-Chain Metrics** - Метрики блокчейна (активные адреса, потоки с бирж, CoinMetrics)
+- 📈 **Market Dominance** - BTC.D, ETH.D, OTHERS.D - определение фазы рынка (Bitcoin Season vs Alt Season)
 
 ### Умные функции
 - 🎯 **Умная маршрутизация** - Автоматический выбор gpt-4o/gpt-4o-mini по сложности (порог: 1500 токенов)
@@ -54,6 +58,8 @@
 - **OpenAI Vision API** (gpt-4o with vision) - Vision AI для анализа графиков
 - **CoinGecko API** - Цены и исторические данные
 - **CryptoPanic API** - Криптовалютные новости
+- **Binance Futures API** - Funding rates и Open Interest
+- **CoinMetrics Community API** - On-chain метрики (бесплатно)
 
 ### Infrastructure
 - **Docker + Docker Compose** - Контейнеризация PostgreSQL
@@ -96,11 +102,15 @@ Syntra Trade Consultant/
 │   │   ├── openai_service_extended.py # Расширенные функции OpenAI
 │   │   ├── coingecko_service.py # CoinGecko API
 │   │   ├── cryptopanic_service.py # CryptoPanic API (новости)
-│   │   ├── binance_service.py # Binance API (дополнительные данные)
+│   │   ├── binance_service.py # Binance API (OHLC, Funding Rates, Open Interest)
 │   │   ├── fear_greed_service.py # Fear & Greed Index
+│   │   ├── coinmetrics_service.py # CoinMetrics API (On-chain метрики)
+│   │   ├── cycle_analysis_service.py # Анализ циклов (Rainbow Chart, Pi Cycle)
+│   │   ├── historical_data_service.py # Исторические данные
+│   │   ├── analytics_aggregator.py # Сбор всей аналитики
 │   │   ├── technical_indicators.py # Технические индикаторы
 │   │   ├── candlestick_patterns.py # Свечные паттерны
-│   │   ├── crypto_tools.py # Утилиты для криптовалют
+│   │   ├── crypto_tools.py # Утилиты для криптовалют (OpenAI Function Calling)
 │   │   └── retention_service.py # Воронка удержания пользователей
 │   ├── database/
 │   │   ├── models.py     # SQLAlchemy модели

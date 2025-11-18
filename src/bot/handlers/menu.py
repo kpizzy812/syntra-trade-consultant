@@ -159,7 +159,7 @@ async def menu_profile_callback(
         return
 
     # Get request limits
-    _, current_count, limit = await check_request_limit(session, user.id)
+    _, current_count, limit = await check_request_limit(session, user)
     remaining = limit - current_count
 
     # Format registration date
@@ -172,12 +172,19 @@ async def menu_profile_callback(
         else i18n.get("profile.language_en", user_language)
     )
 
-    # Status display
-    status_display = (
-        i18n.get("profile.status_premium", user_language)
-        if user.is_admin
-        else i18n.get("profile.status_free", user_language)
-    )
+    # Status display - check subscription
+    await session.refresh(user, ["subscription"])
+    subscription = user.subscription
+
+    if subscription and subscription.is_active and subscription.tier != "free":
+        tier_name = i18n.get(f"tier_names.{subscription.tier}", user_language)
+        status_display = f"⭐ {tier_name}"
+    else:
+        status_display = i18n.get("profile.status_free", user_language)
+
+    # Get referral balance
+    balance = float(user.referral_balance or 0)
+    total_earned = float(user.total_referral_earnings or 0)
 
     profile_text = f"""{i18n.get('profile.title', user_language)}
 
@@ -188,10 +195,20 @@ async def menu_profile_callback(
 
 {i18n.get('profile.usage_title', user_language)}
 
-{i18n.get('profile.requests', user_language, current=current_count, limit=limit)}
+{i18n.get('profile.requests', user_language, current=remaining, limit=limit)}
 {i18n.get('profile.remaining', user_language, remaining=remaining)}
 
-{i18n.get('profile.status', user_language, status=status_display)}
+{i18n.get('profile.status', user_language, status=status_display)}"""
+
+    # Add referral balance if user has earnings
+    if total_earned > 0:
+        profile_text += f"""
+
+{i18n.get('profile.referral_balance_title', user_language)}
+{i18n.get('profile.referral_balance', user_language, balance=f"{balance:.2f}")}
+{i18n.get('profile.referral_earned', user_language, earned=f"{total_earned:.2f}")}"""
+
+    profile_text += f"""
 
 {i18n.get('profile.premium_hint', user_language)}
 """
@@ -276,7 +293,7 @@ async def set_language_callback(callback: CallbackQuery, session: AsyncSession):
 
     # Return to profile with new language
     user = await get_user_by_telegram_id(session, callback.from_user.id)
-    _, current_count, limit = await check_request_limit(session, user.id)
+    _, current_count, limit = await check_request_limit(session, user)
     remaining = limit - current_count
     reg_date = user.created_at.strftime("%d.%m.%Y")
     lang_display = (
@@ -378,51 +395,46 @@ async def menu_referral_callback(
 @router.callback_query(F.data == "menu_premium")
 async def menu_premium_callback(callback: CallbackQuery, user_language: str = "ru"):
     """
-    Handle 'Premium' button click - show premium subscription info
+    Handle 'Premium' button click - show premium subscription tiers
+
+    Shows real premium plans with Telegram Stars pricing
     """
-    premium_text = f"""{i18n.get('premium.title', user_language)}
+    # Use tier selection from premium.py
+    from src.bot.handlers.premium import get_tier_selection_keyboard
+    from src.services.telegram_stars_service import SUBSCRIPTION_PLANS
+    from src.database.models import SubscriptionTier
 
-{i18n.get('premium.features_title', user_language)}
+    keyboard = get_tier_selection_keyboard(user_language)
 
-{i18n.get('premium.feature_unlimited', user_language)}
+    # Get prices from config
+    basic_price = SUBSCRIPTION_PLANS[SubscriptionTier.BASIC]["1"]["usd"]
+    premium_price = SUBSCRIPTION_PLANS[SubscriptionTier.PREMIUM]["1"]["usd"]
+    vip_price = SUBSCRIPTION_PLANS[SubscriptionTier.VIP]["1"]["usd"]
 
-{i18n.get('premium.feature_priority', user_language)}
-
-{i18n.get('premium.feature_analytics', user_language)}
-
-{i18n.get('premium.feature_notifications', user_language)}
-
-{i18n.get('premium.feature_exclusive', user_language)}
-
-{i18n.get('premium.pricing_title', user_language)}
-{i18n.get('premium.pricing_month', user_language)}
-{i18n.get('premium.pricing_3months', user_language)}
-{i18n.get('premium.pricing_year', user_language)}
-
-{i18n.get('premium.coming_soon', user_language)}
-
-{i18n.get('premium.support', user_language)}
-"""
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=i18n.get("premium.subscribe_button", user_language),
-                    callback_data="premium_subscribe",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=i18n.get("menu.back", user_language), callback_data="menu_back"
-                )
-            ],
-        ]
+    # Build text using i18n with prices
+    text = (
+        f"{i18n.get('premium.title', user_language)}\n\n"
+        f"{i18n.get('premium.choose_plan', user_language)}\n\n"
+        f"{i18n.get('premium_plans.basic.emoji', user_language)} <b>{i18n.get('premium_plans.basic.name', user_language)}</b> ({i18n.get('premium_plans.basic.limit', user_language)}) - <b>${basic_price:.2f}/мес</b>\n"
+        f"{i18n.get('premium_plans.basic.feature_1', user_language)}\n"
+        f"{i18n.get('premium_plans.basic.feature_2', user_language)}\n"
+        f"{i18n.get('premium_plans.basic.feature_3', user_language)}\n\n"
+        f"{i18n.get('premium_plans.premium.emoji', user_language)} <b>{i18n.get('premium_plans.premium.name', user_language)}</b> ({i18n.get('premium_plans.premium.limit', user_language)}) - <b>${premium_price:.2f}/мес</b>\n"
+        f"{i18n.get('premium_plans.premium.feature_1', user_language)}\n"
+        f"{i18n.get('premium_plans.premium.feature_2', user_language)}\n"
+        f"{i18n.get('premium_plans.premium.feature_3', user_language)}\n"
+        f"{i18n.get('premium_plans.premium.feature_4', user_language)}\n\n"
+        f"{i18n.get('premium_plans.vip.emoji', user_language)} <b>{i18n.get('premium_plans.vip.name', user_language)}</b> ({i18n.get('premium_plans.vip.limit', user_language)}) - <b>${vip_price:.2f}/мес</b>\n"
+        f"{i18n.get('premium_plans.vip.feature_1', user_language)}\n"
+        f"{i18n.get('premium_plans.vip.feature_2', user_language)}\n"
+        f"{i18n.get('premium_plans.vip.feature_3', user_language)}\n"
+        f"{i18n.get('premium_plans.vip.feature_4', user_language)}\n\n"
+        f"{i18n.get('premium.select_below', user_language)}"
     )
 
-    await safe_edit_or_resend(callback, premium_text, reply_markup=keyboard)
+    await safe_edit_or_resend(callback, text, reply_markup=keyboard)
     await callback.answer()
-    logger.info(f"Premium info shown to user {callback.from_user.id}")
+    logger.info(f"Premium tiers shown to user {callback.from_user.id}")
 
 
 @router.callback_query(F.data == "premium_subscribe")
@@ -430,11 +442,10 @@ async def premium_subscribe_callback(
     callback: CallbackQuery, user_language: str = "ru"
 ):
     """
-    Handle premium subscription attempt
+    Handle premium subscription attempt - redirect to tier selection
     """
-    await callback.answer(
-        i18n.get("premium.subscribe_alert", user_language), show_alert=True
-    )
+    # Redirect to tier selection (same as menu_premium)
+    await menu_premium_callback(callback, user_language)
 
 
 @router.callback_query(F.data == "check_subscription")

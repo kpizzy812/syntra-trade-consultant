@@ -384,6 +384,69 @@ class CoinGeckoService:
         """
         return await self.get_top_coins(vs_currency, limit)
 
+    async def get_global_market_data(self) -> Optional[Dict[str, Any]]:
+        """
+        Get global cryptocurrency market data
+
+        Returns market dominance, total market cap, volume, and other global metrics.
+        Useful for understanding market phases (Bitcoin season vs Alt season).
+
+        Returns:
+            Dict with global market data or None
+
+        Example:
+        {
+            "total_market_cap_usd": 3330090432842,
+            "total_volume_24h_usd": 176924238498,
+            "btc_dominance": 57.13,
+            "eth_dominance": 11.57,
+            "altcoin_dominance": 31.30,  # Calculated: 100 - BTC - ETH
+            "market_cap_change_24h": -2.5,
+            "active_cryptocurrencies": 19425,
+            "markets": 1415,
+            "defi_market_cap": 123456789,
+            "defi_volume_24h": 12345678,
+            "defi_dominance": 3.71
+        }
+        """
+        data = await self._make_request("/global")
+
+        if not data or "data" not in data:
+            return None
+
+        market_data = data["data"]
+
+        # Extract and format key metrics
+        total_market_cap = market_data.get("total_market_cap", {}).get("usd", 0)
+        total_volume = market_data.get("total_volume", {}).get("usd", 0)
+        btc_dominance = market_data.get("market_cap_percentage", {}).get("btc", 0)
+        eth_dominance = market_data.get("market_cap_percentage", {}).get("eth", 0)
+
+        # Calculate altcoin dominance (everything except BTC and ETH)
+        altcoin_dominance = 100 - btc_dominance - eth_dominance
+
+        # Get DeFi data if available
+        defi_market_cap = market_data.get("defi_market_cap", 0)
+        defi_volume = market_data.get("defi_24h_vol", 0)
+        defi_dominance = market_data.get("defi_dominance", 0)
+
+        return {
+            "total_market_cap_usd": total_market_cap,
+            "total_volume_24h_usd": total_volume,
+            "btc_dominance": round(btc_dominance, 2),
+            "eth_dominance": round(eth_dominance, 2),
+            "altcoin_dominance": round(altcoin_dominance, 2),
+            "market_cap_change_24h": market_data.get(
+                "market_cap_change_percentage_24h_usd", 0
+            ),
+            "active_cryptocurrencies": market_data.get("active_cryptocurrencies", 0),
+            "markets": market_data.get("markets", 0),
+            "defi_market_cap": defi_market_cap,
+            "defi_volume_24h": defi_volume,
+            "defi_dominance": defi_dominance,
+            "updated_at": market_data.get("updated_at", 0),
+        }
+
     def format_price_message(self, coin_data: Dict[str, Any], coin_id: str) -> str:
         """
         Format price data into a readable message

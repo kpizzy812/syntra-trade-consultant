@@ -208,6 +208,22 @@ class TechnicalIndicators:
                 logger.warning(f"Error calculating ADX: {e}")
                 indicators["adx"] = None
 
+            # === ATR (Average True Range) - Volatility ===
+            try:
+                atr = ta.volatility.AverageTrueRange(
+                    high=high, low=low, close=close_series, window=14
+                )
+                atr_value = atr.average_true_range().iloc[-1]
+                indicators["atr"] = round(atr_value, 2)
+
+                # ATR as % of price (normalized volatility)
+                atr_percent = (atr_value / close) * 100
+                indicators["atr_percent"] = round(atr_percent, 2)
+                indicators["volatility"] = self._classify_atr(atr_percent)
+            except Exception as e:
+                logger.warning(f"Error calculating ATR: {e}")
+                indicators["atr"] = None
+
             # === Volume indicators ===
             try:
                 # On-Balance Volume (OBV)
@@ -217,15 +233,33 @@ class TechnicalIndicators:
                 obv_value = obv.on_balance_volume().iloc[-1]
                 indicators["obv"] = round(obv_value, 2)
 
+                # VWAP (Volume Weighted Average Price)
+                vwap = ta.volume.VolumeWeightedAveragePrice(
+                    high=high, low=low, close=close_series, volume=volume
+                )
+                vwap_value = vwap.volume_weighted_average_price().iloc[-1]
+                indicators["vwap"] = round(vwap_value, 2)
+
+                # VWAP signal
+                if close > vwap_value:
+                    indicators["vwap_signal"] = "above_vwap_bullish"
+                else:
+                    indicators["vwap_signal"] = "below_vwap_bearish"
+
                 # Volume trend (comparing last 10 candles avg)
                 recent_volume = volume.iloc[-10:].mean()
                 previous_volume = volume.iloc[-20:-10].mean()
                 indicators["volume_trend"] = (
                     "increasing" if recent_volume > previous_volume else "decreasing"
                 )
+
+                # Average volume
+                indicators["avg_volume_10"] = round(recent_volume, 2)
+                indicators["avg_volume_20"] = round(previous_volume, 2)
             except Exception as e:
                 logger.warning(f"Error calculating Volume indicators: {e}")
                 indicators["obv"] = None
+                indicators["vwap"] = None
 
             logger.info(
                 f"Calculated {len([v for v in indicators.values() if v is not None])} indicators successfully"
@@ -303,6 +337,20 @@ class TechnicalIndicators:
             return "moderate"
         else:
             return "strong"
+
+    @staticmethod
+    def _classify_atr(atr_percent: float) -> str:
+        """Classify ATR (volatility) as percentage of price"""
+        if atr_percent < 1:
+            return "very_low"
+        elif atr_percent < 2:
+            return "low"
+        elif atr_percent < 4:
+            return "moderate"
+        elif atr_percent < 6:
+            return "high"
+        else:
+            return "very_high"
 
     def format_indicators_for_prompt(self, indicators: Dict[str, Any]) -> str:
         """

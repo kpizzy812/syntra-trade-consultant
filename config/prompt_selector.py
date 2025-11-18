@@ -11,22 +11,62 @@ from config import prompts_en
 from config import vision_prompts_en
 
 
-def get_system_prompt(language: str = "ru", mode: str = "medium") -> str:
+def get_system_prompt(
+    language: str = "ru", mode: str = "medium", user_message: str = None
+) -> str:
     """
-    Get system prompt in user's language
+    Get system prompt in user's language with dynamic sarcasm mode detection
 
     Args:
         language: User language ('ru' or 'en')
-        mode: Sarcasm mode ('soft', 'medium', 'hard')
+        mode: Sarcasm mode ('soft', 'medium', 'hard', 'disabled')
+              If user_message is provided, mode will be auto-detected
+        user_message: Optional user message for automatic mode detection
 
     Returns:
-        System prompt in appropriate language
+        System prompt in appropriate language with appropriate sarcasm level
     """
+    # Auto-detect sarcasm mode from user message
+    if user_message:
+        if language == "en":
+            mode = prompts_en.detect_sarcasm_level(user_message)
+        else:
+            mode = prompts_ru.detect_sarcasm_level(user_message)
+
+    # Use new compact architecture for both languages
     if language == "en":
-        # For English, we don't have get_system_prompt_with_mode yet, so just return basic prompt
-        return prompts_en.SYNTRA_SYSTEM_PROMPT
+        return prompts_en.get_system_prompt(mode)
     else:
-        return prompts_ru.get_system_prompt_with_mode(mode)
+        return prompts_ru.get_system_prompt(mode)
+
+
+def get_few_shot_examples(
+    language: str = "ru", mode: str = "medium", user_message: str = None
+) -> list:
+    """
+    Get few-shot examples in user's language for injecting into messages[]
+
+    Args:
+        language: User language ('ru' or 'en')
+        mode: Sarcasm mode ('soft', 'medium', 'hard', 'disabled')
+              If user_message is provided, mode will be auto-detected
+        user_message: Optional user message for automatic mode detection
+
+    Returns:
+        List of message dicts for few-shot learning
+    """
+    # Auto-detect sarcasm mode from user message
+    if user_message:
+        if language == "en":
+            mode = prompts_en.detect_sarcasm_level(user_message)
+        else:
+            mode = prompts_ru.detect_sarcasm_level(user_message)
+
+    # Use new architecture with few-shot examples for both languages
+    if language == "en":
+        return prompts_en.get_few_shot_examples(mode)
+    else:
+        return prompts_ru.get_few_shot_examples(mode)
 
 
 def get_vision_analysis_prompt(language: str = "ru") -> str:

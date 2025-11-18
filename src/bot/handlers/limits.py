@@ -40,7 +40,7 @@ async def cmd_limits(
         return
 
     # Get request limit info
-    has_remaining, current_count, limit = await check_request_limit(session, user.id)
+    has_remaining, current_count, limit = await check_request_limit(session, user)
     remaining = limit - current_count
 
     # Calculate reset time (next midnight UTC)

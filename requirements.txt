@@ -15,11 +15,20 @@ tiktoken
 # Crypto APIs
 pycoingecko
 
+# TON Blockchain
+tonutils==0.5.4
+pytoniq-core
+
 # Utilities
 python-dotenv
+python-dateutil
 tenacity
 APScheduler
 loguru
+
+# API Server (для Telegram Mini App)
+fastapi
+uvicorn[standard]
 
 # Data Processing
 pandas
@@ -32,6 +41,7 @@ pytest
 pytest-asyncio
 pytest-cov
 pytest-mock
+pytest-xprocess
 
 # Code Quality
 black

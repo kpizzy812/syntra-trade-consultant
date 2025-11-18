@@ -19,8 +19,10 @@ from aiogram.utils.chat_action import ChatActionSender
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.services.openai_service_extended import openai_service_with_tools
+from src.services.openai_service_two_step import two_step_service
 from src.database.crud import get_or_create_user
 from src.utils.i18n import i18n
+from config.prompts import enhance_response_with_character
 
 
 router = Router(name="chat")
@@ -88,7 +90,8 @@ async def handle_text_message(
         last_update_length = 0
 
         async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-            async for chunk in openai_service_with_tools.stream_completion_with_tools(
+            # Use two-step service for better personality
+            async for chunk in two_step_service.stream_two_step_completion(
                 session=session,
                 user_id=db_user.id,
                 user_message=user_text,
@@ -119,11 +122,14 @@ async def handle_text_message(
 
         # Final update with complete response
         if full_response.strip():
+            # Apply post-processing to enhance character
+            enhanced_response = enhance_response_with_character(full_response)
+
             try:
-                await thinking_msg.edit_text(full_response, parse_mode="Markdown")
+                await thinking_msg.edit_text(enhanced_response, parse_mode="Markdown")
                 logger.info(
                     f"[TOOLS] Response sent to user {user.id} "
-                    f"({len(full_response)} chars)"
+                    f"({len(enhanced_response)} chars, enhanced: {enhanced_response != full_response})"
                 )
             except Exception as e:
                 logger.error(f"Failed to send final response: {e}")

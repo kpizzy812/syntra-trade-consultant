@@ -308,17 +308,138 @@
 
 **Класс:** `BinanceService`
 
-**Назначение:** Дополнительные данные от Binance API
+**Назначение:** Интеграция с Binance API (Spot + Futures)
 
 **Методы:**
 - `get_ticker_24h(symbol: str)` - Получить 24h статистику тикера
 - `get_orderbook_depth(symbol: str)` - Получить глубину стакана заявок
 - `get_klines(symbol: str, interval: str)` - Получить OHLC данные
+- `get_funding_rate(symbol: str, limit: int)` - История ставок финансирования (Futures)
+- `get_latest_funding_rate(symbol: str)` - Текущая ставка финансирования
+- `get_open_interest(symbol: str)` - Open Interest фьючерсов
 
 **Особенности:**
 - Дополняет данные CoinGecko
 - Более точные цены и объемы
 - Real-time данные
+- **Funding Rates** - индикатор настроений трейдеров (положительный = bulls, отрицательный = bears)
+- **Open Interest** - общий объем открытых позиций
+
+---
+
+### coinmetrics_service.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/services/coinmetrics_service.py`
+
+**Класс:** `CoinMetricsService`
+
+**Назначение:** On-chain метрики через CoinMetrics Community API
+
+**Методы:**
+- `get_asset_id(coin_id: str)` - Конвертация CoinGecko ID → CoinMetrics ID
+- `get_asset_metrics(asset: str, metrics: List[str])` - Получить метрики
+- `get_network_health(asset: str)` - Здоровье сети (активные адреса, транзакции)
+- `get_exchange_flows(asset: str)` - Потоки с/на биржи (inflow/outflow)
+
+**Метрики:**
+- `AdrActCnt` - Активные адреса (24h)
+- `TxCnt` - Количество транзакций (24h)
+- `FlowInExNtv` / `FlowOutExNtv` - Потоки с бирж
+- `HashRate` - Хешрейт сети (для PoW)
+
+**Особенности:**
+- **БЕСПЛАТНЫЙ API** (Community endpoint)
+- Rate limit: 10 req/6sec
+- Автоматический retry с exponential backoff
+- Exchange flows sentiment (inflow = bearish, outflow = bullish)
+
+**Поддерживаемые активы:**
+- Bitcoin (btc), Ethereum (eth), Solana (sol), Cardano (ada), XRP (xrp), и др.
+
+---
+
+### cycle_analysis_service.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/services/cycle_analysis_service.py`
+
+**Класс:** `CycleAnalysisService`
+
+**Назначение:** Анализ рыночных циклов криптовалют
+
+**Методы:**
+- `calculate_days_since_genesis(date: datetime)` - Дни с Genesis Block Bitcoin
+- `calculate_rainbow_price(days: int, band: str)` - Расчет цены для Rainbow Chart
+- `get_rainbow_chart_data(current_price: float)` - Полные данные Rainbow Chart
+- `determine_current_band(price: float, bands: dict)` - Определение текущего band
+- `get_sentiment_from_band(band: str)` - Sentiment по band
+- `calculate_pi_cycle_top(prices_df: DataFrame)` - Pi Cycle Top индикатор
+- `calculate_200_week_ma(prices_df: DataFrame)` - 200 Week MA
+- `detect_market_cycle_phase(...)` - Определение фазы цикла
+
+**Rainbow Chart Bands:**
+- `maximum_bubble` 🔴 - Экстремальная жадность (продавать)
+- `sell` 🟠 - Зона продажи
+- `fomo_intensifies` 🟡 - FOMO зона
+- `hodl` 🔵 - Справедливая цена (центральная линия)
+- `buy` 🟢 - Зона покупки
+- `basically_a_fire_sale` 🟢 - Огненная распродажа
+
+**Индикаторы:**
+- **Rainbow Chart** - Логарифмическая регрессия цены BTC (формула Bitbo 2025)
+- **Pi Cycle Top** - MA 111 / MA 350*2 кроссовер (сигнал вершины рынка)
+- **200 Week MA** - Долгосрочный floor цены Bitcoin
+
+**Фазы цикла:**
+- `accumulation` 🟢 - Накопление (хорошее время для покупки)
+- `markup` 🔵 - Рост (бычий рынок)
+- `distribution` 🟡 - Распределение (близко к вершине)
+- `markdown` 🔴 - Падение (медвежий рынок)
+
+**Особенности:**
+- Только для Bitcoin (Rainbow Chart)
+- Основано на исторических данных с 2009 года
+- Высокая точность определения топов/дна рынка
+
+---
+
+### historical_data_service.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/services/historical_data_service.py`
+
+**Класс:** `HistoricalDataService`
+
+**Назначение:** Управление историческими данными цен
+
+**Методы:**
+- `fetch_and_store_historical(session, coin_id: str, days: int)` - Загрузить OHLC
+- `get_price_at_time(session, coin_id: str, days_ago: int)` - Цена X дней назад
+- `get_price_change_since(session, coin_id: str, days_ago: int)` - Изменение цены
+
+**Особенности:**
+- Сохранение исторических данных в PostgreSQL
+- Быстрые запросы для анализа трендов
+- Сравнение текущей цены с прошлой
+
+---
+
+### analytics_aggregator.py
+**Путь:** `/Users/a1/Projects/Syntra Trade Consultant/src/services/analytics_aggregator.py`
+
+**Класс:** `AnalyticsAggregator`
+
+**Назначение:** Сбор всей доступной аналитики в одном месте
+
+**Методы:**
+- `get_full_analytics(coin_id: str)` - Собрать ВСЮ доступную аналитику
+
+**Источники данных:**
+1. CoinGecko - базовые цены и market data
+2. Binance Futures - funding rates, open interest
+3. CoinMetrics - on-chain метрики
+4. Cycle Analysis - Rainbow Chart (для Bitcoin)
+5. Fear & Greed Index
+
+**Особенности:**
+- Параллельный сбор данных (asyncio.gather)
+- Graceful degradation (если один источник недоступен, продолжаем)
+- Форматированный summary для AI
 
 ---
 

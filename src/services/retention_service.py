@@ -287,7 +287,7 @@ class RetentionService:
 
                         # Get user limits
                         _, current_count, limit = await check_request_limit(
-                            session, user.id
+                            session, user
                         )
                         limits_remaining = limit - current_count
 
@@ -326,7 +326,7 @@ class RetentionService:
                     try:
                         # Get user limits
                         _, current_count, limit = await check_request_limit(
-                            session, user.id
+                            session, user
                         )
                         limits_remaining = limit - current_count
 
@@ -460,7 +460,7 @@ class RetentionService:
                     try:
                         # Get user limits
                         _, current_count, limit = await check_request_limit(
-                            session, user.id
+                            session, user
                         )
                         limits_remaining = limit - current_count
 

@@ -1,0 +1,81 @@
+#!/bin/bash
+set -e
+
+echo "🚀 Деплой Syntra Mini App на ai.syntratrade.xyz"
+echo ""
+
+# Проверка что мы в правильной директории
+if [ ! -f "bot.py" ]; then
+    echo "❌ Ошибка: Запусти скрипт из корня проекта Syntra Trade Consultant"
+    exit 1
+fi
+
+# Загрузка на сервер
+echo "📤 Uploading to server syntra:/root/syntraai/..."
+echo ""
+
+# Загрузить основные файлы (исключая node_modules, .git, кеш, билды)
+rsync -avz --progress \
+  --exclude 'node_modules' \
+  --exclude '.git' \
+  --exclude '.next' \
+  --exclude '__pycache__' \
+  --exclude '*.pyc' \
+  --exclude '.venv' \
+  --exclude 'backups' \
+  ./ syntra:/root/syntraai/
+
+# Загрузить .env если существует
+if [ -f ".env" ]; then
+  echo "📦 Uploading .env file..."
+  rsync -avz .env syntra:/root/syntraai/.env
+fi
+
+echo ""
+echo "✅ Files uploaded successfully"
+echo ""
+
+# Билд и рестарт на сервере
+echo "🔄 Building and restarting on server..."
+ssh syntra << 'EOF'
+cd /root/syntraai
+
+# Install/update Python dependencies
+echo "📦 Installing Python dependencies..."
+source .venv/bin/activate
+pip install -r requirements.txt --quiet
+
+# Install Node.js dependencies and build frontend
+echo "📦 Installing Node.js dependencies and building frontend..."
+cd frontend
+npm install --quiet
+npm run build
+cd ..
+
+# Restart services
+echo "🔄 Restarting systemd services..."
+systemctl restart syntraai-api
+systemctl restart syntraai-frontend
+systemctl restart syntraai-bot
+
+# Check status
+echo ""
+echo "📊 Services status:"
+systemctl status syntraai-api --no-pager -l | head -n 3
+systemctl status syntraai-frontend --no-pager -l | head -n 3
+systemctl status syntraai-bot --no-pager -l | head -n 3
+EOF
+
+echo ""
+echo "✅ Deployment complete!"
+echo ""
+echo "🌐 URLs:"
+echo "   Frontend:    https://ai.syntratrade.xyz"
+echo "   API Health:  https://ai.syntratrade.xyz/api/health"
+echo "   Bot:         Telegram /start"
+echo ""
+echo "📝 Check logs:"
+echo "   ssh syntra 'journalctl -u syntraai-api -f'"
+echo "   ssh syntra 'journalctl -u syntraai-frontend -f'"
+echo "   ssh syntra 'journalctl -u syntraai-bot -f'"
+echo ""

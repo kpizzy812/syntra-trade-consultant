@@ -13,7 +13,6 @@ from config.config import REQUEST_LIMIT_PER_DAY
 from src.database.crud import (
     check_request_limit,
     increment_request_count,
-    get_or_create_user,
 )
 from src.utils.i18n import i18n
 
@@ -61,29 +60,24 @@ class RequestLimitMiddleware(BaseMiddleware):
             logger.debug(f"Skipping limit check for admin user")
             return await handler(event, data)
 
-        # Get user and session
-        user = event.from_user
+        # Get user and session from data (provided by DatabaseMiddleware)
         session: AsyncSession = data.get("session")
+        db_user = data.get("user")
 
-        if not user or not session:
+        if not session or not db_user:
+            # No session or user - skip limit check
             return await handler(event, data)
 
-        # Ensure user exists in database before checking limits
-        db_user, _ = await get_or_create_user(
-            session,
-            telegram_id=user.id,
-            username=user.username,
-            first_name=user.first_name,
-            last_name=user.last_name,
-        )
+        # Refresh user to load subscription relationship
+        await session.refresh(db_user, ["subscription"])
 
-        # Check if user has requests left
+        # Check if user has requests left (now based on subscription tier)
         has_requests, current_count, limit = await check_request_limit(
-            session, db_user.id
+            session, db_user  # Pass User object instead of user_id
         )
 
         if not has_requests:
-            logger.info(f"User {user.id} (@{user.username}) exceeded daily limit")
+            logger.info(f"User {db_user.telegram_id} (@{db_user.username or 'unknown'}) exceeded daily limit")
 
             # Get user language from data (set by LanguageMiddleware)
             user_lang = data.get("user_language", "ru")
@@ -102,6 +96,6 @@ class RequestLimitMiddleware(BaseMiddleware):
         # Add remaining requests to handler data
         data["requests_remaining"] = remaining
 
-        logger.debug(f"User {user.id} has {remaining} requests remaining today")
+        logger.debug(f"User {db_user.telegram_id} has {remaining} requests remaining today")
 
         return await handler(event, data)

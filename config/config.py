@@ -34,6 +34,9 @@ OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 # CoinGecko API
 COINGECKO_API_KEY: str = os.getenv("COINGECKO_API_KEY", "")
 
+# CoinMarketCap API
+COINMARKETCAP_API_KEY: str = os.getenv("COINMARKETCAP_API_KEY", "")
+
 # CryptoPanic API
 CRYPTOPANIC_TOKEN: str = os.getenv("CRYPTOPANIC_TOKEN", "")
 
@@ -53,11 +56,21 @@ SKIP_SUBSCRIPTION_CHECK: bool = (
 ENVIRONMENT: str = os.getenv("ENVIRONMENT", "development")
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
+# Mini App URL
+WEBAPP_URL: str = os.getenv("WEBAPP_URL", "http://localhost:3000")
+
 # Optional: Redis
 REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 # Optional: Sentry
 SENTRY_DSN: str = os.getenv("SENTRY_DSN", "")
+
+# OpenAI Optimizations
+# Prompt Caching: OpenAI автоматически кеширует system prompts >1024 токенов
+# Экономия ~50% на input tokens (наш system prompt: RU=1466, EN=1114 токенов)
+ENABLE_PROMPT_CACHING: bool = (
+    os.getenv("ENABLE_PROMPT_CACHING", "true").lower() == "true"
+)
 
 
 # Validation
@@ -108,11 +121,15 @@ class ModelConfig:
     MODEL_ROUTING_THRESHOLD = 1500
 
     # Token limits
-    MAX_TOKENS_RESPONSE = 1000
-    MAX_TOKENS_VISION = 1000
+    # Raised to 1500 to allow full analysis + personality without cutoff
+    # 1000 was cutting off catchphrases and sarcasm at the end
+    MAX_TOKENS_RESPONSE = 1500
+    MAX_TOKENS_VISION = 1500
 
     # Temperature
-    DEFAULT_TEMPERATURE = 0.7
+    # Raised to 0.85 for better personality and creative sarcasm
+    # 0.7 was too conservative for Syntra's character
+    DEFAULT_TEMPERATURE = 0.85
 
     # Vision settings
     VISION_DETAIL_LEVEL = "high"  # 'low', 'high', or 'auto'

@@ -159,3 +159,7 @@ Temporary Items
 bot.log
 error.log
 access.log
+
+# OpenAI Batch API files
+data/batches/*.jsonl
+data/batches/*.json

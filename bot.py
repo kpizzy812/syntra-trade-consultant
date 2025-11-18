@@ -18,9 +18,10 @@ from config.config import BOT_TOKEN, validate_config
 from config.logging import setup_logging
 from config.sentry import init_sentry
 from src.database.engine import init_db, dispose_engine
-from src.bot.handlers import start, help_cmd, chat, vision, crypto, menu, admin, limits
+from src.bot.handlers import start, help_cmd, chat, vision, crypto, menu, admin, limits, premium, referral
 from src.bot.middleware.database import DatabaseMiddleware
 from src.bot.middleware.subscription import SubscriptionMiddleware
+from src.bot.middleware.subscription_checker import SubscriptionCheckerMiddleware
 from src.bot.middleware.request_limit import RequestLimitMiddleware
 from src.bot.middleware.logging import LoggingMiddleware
 from src.bot.middleware.admin import AdminMiddleware
@@ -29,9 +30,13 @@ from src.services.retention_service import (
     start_retention_service,
     stop_retention_service,
 )
+from src.tasks.ton_scanner import start_ton_scanner
 
 
 logger = logging.getLogger(__name__)
+
+# Background tasks references
+_ton_scanner_task = None
 
 
 async def setup_bot_commands(bot: Bot) -> None:
@@ -53,6 +58,8 @@ async def setup_bot_commands(bot: Bot) -> None:
 
 async def on_startup(bot: Bot, **kwargs) -> None:
     """Actions to perform on bot startup"""
+    global _ton_scanner_task
+
     logger.info("Starting Syntra Trade Consultant Bot...")
 
     # Initialize database
@@ -66,6 +73,10 @@ async def on_startup(bot: Bot, **kwargs) -> None:
     await start_retention_service(bot)
     logger.info("Retention service started")
 
+    # Start TON blockchain scanner
+    _ton_scanner_task = asyncio.create_task(start_ton_scanner())
+    logger.info("TON blockchain scanner started")
+
     # Get bot info
     bot_info = await bot.get_me()
     logger.info(f"Bot started: @{bot_info.username} (ID: {bot_info.id})")
@@ -73,11 +84,22 @@ async def on_startup(bot: Bot, **kwargs) -> None:
 
 async def on_shutdown(bot: Bot, **kwargs) -> None:
     """Actions to perform on bot shutdown"""
+    global _ton_scanner_task
+
     logger.info("Shutting down Syntra Trade Consultant Bot...")
 
     # Stop retention service
     await stop_retention_service()
     logger.info("Retention service stopped")
+
+    # Stop TON scanner
+    if _ton_scanner_task:
+        _ton_scanner_task.cancel()
+        try:
+            await _ton_scanner_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("TON scanner stopped")
 
     # Close database connections
     await dispose_engine()
@@ -125,14 +147,17 @@ async def main() -> None:
     # 1. Logging middleware (first to log everything)
     dp.message.middleware(LoggingMiddleware())
     dp.callback_query.middleware(LoggingMiddleware())
+    dp.pre_checkout_query.middleware(LoggingMiddleware())
 
     # 2. Database middleware (provides session to handlers)
     dp.message.middleware(DatabaseMiddleware())
     dp.callback_query.middleware(DatabaseMiddleware())
+    dp.pre_checkout_query.middleware(DatabaseMiddleware())
 
-    # 3. Language middleware (detects and sets user language)
+    # 3. Language middleware (detects user language and provides user object)
     dp.message.middleware(LanguageMiddleware())
     dp.callback_query.middleware(LanguageMiddleware())
+    dp.pre_checkout_query.middleware(LanguageMiddleware())
 
     # 4. Admin middleware (checks admin rights for admin commands)
     dp.message.middleware(AdminMiddleware())
@@ -140,13 +165,19 @@ async def main() -> None:
 
     # 5. Subscription middleware (checks channel subscription)
     dp.message.middleware(SubscriptionMiddleware())
+    dp.callback_query.middleware(SubscriptionMiddleware())
 
-    # 6. Request limit middleware (checks daily limits)
+    # 6. Premium subscription checker (checks expiry, auto-downgrades)
+    dp.message.middleware(SubscriptionCheckerMiddleware())
+
+    # 7. Request limit middleware (checks daily limits based on tier)
     dp.message.middleware(RequestLimitMiddleware())
 
     # Register routers (order matters - specific routes first, general last)
     dp.include_router(start.router)
     dp.include_router(menu.router)  # Menu callback handlers
+    dp.include_router(premium.router)  # Premium subscription handlers
+    dp.include_router(referral.router)  # Referral system handlers
     dp.include_router(admin.router)  # Admin panel (before help to catch admin commands)
     dp.include_router(help_cmd.router)
     dp.include_router(limits.router)  # Limits command (/limits)

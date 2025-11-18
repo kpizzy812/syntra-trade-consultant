@@ -64,7 +64,7 @@ class OpenAIServiceWithTools(OpenAIService):
             Text chunks from AI response
         """
         try:
-            # Build context messages
+            # Build context messages with dynamic sarcasm detection
             messages = await self.get_context_messages(
                 session, user_id, user_message, user_language
             )

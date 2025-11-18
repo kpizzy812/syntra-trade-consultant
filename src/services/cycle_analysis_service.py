@@ -34,8 +34,8 @@ class CycleAnalysisService:
     - Bull/bear market identification
     """
 
-    # Bitcoin genesis block date
-    BITCOIN_GENESIS = datetime(2009, 1, 9)
+    # Bitcoin genesis block date (UTC timezone-aware)
+    BITCOIN_GENESIS = datetime(2009, 1, 9, tzinfo=UTC)
 
     # Rainbow Chart parameters (Bitbo formula 2025)
     RAINBOW_A = 2.6521

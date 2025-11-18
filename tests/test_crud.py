@@ -81,14 +81,14 @@ async def test_request_limits(db_session):
     user = await create_user(session=db_session, telegram_id=123456789)
 
     # Check initial limits
-    has_remaining, count, limit = await check_request_limit(db_session, user.id)
+    has_remaining, count, limit = await check_request_limit(db_session, user)
     assert has_remaining is True
     assert count == 0
     assert limit == 5  # default limit
 
     # Increment count
     await increment_request_count(db_session, user.id)
-    has_remaining, count, limit = await check_request_limit(db_session, user.id)
+    has_remaining, count, limit = await check_request_limit(db_session, user)
     assert count == 1
     assert has_remaining is True
 
@@ -96,12 +96,12 @@ async def test_request_limits(db_session):
     for _ in range(4):
         await increment_request_count(db_session, user.id)
 
-    has_remaining, count, limit = await check_request_limit(db_session, user.id)
+    has_remaining, count, limit = await check_request_limit(db_session, user)
     assert count == 5
     assert has_remaining is False
 
     # Reset limits
     await reset_request_limit(db_session, user.id)
-    has_remaining, count, limit = await check_request_limit(db_session, user.id)
+    has_remaining, count, limit = await check_request_limit(db_session, user)
     assert count == 0
     assert has_remaining is True

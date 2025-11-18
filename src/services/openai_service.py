@@ -29,6 +29,7 @@ from tenacity import (
 from config.config import OPENAI_API_KEY, ModelConfig, Pricing
 from config.prompt_selector import (
     get_system_prompt,
+    get_few_shot_examples,
     get_vision_analysis_prompt,
     get_enhanced_vision_prompt,
     get_coin_detection_prompt,
@@ -135,6 +136,16 @@ class OpenAIService:
         """
         Build context messages from chat history
 
+        OpenAI Cached Prompts Optimization:
+        - System prompt is placed FIRST (required for caching)
+        - System prompt is compact (RU: ~1500 chars, EN: ~1100 chars)
+        - Few-shot examples are added AFTER system prompt for tone training
+        - OpenAI automatically caches system prompt, saving ~50% on input tokens
+        - Cache TTL: 5-10 minutes (OpenAI manages automatically)
+
+        Message Structure:
+        [system_prompt] + [few_shot_examples] + [history] + [user_message]
+
         Args:
             session: Database session
             user_id: User's database ID (NOT Telegram ID)
@@ -145,9 +156,18 @@ class OpenAIService:
         Returns:
             List of messages for OpenAI API
         """
+        # System prompt MUST be first for automatic caching
+        # Auto-detect sarcasm mode from current message
         messages: List[ChatCompletionMessageParam] = [
-            {"role": "system", "content": get_system_prompt(user_language)}
+            {
+                "role": "system",
+                "content": get_system_prompt(user_language, user_message=current_message),
+            }
         ]
+
+        # Add few-shot examples for tone training (AFTER system, BEFORE history)
+        few_shot = get_few_shot_examples(user_language, user_message=current_message)
+        messages.extend(few_shot)
 
         # Get recent chat history
         history = await get_chat_history(session, user_id, limit=max_history)
@@ -596,8 +616,9 @@ class OpenAIService:
             )
 
             # Build messages with system prompt for Syntra persona
+            # For vision, use soft sarcasm mode by default (focus on analysis)
             messages: List[Dict[str, Any]] = [
-                {"role": "system", "content": get_system_prompt(user_language)},
+                {"role": "system", "content": get_system_prompt(user_language, mode="soft")},
                 {
                     "role": "user",
                     "content": [
@@ -745,8 +766,9 @@ class OpenAIService:
             )
 
             # Build messages with system prompt for Syntra persona
+            # For vision, use soft sarcasm mode by default (focus on analysis)
             messages: List[Dict[str, Any]] = [
-                {"role": "system", "content": get_system_prompt(user_language)},
+                {"role": "system", "content": get_system_prompt(user_language, mode="soft")},
                 {
                     "role": "user",
                     "content": [

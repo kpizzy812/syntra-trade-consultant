@@ -14,7 +14,7 @@ Analytics Aggregator Service
 
 import logging
 from typing import Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, UTC
 
 from src.services.coingecko_service import CoinGeckoService
 from src.services.binance_service import BinanceService
@@ -69,7 +69,7 @@ class AnalyticsAggregator:
 
         result = {
             "coin_id": coin_id,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         # 1. Базовая рыночная информация (CoinGecko)

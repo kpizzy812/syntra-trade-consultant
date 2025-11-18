@@ -4,9 +4,16 @@ Binance API Service for cryptocurrency candlestick (OHLCV) data
 
 Provides klines (candlestick) data for technical analysis indicators calculation.
 Uses Binance public API (no authentication required).
+
+Optional: With API keys, provides liquidation data and advanced features.
 """
 import logging
-from typing import Optional, List, Dict, Any
+import os
+import hmac
+import hashlib
+import time
+from typing import Optional, Dict, Any
+from urllib.parse import urlencode
 import aiohttp
 import pandas as pd
 
@@ -38,6 +45,7 @@ class BinanceService:
 
     BASE_URL = "https://api.binance.com/api/v3"
     FUTURES_URL = "https://fapi.binance.com/fapi/v1"
+    FUTURES_URL_DATA = "https://fapi.binance.com/futures/data"
 
     # Common trading pairs on Binance
     COMMON_SYMBOLS = {
@@ -56,6 +64,7 @@ class BinanceService:
         "uniswap": "UNIUSDT",
         "stellar": "XLMUSDT",
         "algorand": "ALGOUSDT",
+        "arbitrum": "ARBUSDT",
     }
 
     # Timeframe intervals
@@ -79,7 +88,16 @@ class BinanceService:
 
     def __init__(self):
         """Initialize Binance service"""
-        pass
+        # Optional API credentials for authenticated endpoints (liquidations, etc.)
+        self.api_key = os.getenv("BINANCE_API_KEY", "")
+        self.api_secret = os.getenv("BINANCE_API_SECRET", "")
+
+        # Check if credentials are available
+        self.has_credentials = bool(self.api_key and self.api_secret)
+        if self.has_credentials:
+            logger.info("Binance API credentials loaded (authenticated mode)")
+        else:
+            logger.info("Binance API running in public mode (no credentials)")
 
     def get_symbol(self, coin_id: str) -> Optional[str]:
         """
@@ -98,6 +116,24 @@ class BinanceService:
         # Try uppercase + USDT
         symbol = f"{coin_id.upper()}USDT"
         return symbol
+
+    def _generate_signature(self, params: Dict[str, Any]) -> str:
+        """
+        Generate HMAC SHA256 signature for authenticated Binance API requests
+
+        Args:
+            params: Request parameters
+
+        Returns:
+            Hex signature string
+        """
+        query_string = urlencode(params)
+        signature = hmac.new(
+            self.api_secret.encode("utf-8"),
+            query_string.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return signature
 
     @retry(
         retry=retry_if_exception_type((aiohttp.ClientError, TimeoutError)),
@@ -340,9 +376,7 @@ class BinanceService:
                         df = pd.DataFrame(data)
 
                         # Convert types
-                        df["fundingTime"] = pd.to_datetime(
-                            df["fundingTime"], unit="ms"
-                        )
+                        df["fundingTime"] = pd.to_datetime(df["fundingTime"], unit="ms")
                         df["fundingRate"] = df["fundingRate"].astype(float)
 
                         # Rename columns
@@ -365,9 +399,7 @@ class BinanceService:
                         )
                         return None
                     else:
-                        logger.error(
-                            f"Binance Futures API error: {response.status}"
-                        )
+                        logger.error(f"Binance Futures API error: {response.status}")
                         return None
 
         except Exception as e:
@@ -465,9 +497,7 @@ class BinanceService:
                         }
 
                     else:
-                        logger.error(
-                            f"Binance Futures API error: {response.status}"
-                        )
+                        logger.error(f"Binance Futures API error: {response.status}")
                         return None
 
         except Exception as e:
@@ -516,3 +546,252 @@ class BinanceService:
                 text += "⚠️ High negative rate may indicate overheated shorts\n"
 
         return text
+
+    async def get_long_short_ratio(
+        self, symbol: str, period: str = "5m", limit: int = 30
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get Long/Short Account Ratio from Binance Futures
+
+        Shows the ratio of accounts with long vs short positions.
+        Useful for understanding trader sentiment and potential liquidation zones.
+
+        Args:
+            symbol: Trading pair (e.g., 'BTCUSDT')
+            period: Time period ('5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d')
+            limit: Number of data points (default 30, max 500)
+
+        Returns:
+            Dict with long/short ratio data or None
+
+        Example:
+        {
+            "symbol": "BTCUSDT",
+            "long_account": 0.76,
+            "short_account": 0.24,
+            "long_short_ratio": 3.17,
+            "timestamp": "2024-01-01 12:00:00",
+            "sentiment": "bullish"
+        }
+        """
+        try:
+            params = {"symbol": symbol, "period": period, "limit": limit}
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.FUTURES_URL_DATA}/topLongShortAccountRatio", params=params
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        if not data:
+                            logger.warning(f"No long/short ratio data for {symbol}")
+                            return None
+
+                        # Get latest data point
+                        latest = data[-1]
+                        long_account = float(latest["longAccount"])
+                        short_account = float(latest["shortAccount"])
+
+                        # Calculate ratio
+                        ratio = long_account / short_account if short_account > 0 else 0
+
+                        # Determine sentiment
+                        if ratio > 2.0:
+                            sentiment = "very_bullish"
+                        elif ratio > 1.2:
+                            sentiment = "bullish"
+                        elif ratio < 0.5:
+                            sentiment = "very_bearish"
+                        elif ratio < 0.8:
+                            sentiment = "bearish"
+                        else:
+                            sentiment = "neutral"
+
+                        return {
+                            "symbol": symbol,
+                            "long_account": round(long_account, 4),
+                            "short_account": round(short_account, 4),
+                            "long_short_ratio": round(ratio, 2),
+                            "timestamp": pd.to_datetime(
+                                latest["timestamp"], unit="ms"
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                            "sentiment": sentiment,
+                        }
+
+                    else:
+                        logger.error(f"Binance Futures API error: {response.status}")
+                        return None
+
+        except Exception as e:
+            logger.exception(f"Error fetching long/short ratio for {symbol}: {e}")
+            return None
+
+    async def get_liquidation_history(
+        self,
+        symbol: str,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+        limit: int = 100,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get liquidation history from Binance Futures (REQUIRES API KEY)
+
+        This endpoint returns forced liquidation orders for a symbol.
+        Useful for analyzing liquidation events and volumes.
+
+        Args:
+            symbol: Trading pair (e.g., 'BTCUSDT')
+            start_time: Start timestamp in milliseconds (optional)
+            end_time: End timestamp in milliseconds (optional)
+            limit: Number of records (max 1000, default 100)
+
+        Returns:
+            Dict with liquidation data and aggregated statistics or None
+
+        Example:
+        {
+            "symbol": "BTCUSDT",
+            "liquidations": [
+                {
+                    "price": 95000.0,
+                    "quantity": 1.5,
+                    "value_usd": 142500.0,
+                    "side": "SELL",  # SELL = long liquidation, BUY = short liquidation
+                    "time": "2024-01-01 12:00:00"
+                },
+                ...
+            ],
+            "total_liquidations": 50,
+            "total_volume_usd": 5000000.0,
+            "long_liquidations_usd": 3000000.0,
+            "short_liquidations_usd": 2000000.0,
+            "period_start": "2024-01-01 10:00:00",
+            "period_end": "2024-01-01 12:00:00"
+        }
+
+        Note:
+        - Requires BINANCE_API_KEY and BINANCE_API_SECRET in .env
+        - Only READ permission is needed
+        - This is historical data (not real-time)
+        """
+        if not self.has_credentials:
+            logger.warning(
+                "Binance API credentials not configured. "
+                "Cannot fetch liquidation history. "
+                "Set BINANCE_API_KEY and BINANCE_API_SECRET in .env"
+            )
+            return None
+
+        try:
+            # Default time range: last 24 hours
+            if not end_time:
+                end_time = int(time.time() * 1000)
+            if not start_time:
+                start_time = end_time - (24 * 60 * 60 * 1000)  # 24 hours ago
+
+            # Prepare request parameters
+            params = {
+                "symbol": symbol,
+                "startTime": start_time,
+                "endTime": end_time,
+                "limit": min(limit, 1000),  # Max 1000
+                "timestamp": int(time.time() * 1000),
+            }
+
+            # Generate signature
+            params["signature"] = self._generate_signature(params)
+
+            # Prepare headers
+            headers = {"X-MBX-APIKEY": self.api_key}
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.FUTURES_URL}/allForceOrders",
+                    params=params,
+                    headers=headers,
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        if not data:
+                            logger.info(
+                                f"No liquidations found for {symbol} in specified time range"
+                            )
+                            return {
+                                "symbol": symbol,
+                                "liquidations": [],
+                                "total_liquidations": 0,
+                                "total_volume_usd": 0.0,
+                                "long_liquidations_usd": 0.0,
+                                "short_liquidations_usd": 0.0,
+                            }
+
+                        # Process liquidation data
+                        liquidations = []
+                        total_volume = 0.0
+                        long_liquidations = 0.0
+                        short_liquidations = 0.0
+
+                        for liq in data:
+                            price = float(liq["price"])
+                            qty = float(liq["origQty"])
+                            value_usd = price * qty
+                            side = liq["side"]
+
+                            liquidations.append(
+                                {
+                                    "price": price,
+                                    "quantity": qty,
+                                    "value_usd": round(value_usd, 2),
+                                    "side": side,
+                                    "time": pd.to_datetime(
+                                        liq["time"], unit="ms"
+                                    ).strftime("%Y-%m-%d %H:%M:%S"),
+                                }
+                            )
+
+                            total_volume += value_usd
+
+                            # SELL side = long liquidation (forced sell)
+                            # BUY side = short liquidation (forced buy)
+                            if side == "SELL":
+                                long_liquidations += value_usd
+                            else:
+                                short_liquidations += value_usd
+
+                        return {
+                            "symbol": symbol,
+                            "liquidations": liquidations,
+                            "total_liquidations": len(liquidations),
+                            "total_volume_usd": round(total_volume, 2),
+                            "long_liquidations_usd": round(long_liquidations, 2),
+                            "short_liquidations_usd": round(short_liquidations, 2),
+                            "period_start": pd.to_datetime(
+                                start_time, unit="ms"
+                            ).strftime("%Y-%m-%d %H:%M:%S"),
+                            "period_end": pd.to_datetime(end_time, unit="ms").strftime(
+                                "%Y-%m-%d %H:%M:%S"
+                            ),
+                        }
+
+                    elif response.status == 401:
+                        logger.error(
+                            "Binance API authentication failed. "
+                            "Check your API keys in .env"
+                        )
+                        return None
+
+                    elif response.status == 400:
+                        error_data = await response.json()
+                        error_msg = error_data.get("msg", "Unknown error")
+                        logger.error(f"Binance API error for {symbol}: {error_msg}")
+                        return None
+
+                    else:
+                        logger.error(f"Binance API error: {response.status}")
+                        return None
+
+        except Exception as e:
+            logger.exception(f"Error fetching liquidation history for {symbol}: {e}")
+            return None
