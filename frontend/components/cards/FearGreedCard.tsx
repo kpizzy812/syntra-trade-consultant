@@ -71,74 +71,74 @@ export default function FearGreedCard() {
     return '🤑';
   };
 
-  const getGradient = (value: number) => {
-    if (value < 25) return 'from-red-500/20 to-red-700/20';
-    if (value < 46) return 'from-orange-500/20 to-orange-700/20';
-    if (value < 55) return 'from-yellow-500/20 to-yellow-700/20';
-    if (value < 75) return 'from-green-500/20 to-green-700/20';
-    return 'from-emerald-500/20 to-emerald-700/20';
-  };
-
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="glassmorphism-card rounded-2xl p-6"
+      className="glassmorphism-card rounded-2xl p-4"
     >
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-white font-bold text-lg">Fear & Greed Index</h2>
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="text-white font-semibold text-sm">Fear & Greed Index</h2>
         <span className="text-gray-400 text-xs">Now</span>
       </div>
 
-      <div className={`bg-gradient-to-br ${getGradient(data.value)} rounded-xl p-6 border border-white/10`}>
-        <div className="flex items-center justify-between mb-4">
-          <div className="text-6xl">{getEmoji(data.value)}</div>
-          <div className="text-right">
-            <div className={`text-5xl font-bold ${getColor(data.value)}`}>
-              {data.value}
-            </div>
-            <div className="text-gray-400 text-sm mt-1">/ 100</div>
+      {/* Компактный полукруглый индикатор */}
+      <div className="relative flex items-center justify-center">
+        {/* SVG полукруг */}
+        <svg
+          width="200"
+          height="110"
+          viewBox="0 0 200 110"
+          className="relative"
+        >
+          {/* Фоновая дуга */}
+          <path
+            d="M 20 100 A 80 80 0 0 1 180 100"
+            fill="none"
+            stroke="rgba(255, 255, 255, 0.1)"
+            strokeWidth="12"
+            strokeLinecap="round"
+          />
+
+          {/* Цветная дуга прогресса */}
+          <motion.path
+            d="M 20 100 A 80 80 0 0 1 180 100"
+            fill="none"
+            stroke={`url(#gradient-${data.value})`}
+            strokeWidth="12"
+            strokeLinecap="round"
+            strokeDasharray="251.2"
+            initial={{ strokeDashoffset: 251.2 }}
+            animate={{ strokeDashoffset: 251.2 - (251.2 * data.value) / 100 }}
+            transition={{ duration: 1.5, ease: 'easeOut' }}
+          />
+
+          {/* Градиенты для разных значений */}
+          <defs>
+            <linearGradient id={`gradient-${data.value}`} x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor={data.value < 25 ? '#ef4444' : data.value < 46 ? '#f97316' : data.value < 55 ? '#eab308' : data.value < 75 ? '#22c55e' : '#10b981'} />
+              <stop offset="100%" stopColor={data.value < 25 ? '#dc2626' : data.value < 46 ? '#ea580c' : data.value < 55 ? '#ca8a04' : data.value < 75 ? '#16a34a' : '#059669'} />
+            </linearGradient>
+          </defs>
+        </svg>
+
+        {/* Центральное значение */}
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/4 text-center">
+          <div className="text-3xl mb-1">{getEmoji(data.value)}</div>
+          <div className={`text-3xl font-bold ${getColor(data.value)}`}>
+            {data.value}
           </div>
-        </div>
-
-        <div className="mb-3">
-          <div className="w-full h-2 bg-gray-800/50 rounded-full overflow-hidden">
-            <motion.div
-              initial={{ width: 0 }}
-              animate={{ width: `${data.value}%` }}
-              transition={{ duration: 1, ease: 'easeOut' }}
-              className={`h-full bg-gradient-to-r ${
-                data.value < 25
-                  ? 'from-red-500 to-red-600'
-                  : data.value < 46
-                  ? 'from-orange-500 to-orange-600'
-                  : data.value < 55
-                  ? 'from-yellow-500 to-yellow-600'
-                  : data.value < 75
-                  ? 'from-green-500 to-green-600'
-                  : 'from-emerald-500 to-emerald-600'
-              }`}
-            />
-          </div>
-        </div>
-
-        <div className="flex items-center justify-between text-xs text-gray-400">
-          <span>Extreme Fear</span>
-          <span>Neutral</span>
-          <span>Extreme Greed</span>
-        </div>
-
-        <div className="mt-4 text-center">
-          <span className={`font-bold text-lg ${getColor(data.value)}`}>
+          <div className={`text-xs font-medium mt-1 ${getColor(data.value)}`}>
             {data.value_classification}
-          </span>
+          </div>
         </div>
+      </div>
 
-        <div className="mt-3 text-center text-gray-400 text-xs">
-          {data.value < 50
-            ? 'Good time to buy? Market is fearful 🤔'
-            : 'Market is greedy. Be cautious! 🚨'}
-        </div>
+      {/* Компактные подписи */}
+      <div className="flex items-center justify-between text-[10px] text-gray-500 mt-1 px-2">
+        <span>Fear</span>
+        <span className="text-gray-600">Neutral</span>
+        <span>Greed</span>
       </div>
     </motion.div>
   );

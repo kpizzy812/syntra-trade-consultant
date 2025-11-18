@@ -15,7 +15,6 @@ from typing import Dict, Any, List
 from datetime import datetime
 
 import pandas as pd
-import numpy as np
 
 from src.services.coingecko_service import CoinGeckoService
 from src.services.cryptopanic_service import CryptoPanicService
@@ -44,12 +43,6 @@ def convert_to_serializable(obj: Any) -> Any:
     """
     if isinstance(obj, (pd.Timestamp, datetime)):
         return obj.isoformat()
-    elif isinstance(obj, (np.bool_, bool)):
-        return bool(obj)
-    elif isinstance(obj, (np.integer, np.int64, np.int32)):
-        return int(obj)
-    elif isinstance(obj, (np.floating, np.float64, np.float32)):
-        return float(obj)
     elif isinstance(obj, dict):
         return {key: convert_to_serializable(value) for key, value in obj.items()}
     elif isinstance(obj, list):

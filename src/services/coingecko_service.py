@@ -4,8 +4,10 @@ CoinGecko API Service for cryptocurrency data
 """
 import time
 import logging
+import asyncio
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
+from collections import deque
 
 import aiohttp
 from loguru import logger
@@ -24,6 +26,64 @@ from config.config import COINGECKO_API_KEY, CACHE_TTL_COINGECKO
 std_logger = logging.getLogger(__name__)
 
 
+class RateLimiter:
+    """
+    Rate limiter using sliding window algorithm
+    Tracks request timestamps to enforce rate limits
+    """
+
+    def __init__(self, max_calls: int, time_window: int = 60):
+        """
+        Initialize rate limiter
+
+        Args:
+            max_calls: Maximum number of calls allowed in time window
+            time_window: Time window in seconds (default: 60s)
+        """
+        self.max_calls = max_calls
+        self.time_window = time_window
+        self.calls: deque = deque()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        """
+        Wait until a request slot is available
+        Removes old timestamps outside the time window
+        """
+        async with self._lock:
+            now = time.time()
+
+            # Remove timestamps outside time window
+            while self.calls and self.calls[0] < now - self.time_window:
+                self.calls.popleft()
+
+            # If at limit, wait until oldest call expires
+            if len(self.calls) >= self.max_calls:
+                sleep_time = self.calls[0] + self.time_window - now
+                if sleep_time > 0:
+                    logger.warning(
+                        f"Rate limit reached ({len(self.calls)}/{self.max_calls}), "
+                        f"waiting {sleep_time:.1f}s"
+                    )
+                    await asyncio.sleep(sleep_time)
+                    # Recursively try again
+                    return await self.acquire()
+
+            # Record this call
+            self.calls.append(now)
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get current rate limiter statistics"""
+        now = time.time()
+        recent_calls = sum(1 for t in self.calls if t > now - self.time_window)
+        return {
+            "recent_calls": recent_calls,
+            "max_calls": self.max_calls,
+            "time_window": self.time_window,
+            "usage_percent": (recent_calls / self.max_calls * 100) if self.max_calls > 0 else 0
+        }
+
+
 class CoinGeckoService:
     """
     Service for fetching cryptocurrency data from CoinGecko API
@@ -33,95 +93,192 @@ class CoinGeckoService:
     - Market data (volume, market cap, etc.)
     - Historical data
     - Top cryptocurrencies by market cap
-    - Simple in-memory caching with TTL
+    - Advanced caching with differentiated TTL
+    - Rate limiting to prevent 429 errors
+    - Automatic retry with exponential backoff
     """
 
+    # Demo API (бесплатный) и Public API используют один URL
     BASE_URL = "https://api.coingecko.com/api/v3"
 
-    def __init__(self):
-        """Initialize CoinGecko service with caching"""
+    # Pro API использует другой URL (если когда-нибудь понадобится)
+    # BASE_URL_PRO = "https://pro-api.coingecko.com/api/v3"
+
+    # Differentiated cache TTL for different data types (in seconds)
+    CACHE_TTL = {
+        "price": 90,           # Price data: 90s (changes frequently)
+        "coin_data": 300,      # Detailed coin data: 5min (relatively stable)
+        "market_chart": 600,   # Historical data: 10min (doesn't change)
+        "trending": 300,       # Trending coins: 5min
+        "global": 300,         # Global market data: 5min
+        "search": 600,         # Search results: 10min (rarely changes)
+        "default": 180,        # Default: 3min
+    }
+
+    def __init__(self, rate_limit: int = 25):
+        """
+        Initialize CoinGecko service with caching and rate limiting
+
+        Args:
+            rate_limit: Max API calls per minute (default: 25 for Demo API with free key)
+                       Set to 10 for Public API without key
+        """
         self.api_key = COINGECKO_API_KEY
-        self.cache: Dict[str, tuple[Any, float]] = {}
-        self.cache_ttl = CACHE_TTL_COINGECKO
+        self.cache: Dict[str, tuple[Any, float, str]] = {}  # (data, timestamp, cache_type)
+
+        # Initialize rate limiter
+        # Default 25/min for Demo API (30 calls/min limit, буфер 5 запросов)
+        # Для Public API без ключа установите 10/min
+        self.rate_limiter = RateLimiter(max_calls=rate_limit, time_window=60)
+
+        logger.info(f"CoinGecko service initialized with {rate_limit} calls/min rate limit")
 
     def _get_cache_key(self, endpoint: str, params: Dict) -> str:
         """Generate cache key from endpoint and params"""
         param_str = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
         return f"{endpoint}?{param_str}"
 
-    def _get_cached(self, cache_key: str) -> Optional[Any]:
+    def _get_cache_type(self, endpoint: str) -> str:
+        """Determine cache type based on endpoint"""
+        if "/simple/price" in endpoint:
+            return "price"
+        elif "/coins/" in endpoint and "/market_chart" in endpoint:
+            return "market_chart"
+        elif "/coins/" in endpoint:
+            return "coin_data"
+        elif "/search/trending" in endpoint:
+            return "trending"
+        elif "/global" in endpoint:
+            return "global"
+        elif "/search" in endpoint:
+            return "search"
+        else:
+            return "default"
+
+    def _get_cached(self, cache_key: str, endpoint: str) -> Optional[Any]:
         """Get cached data if not expired"""
         if cache_key in self.cache:
-            data, timestamp = self.cache[cache_key]
-            if time.time() - timestamp < self.cache_ttl:
-                logger.debug(f"Cache hit for {cache_key}")
+            data, timestamp, cache_type = self.cache[cache_key]
+            ttl = self.CACHE_TTL.get(cache_type, self.CACHE_TTL["default"])
+
+            if time.time() - timestamp < ttl:
+                logger.debug(f"Cache hit for {cache_key} (TTL: {ttl}s, type: {cache_type})")
                 return data
             else:
                 # Remove expired cache
                 del self.cache[cache_key]
+                logger.debug(f"Cache expired for {cache_key} (type: {cache_type})")
         return None
 
-    def _set_cache(self, cache_key: str, data: Any) -> None:
-        """Set cache with current timestamp"""
-        self.cache[cache_key] = (data, time.time())
-        logger.debug(f"Cached {cache_key}")
+    def _set_cache(self, cache_key: str, data: Any, endpoint: str) -> None:
+        """Set cache with current timestamp and type"""
+        cache_type = self._get_cache_type(endpoint)
+        self.cache[cache_key] = (data, time.time(), cache_type)
+        ttl = self.CACHE_TTL.get(cache_type, self.CACHE_TTL["default"])
+        logger.debug(f"Cached {cache_key} (TTL: {ttl}s, type: {cache_type})")
 
-    @retry(
-        retry=retry_if_exception_type((aiohttp.ClientError, TimeoutError)),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        before_sleep=before_sleep_log(std_logger, logging.WARNING),
-        reraise=True,
-    )
     async def _make_request(
-        self, endpoint: str, params: Optional[Dict[str, Any]] = None
+        self, endpoint: str, params: Optional[Dict[str, Any]] = None,
+        max_retries: int = 3
     ) -> Optional[Dict[str, Any]]:
         """
-        Make request to CoinGecko API with caching and automatic retries
+        Make request to CoinGecko API with caching, rate limiting, and automatic retries
 
-        Retries up to 3 times with exponential backoff (2-10s) for:
-        - ClientError (network/HTTP errors)
-        - TimeoutError (request timeout)
+        Features:
+        - Checks cache before making request
+        - Rate limiting to prevent 429 errors
+        - Retries with exponential backoff for network errors and 429
+        - Handles 429 (Rate Limit) with longer backoff
 
         Args:
             endpoint: API endpoint (e.g., '/simple/price')
             params: Query parameters
+            max_retries: Maximum number of retry attempts (default: 3)
 
         Returns:
             JSON response or None on error
         """
         params = params or {}
 
-        # Add API key if available (for Pro tier)
+        # Add Demo API key to params if available
         if self.api_key:
-            params["x_cg_pro_api_key"] = self.api_key
+            params["x_cg_demo_api_key"] = self.api_key
 
-        # Check cache
+        # Check cache first
         cache_key = self._get_cache_key(endpoint, params)
-        cached = self._get_cached(cache_key)
+        cached = self._get_cached(cache_key, endpoint)
         if cached is not None:
             return cached
 
-        # Make request
+        # Make request with retries
         url = f"{self.BASE_URL}{endpoint}"
+        last_error = None
 
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        self._set_cache(cache_key, data)
-                        return data
-                    else:
-                        logger.error(
-                            f"CoinGecko API error: {response.status} - "
-                            f"{await response.text()}"
-                        )
-                        return None
+        for attempt in range(max_retries):
+            try:
+                # Wait for rate limiter before making request
+                await self.rate_limiter.acquire()
 
-        except Exception as e:
-            logger.exception(f"Error making CoinGecko request: {e}")
-            return None
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        url,
+                        params=params,
+                        timeout=aiohttp.ClientTimeout(total=10)
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            self._set_cache(cache_key, data, endpoint)
+                            return data
+
+                        elif response.status == 429:
+                            # Rate limit exceeded - wait longer before retry
+                            retry_after = int(response.headers.get("Retry-After", 60))
+                            wait_time = min(retry_after, 60)  # Cap at 60s
+
+                            logger.warning(
+                                f"Rate limit (429) on attempt {attempt + 1}/{max_retries}. "
+                                f"Waiting {wait_time}s before retry"
+                            )
+
+                            if attempt < max_retries - 1:
+                                await asyncio.sleep(wait_time)
+                                continue
+                            else:
+                                logger.error(
+                                    f"Rate limit exceeded after {max_retries} attempts: "
+                                    f"{await response.text()}"
+                                )
+                                return None
+
+                        else:
+                            # Other HTTP errors
+                            error_text = await response.text()
+                            logger.error(
+                                f"CoinGecko API error {response.status}: {error_text}"
+                            )
+                            return None
+
+            except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as e:
+                last_error = e
+                wait_time = min(2 ** attempt, 10)  # Exponential backoff: 1s, 2s, 4s (max 10s)
+
+                logger.warning(
+                    f"Request error on attempt {attempt + 1}/{max_retries}: {e}. "
+                    f"Retrying in {wait_time}s"
+                )
+
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    logger.error(f"Request failed after {max_retries} attempts: {last_error}")
+                    return None
+
+            except Exception as e:
+                logger.exception(f"Unexpected error making CoinGecko request: {e}")
+                return None
+
+        return None
 
     async def get_price(
         self,
@@ -484,3 +641,44 @@ class CoinGeckoService:
             f"&5=0: <b>{price_str}</b>\n"
             f"24G: {change_emoji} {change_str}"
         )
+
+    def get_usage_stats(self) -> Dict[str, Any]:
+        """
+        Get current API usage statistics
+
+        Returns:
+            Dict with cache and rate limiter stats
+
+        Example:
+            {
+                "rate_limiter": {
+                    "recent_calls": 15,
+                    "max_calls": 25,
+                    "time_window": 60,
+                    "usage_percent": 60.0
+                },
+                "cache": {
+                    "total_entries": 42,
+                    "by_type": {
+                        "price": 10,
+                        "coin_data": 15,
+                        "global": 1
+                    }
+                }
+            }
+        """
+        # Get rate limiter stats
+        rate_stats = self.rate_limiter.get_stats()
+
+        # Count cache entries by type
+        cache_by_type = {}
+        for _, _, cache_type in self.cache.values():
+            cache_by_type[cache_type] = cache_by_type.get(cache_type, 0) + 1
+
+        return {
+            "rate_limiter": rate_stats,
+            "cache": {
+                "total_entries": len(self.cache),
+                "by_type": cache_by_type,
+            }
+        }

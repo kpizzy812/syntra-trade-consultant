@@ -183,8 +183,8 @@ async def menu_profile_callback(
         status_display = i18n.get("profile.status_free", user_language)
 
     # Get referral balance
-    balance = float(user.referral_balance or 0)
-    total_earned = float(user.total_referral_earnings or 0)
+    balance = float(user.referral_balance.balance_usd if user.referral_balance else 0)
+    total_earned = float(user.referral_balance.earned_total_usd if user.referral_balance else 0)
 
     profile_text = f"""{i18n.get('profile.title', user_language)}
 
@@ -351,6 +351,10 @@ async def menu_referral_callback(
     """
     Handle 'Referral System' button click
     """
+    from src.database import crud
+    from src.database.models import User
+    from src.bot.handlers.referral import get_referral_menu_keyboard
+
     user = await get_user_by_telegram_id(session, callback.from_user.id)
 
     if not user:
@@ -359,35 +363,72 @@ async def menu_referral_callback(
         )
         return
 
-    # Get bot info to generate referral link
-    bot_info = await callback.bot.get_me()
+    # Ensure user has referral code
+    if not user.referral_code:
+        user.referral_code = await crud.generate_referral_code(session, user.id)
+        await session.commit()
 
-    # TODO: Implement actual referral system
-    # For now, show placeholder
-    referral_text = f"""{i18n.get('referral.title', user_language)}
+    # Get referral stats
+    stats = await crud.get_referral_stats(session, user.id)
 
-{i18n.get('referral.link_title', user_language)}
-<code>https://t.me/{bot_info.username}?start=ref{user.telegram_id}</code>
+    # Get tier emoji
+    tier_emojis = {
+        "bronze": "🥉",
+        "silver": "🥈",
+        "gold": "🥇",
+        "platinum": "💎",
+    }
+    tier_emoji = tier_emojis.get(stats['tier'], "🥉")
 
-{i18n.get('referral.how_it_works', user_language)}
+    # Get referral link
+    bot_username = (await callback.bot.me()).username
+    ref_link = f"https://t.me/{bot_username}?start=ref_{user.referral_code}"
 
-{i18n.get('referral.you_get_title', user_language)}
-{i18n.get('referral.you_get_bonus', user_language)}
-{i18n.get('referral.you_get_premium', user_language)}
+    # Get referrer info (who invited this user)
+    referrer = await crud.get_referrer(session, user.id)
 
-{i18n.get('referral.friend_gets_title', user_language)}
-{i18n.get('referral.friend_gets_bonus', user_language)}
-
-{i18n.get('referral.stats_title', user_language)}
-{i18n.get('referral.stats_invited', user_language, count=0)}
-{i18n.get('referral.stats_bonus', user_language, bonus=0)}
-
-{i18n.get('referral.coming_soon', user_language)}
-"""
-
-    await safe_edit_or_resend(
-        callback, referral_text, reply_markup=get_back_to_menu_button(user_language)
+    # Build text
+    tier_name = i18n.get(f'tier_names.{stats["tier"]}', user_language)
+    text = (
+        f"{i18n.get('referral.title', user_language)}\n\n"
+        f"{i18n.get('referral.your_code', user_language)}: <code>{user.referral_code}</code>\n"
+        f"{i18n.get('referral.your_link', user_language)}:\n<code>{ref_link}</code>"
     )
+
+    # Add referrer info
+    if referrer:
+        if referrer.username:
+            text += i18n.get('referral.invited_by', user_language, username=referrer.username)
+        else:
+            text += i18n.get('referral.invited_by_unknown', user_language, name=referrer.first_name or "Unknown")
+    else:
+        text += i18n.get('referral.not_invited', user_language)
+
+    text += (
+        f"\n\n{tier_emoji} {i18n.get('referral.tier', user_language)}: <b>{tier_name}</b>\n"
+        f"{i18n.get('referral.total_referrals', user_language)}: {stats['total_referrals']}\n"
+        f"{i18n.get('referral.active_referrals', user_language)}: {stats['active_referrals']}\n\n"
+        f"{i18n.get('referral.rewards', user_language)}:\n"
+    )
+
+    # Add rewards info
+    if stats['monthly_bonus'] > 0:
+        text += f"• {i18n.get('referral.monthly_bonus', user_language)}: +{stats['monthly_bonus']} {i18n.get('referral.requests', user_language)}\n"
+
+    if stats['discount_percent'] > 0:
+        text += f"• {i18n.get('referral.discount', user_language)}: {stats['discount_percent']}%\n"
+
+    if stats['revenue_share_percent'] > 0:
+        text += f"• {i18n.get('referral.revenue_share', user_language)}: {stats['revenue_share_percent']}%\n"
+
+    # Add leaderboard rank
+    if stats['leaderboard_rank']:
+        text += f"\n{i18n.get('referral.leaderboard_rank', user_language)}: #{stats['leaderboard_rank']}"
+
+    # Keyboard with additional options
+    keyboard = get_referral_menu_keyboard(user_language)
+
+    await safe_edit_or_resend(callback, text, reply_markup=keyboard)
     await callback.answer()
     logger.info(f"Referral info shown to user {callback.from_user.id}")
 

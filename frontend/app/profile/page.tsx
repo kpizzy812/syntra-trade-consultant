@@ -145,10 +145,10 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="min-h-screen bg-black mobile-body">
+    <div className="bg-black mobile-body">
       <Header title="Profile" showBack={false} />
 
-      <main className="px-4 pt-4 pb-24 space-y-4">
+      <main className="mobile-scrollable px-4 pt-4 pb-24 space-y-4">
         {/* User Info Card */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}

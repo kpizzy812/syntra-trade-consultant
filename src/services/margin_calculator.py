@@ -25,6 +25,7 @@ from src.database.models import (
     Subscription,
     SubscriptionTier,
     PaymentStatus,
+    ReferralBalance,
 )
 
 logger = logging.getLogger(__name__)
@@ -223,7 +224,7 @@ async def get_global_margin_analytics(
     recommended_revshare = min(20, available_margin_percent * 0.5)  # 50% от доступной маржи
 
     # Получить реальные выплаты ревшара
-    stmt = select(func.sum(User.total_referral_earnings))
+    stmt = select(func.sum(ReferralBalance.earned_total_usd))
     result = await session.execute(stmt)
     total_revshare_paid = float(result.scalar() or 0)
 

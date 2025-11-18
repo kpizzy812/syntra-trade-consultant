@@ -16,7 +16,7 @@ from aiogram.types import (
 from aiogram.filters import Command, CommandObject
 from aiogram.utils.chat_action import ChatActionSender
 from aiogram.exceptions import TelegramBadRequest
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.crud import (
@@ -46,7 +46,7 @@ from src.database.crud import (
     get_all_payments,
     get_user_payments,
 )
-from src.database.models import User, Subscription, Payment, SubscriptionTier, PaymentStatus, Referral
+from src.database.models import User, Subscription, Payment, SubscriptionTier, PaymentStatus, Referral, ReferralBalance
 
 
 logger = logging.getLogger(__name__)
@@ -205,7 +205,7 @@ async def cmd_admin(message: Message, session: AsyncSession):
             active_referrals = result.scalar() or 0
 
             # Get total referral earnings
-            stmt = select(func.sum(User.total_referral_earnings))
+            stmt = select(func.sum(ReferralBalance.earned_total_usd))
             result = await session.execute(stmt)
             total_earnings = result.scalar() or 0
 
@@ -691,7 +691,7 @@ async def admin_charts_period_callback(callback: CallbackQuery, session: AsyncSe
         arpu = (mrr_data["total_mrr"] / paying_users) if paying_users > 0 else 0
 
         # Get revenue share data
-        stmt_revshare = select(func.sum(User.total_referral_earnings))
+        stmt_revshare = select(func.sum(ReferralBalance.earned_total_usd))
         result_revshare = await session.execute(stmt_revshare)
         total_revshare = float(result_revshare.scalar() or 0)
 
@@ -892,6 +892,16 @@ async def admin_user_view_callback(
             await callback.answer("❌ Пользователь не найден", show_alert=True)
             return
 
+        # Get subscription separately to avoid MissingGreenlet error
+        stmt_sub = select(Subscription).where(Subscription.user_id == user.id)
+        result_sub = await session.execute(stmt_sub)
+        subscription = result_sub.scalar_one_or_none()
+
+        # Get referral balance separately to avoid MissingGreenlet error
+        stmt_bal = select(ReferralBalance).where(ReferralBalance.user_id == user.id)
+        result_bal = await session.execute(stmt_bal)
+        referral_balance = result_bal.scalar_one_or_none()
+
         # Get user stats
         has_remaining, current_count, limit = await check_request_limit(
             session, user
@@ -914,6 +924,7 @@ async def admin_user_view_callback(
         response += "📊 <b>Статус:</b>\n"
 
         # Check premium subscription status (not channel subscription!)
+        # subscription уже загружен выше отдельным запросом
         has_active_premium = False
         if subscription and subscription.is_active:
             # Active if: tier is not FREE OR (FREE and no expiry) OR not expired
@@ -945,9 +956,6 @@ async def admin_user_view_callback(
             response += f"└ Статус: 🔴 <b>Исчерпан</b>\n\n"
 
         # Subscription info
-        await session.refresh(user, ["subscription"])
-        subscription = user.subscription
-
         if subscription:
             tier_emoji = {
                 "free": "🆓",
@@ -1023,8 +1031,8 @@ async def admin_user_view_callback(
         response += f"├ Уровень: {tier_emoji} <b>{referral_stats['tier'].upper()}</b>\n"
 
         # Balance
-        balance = float(user.referral_balance or 0)
-        total_earned = float(user.total_referral_earnings or 0)
+        balance = float(referral_balance.balance_usd if referral_balance else 0)
+        total_earned = float(referral_balance.earned_total_usd if referral_balance else 0)
         response += f"├ Баланс: <b>${balance:.2f}</b>\n"
         response += f"└ Всего заработано: <b>${total_earned:.2f}</b>\n\n"
 
@@ -2130,9 +2138,10 @@ async def admin_sub_extend_callback(
             await callback.answer("❌ Пользователь не найден", show_alert=True)
             return
 
-        # Get subscription
-        await session.refresh(user, ["subscription"])
-        subscription = user.subscription
+        # Get subscription separately to avoid MissingGreenlet
+        stmt_sub = select(Subscription).where(Subscription.user_id == user.id)
+        result_sub = await session.execute(stmt_sub)
+        subscription = result_sub.scalar_one_or_none()
 
         if not subscription:
             await callback.answer("❌ У пользователя нет подписки", show_alert=True)
@@ -2204,9 +2213,10 @@ async def admin_sub_upgrade_callback(
             await callback.answer("❌ Пользователь не найден", show_alert=True)
             return
 
-        # Update subscription tier
-        await session.refresh(user, ["subscription"])
-        subscription = user.subscription
+        # Get subscription separately to avoid MissingGreenlet
+        stmt_sub = select(Subscription).where(Subscription.user_id == user.id)
+        result_sub = await session.execute(stmt_sub)
+        subscription = result_sub.scalar_one_or_none()
 
         if not subscription:
             await callback.answer("❌ У пользователя нет подписки", show_alert=True)
@@ -2268,9 +2278,10 @@ async def admin_sub_downgrade_callback(
             await callback.answer("❌ Пользователь не найден", show_alert=True)
             return
 
-        # Update subscription tier
-        await session.refresh(user, ["subscription"])
-        subscription = user.subscription
+        # Get subscription separately to avoid MissingGreenlet
+        stmt_sub = select(Subscription).where(Subscription.user_id == user.id)
+        result_sub = await session.execute(stmt_sub)
+        subscription = result_sub.scalar_one_or_none()
 
         if not subscription:
             await callback.answer("❌ У пользователя нет подписки", show_alert=True)

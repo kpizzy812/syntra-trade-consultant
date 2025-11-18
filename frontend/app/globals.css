@@ -51,10 +51,21 @@ body {
 
 /* Mobile body для fullscreen Telegram Mini App */
 .mobile-body {
-  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   height: 100dvh;
+  overflow: hidden;
   padding-top: var(--tg-safe-area-inset-top);
   padding-bottom: var(--tg-safe-area-inset-bottom);
+}
+
+/* Scrollable content area */
+.mobile-scrollable {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 /* Glassmorphism эффекты */

@@ -96,10 +96,10 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-black mobile-body">
+    <div className="bg-black mobile-body">
       <Header />
 
-      <main className="px-4 pt-4 pb-24">
+      <main className="mobile-scrollable px-4 pt-4 pb-24">
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}

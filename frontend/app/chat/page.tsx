@@ -197,7 +197,7 @@ export default function ChatPage() {
   );
 
   return (
-    <div className="min-h-screen bg-black flex flex-col mobile-body">
+    <div className="bg-black mobile-body">
       <Header title="AI Chat" showBack={false} />
 
       {/* Chat Container */}

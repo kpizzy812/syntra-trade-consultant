@@ -181,32 +181,55 @@ view_logs() {
 
     case $log_choice in
         1)
-            echo "Логи API (Ctrl+C для выхода):"
-            ssh ${SERVER} 'tail -f /var/log/syntraai-api.log'
+            echo "Логи API (последние 500 строк + live, Ctrl+C для выхода):"
+            ssh ${SERVER} 'tail -n 500 -f /var/log/syntraai-api.log'
             ;;
         2)
-            echo "Ошибки API (Ctrl+C для выхода):"
-            ssh ${SERVER} 'tail -f /var/log/syntraai-api-error.log'
+            echo "Ошибки API (последние 500 строк + live, Ctrl+C для выхода):"
+            ssh ${SERVER} 'tail -n 500 -f /var/log/syntraai-api-error.log'
             ;;
         3)
-            echo "Логи Frontend (Ctrl+C для выхода):"
-            ssh ${SERVER} 'tail -f /var/log/syntraai-frontend.log'
+            echo "Логи Frontend (последние 500 строк + live, Ctrl+C для выхода):"
+            ssh ${SERVER} 'tail -n 500 -f /var/log/syntraai-frontend.log'
             ;;
         4)
-            echo "Ошибки Frontend (Ctrl+C для выхода):"
-            ssh ${SERVER} 'tail -f /var/log/syntraai-frontend-error.log'
+            echo "Ошибки Frontend (последние 500 строк + live, Ctrl+C для выхода):"
+            ssh ${SERVER} 'tail -n 500 -f /var/log/syntraai-frontend-error.log'
             ;;
         5)
-            echo "Логи Bot (Ctrl+C для выхода):"
-            ssh ${SERVER} 'tail -f /var/log/syntraai-bot.log'
+            echo "Логи Bot (последние 500 строк + live, Ctrl+C для выхода):"
+            ssh ${SERVER} 'tail -n 500 -f /var/log/syntraai-bot.log'
             ;;
         6)
-            echo "Ошибки Bot (Ctrl+C для выхода):"
-            ssh ${SERVER} 'tail -f /var/log/syntraai-bot-error.log'
+            echo "Ошибки Bot (последние 500 строк + live, Ctrl+C для выхода):"
+            ssh ${SERVER} 'tail -n 500 -f /var/log/syntraai-bot-error.log'
             ;;
         7)
-            echo "Все логи (Ctrl+C для выхода):"
-            ssh ${SERVER} 'tail -f /var/log/syntraai-*.log'
+            echo "Все логи в хронологическом порядке (последние 500 строк + live, Ctrl+C для выхода):"
+            ssh ${SERVER} << 'LOGSEOF'
+# Показываем последние 500 строк из всех логов, сортируя по времени
+for log in /var/log/syntraai-*.log; do
+    tail -n 500 "$log" | awk -v file="$(basename $log)" '{print $1, $2, file, $0}'
+done | sort -k1,2 | cut -d" " -f3- | tail -n 500
+
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "🔴 LIVE MODE - новые логи появляются ниже"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Следим за всеми логами в live режиме
+tail -f /var/log/syntraai-*.log 2>/dev/null | while read line; do
+    if [[ $line == "==>"* ]]; then
+        # Это разделитель файла, показываем его красиво
+        file=$(echo "$line" | sed 's/==> \(.*\) <==/[\1]/')
+        echo -e "\n\033[1;36m$file\033[0m"
+    else
+        # Обычная строка лога
+        echo "$line"
+    fi
+done
+LOGSEOF
             ;;
         0)
             return

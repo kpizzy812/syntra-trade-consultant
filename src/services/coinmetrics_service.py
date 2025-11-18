@@ -46,19 +46,33 @@ class CoinMetricsService:
     # Asset mapping (CoinGecko ID -> CoinMetrics asset)
     ASSET_MAP = {
         "bitcoin": "btc",
+        "btc": "btc",  # Short form
         "ethereum": "eth",
+        "eth": "eth",  # Short form
         "solana": "sol",
+        "sol": "sol",  # Short form
         "cardano": "ada",
+        "ada": "ada",  # Short form
         "ripple": "xrp",
+        "xrp": "xrp",  # Short form
         "polkadot": "dot",
+        "dot": "dot",  # Short form
         "dogecoin": "doge",
+        "doge": "doge",  # Short form
         "avalanche": "avax",
+        "avax": "avax",  # Short form
         "polygon": "matic",
+        "matic": "matic",  # Short form
         "chainlink": "link",
+        "link": "link",  # Short form
         "litecoin": "ltc",
+        "ltc": "ltc",  # Short form
         "uniswap": "uni",
+        "uni": "uni",  # Short form
         "stellar": "xlm",
+        "xlm": "xlm",  # Short form
         "algorand": "algo",
+        "algo": "algo",  # Short form
     }
 
     # Popular on-chain metrics available in Community API

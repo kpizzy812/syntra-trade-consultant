@@ -11,7 +11,7 @@ from typing import List, Optional
 
 from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 
 from src.database.models import (
     User,
@@ -851,9 +851,10 @@ async def get_all_users(
         List of User models
     """
     # Build query based on order_by
+    # Use joinedload for one-to-one relationship to avoid MissingGreenlet
     stmt = select(User).offset(offset).limit(limit).options(
-        selectinload(User.subscription)
-    )
+        joinedload(User.subscription)
+    ).execution_options(populate_existing=True)
 
     if order_by == "last_activity":
         stmt = stmt.order_by(User.last_activity.desc())
@@ -914,7 +915,8 @@ async def search_users(
                 | (User.username.ilike(search_pattern))
                 | (User.first_name.ilike(search_pattern))
             )
-            .options(selectinload(User.subscription))
+            .options(joinedload(User.subscription))
+            .execution_options(populate_existing=True)
             .limit(limit)
         )
     else:
@@ -925,7 +927,8 @@ async def search_users(
                 (User.username.ilike(search_pattern))
                 | (User.first_name.ilike(search_pattern))
             )
-            .options(selectinload(User.subscription))
+            .options(joinedload(User.subscription))
+            .execution_options(populate_existing=True)
             .limit(limit)
         )
 
@@ -2765,7 +2768,7 @@ async def add_revenue_share(
         amount: Revenue share amount (USD)
         payment_id: Payment ID that generated this revenue share
     """
-    # Get referrer
+    # Get referrer to verify they exist
     stmt = select(User).where(User.id == referrer_id)
     result = await session.execute(stmt)
     referrer = result.scalar_one_or_none()
@@ -2774,19 +2777,14 @@ async def add_revenue_share(
         logger.error(f"Referrer {referrer_id} not found when adding revenue share")
         return
 
-    # Update referrer balance
-    referrer.referral_balance = (referrer.referral_balance or 0) + amount
-    referrer.total_referral_earnings = (referrer.total_referral_earnings or 0) + amount
-
-    # Create revenue share transaction record
-    # Note: This assumes you have a RevenueShare or Transaction model
-    # If not, this just updates the balance without detailed transaction history
-    await session.commit()
+    # Add to balance using existing function
+    description = f"Revenue share from referral payment #{payment_id}"
+    transaction = await add_to_balance(session, referrer_id, amount, description)
 
     logger.info(
         f"Revenue share added: referrer={referrer_id}, referee={referee_id}, "
         f"amount=${amount:.2f}, payment={payment_id}, "
-        f"new_balance=${referrer.referral_balance:.2f}"
+        f"transaction_id={transaction.id}"
     )
 
 

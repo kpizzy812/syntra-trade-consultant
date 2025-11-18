@@ -97,7 +97,7 @@ export default function TabBar() {
                     relative w-full py-3 px-2 text-center
                     transition-all duration-200 rounded-2xl
                     flex flex-col items-center justify-center gap-1
-                    ${isActive ? 'text-white z-10' : 'text-gray-400 hover:text-gray-200'}
+                    ${isActive ? 'text-blue-500 z-10' : 'text-gray-400 hover:text-gray-200'}
                   `}
                 >
                   {tab.icon}

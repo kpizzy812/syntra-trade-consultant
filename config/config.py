@@ -140,8 +140,12 @@ class ModelConfig:
 class RateLimits:
     """Rate limits for external APIs"""
 
-    # CoinGecko (free tier)
-    COINGECKO_CALLS_PER_MINUTE = 10
+    # CoinGecko rate limits (updated Jan 2025)
+    # Public API (no key, no registration): 5-15 calls/min (unstable, shared)
+    # Demo API (free registration): 30 calls/min, 10k calls/month, requires free API key
+    # Pro API (paid): 500+ calls/min
+    # По умолчанию 25 calls/min для Demo API (оставляет буфер 5 запросов)
+    COINGECKO_CALLS_PER_MINUTE = int(os.getenv("COINGECKO_RATE_LIMIT", "25"))
 
     # OpenAI (depends on tier, these are conservative estimates)
     OPENAI_RPM = 500  # requests per minute
