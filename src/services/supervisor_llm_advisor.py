@@ -22,8 +22,11 @@ from src.database.models import (
     RecommendationType,
 )
 from src.services.binance_service import binance_service
-from src.services.openai_service import openai_service
+from src.services.openai_service import OpenAIService
 from config.config import OPENAI_MODEL
+
+# Create instance for LLM calls
+_openai_service = OpenAIService()
 
 
 # ============================================================================
@@ -158,7 +161,7 @@ class SupervisorLLMAdvisor:
 
     def __init__(self):
         self.binance = binance_service
-        self.openai = openai_service
+        self.openai = _openai_service
         self.model = OPENAI_MODEL
         logger.info("SupervisorLLMAdvisor initialized")
 
@@ -378,17 +381,46 @@ class SupervisorLLMAdvisor:
             LLMAdviceResponse or None on error
         """
         try:
-            prompt = self._build_prompt(context)
+            # Build full prompt with system + user
+            system_prompt = self._get_system_prompt()
+            user_prompt = self._build_prompt(context)
+            full_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
 
-            response = await self.openai.chat_json(
-                messages=[
-                    {"role": "system", "content": self._get_system_prompt()},
-                    {"role": "user", "content": prompt}
-                ],
+            # JSON schema for structured output
+            json_schema = {
+                "name": "supervisor_advice",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "recommendations": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "type": {"type": "string", "enum": ["move_sl", "set_break_even", "take_partial", "close_position", "reduce_position", "hold"]},
+                                    "params": {"type": "object"},
+                                    "urgency": {"type": "string", "enum": ["low", "med", "high", "critical"]},
+                                    "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+                                    "reason_bullets": {"type": "array", "items": {"type": "string"}}
+                                },
+                                "required": ["type", "params", "urgency", "confidence", "reason_bullets"]
+                            }
+                        },
+                        "market_assessment": {"type": "string"},
+                        "scenario_still_valid": {"type": "boolean"},
+                        "risk_level": {"type": "string", "enum": ["safe", "medium", "high", "critical"]},
+                        "summary": {"type": "string"}
+                    },
+                    "required": ["recommendations", "market_assessment", "scenario_still_valid", "risk_level", "summary"]
+                },
+                "strict": True
+            }
+
+            response = await self.openai.structured_completion(
+                prompt=full_prompt,
+                json_schema=json_schema,
                 model=self.model,
-                temperature=0.3,
-                max_tokens=1000,
-                timeout=timeout
+                temperature=0.3
             )
 
             if not response:
