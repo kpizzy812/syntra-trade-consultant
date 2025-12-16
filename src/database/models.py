@@ -21,8 +21,10 @@ from sqlalchemy import (
     ForeignKey,
     UniqueConstraint,
     Numeric,
+    Index,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import JSONB
 
 
 class Base(DeclarativeBase):
@@ -3707,3 +3709,513 @@ class SupervisorAction(Base):
 # - supervisor_advices.trade_id (index)
 # - supervisor_advices.user_id (index)
 # - supervisor_actions.trade_id (index)
+
+
+# ===========================
+# FEEDBACK LOOP & LEARNING MODELS
+# ===========================
+
+
+class TradeOutcomeLabel(str, Enum):
+    """Результат сделки"""
+    WIN = "win"
+    LOSS = "loss"
+    BREAKEVEN = "breakeven"
+    TIMEOUT = "timeout"
+
+
+class ExitReasonType(str, Enum):
+    """Причина закрытия"""
+    TP1 = "tp1"
+    TP2 = "tp2"
+    TP3 = "tp3"
+    SL = "sl"
+    MANUAL = "manual"
+    TIMEOUT = "timeout"
+    CANCEL = "cancel"
+    LIQUIDATION = "liquidation"
+    BREAKEVEN = "breakeven"
+
+
+class TradeOutcome(Base):
+    """
+    Trade Outcome - результаты закрытых сделок для learning системы.
+
+    Хранит полную телеметрию:
+    - Execution Report (JSONB)
+    - Outcome metrics (PnL, MAE/MFE)
+    - Attribution (архетип, факторы)
+
+    Использует 4 ключа склейки с Futures Bot.
+    """
+    __tablename__ = "trade_outcomes"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True
+    )
+
+    # === 4 КЛЮЧА СКЛЕЙКИ ===
+    trade_id: Mapped[str] = mapped_column(
+        String(50),
+        unique=True,
+        index=True,
+        nullable=False,
+        comment="UUID от бота (unique)"
+    )
+    analysis_id: Mapped[str] = mapped_column(
+        String(50),
+        index=True,
+        nullable=False,
+        comment="UUID от Syntra /futures-scenarios"
+    )
+    scenario_local_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="1..N в рамках analysis"
+    )
+    scenario_hash: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        comment="sha256 от scenario snapshot"
+    )
+
+    # === IDEMPOTENCY ===
+    idempotency_key: Mapped[str] = mapped_column(
+        String(100),
+        unique=True,
+        nullable=False,
+        comment="{trade_id}:{event_type}"
+    )
+
+    # === CONTEXT ===
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        index=True,
+        nullable=False
+    )
+    symbol: Mapped[str] = mapped_column(
+        String(20),
+        index=True,
+        nullable=False
+    )
+    side: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        comment="Long | Short"
+    )
+    timeframe: Mapped[str] = mapped_column(
+        String(10),
+        index=True,
+        nullable=False
+    )
+    is_testnet: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        index=True,
+        nullable=False,
+        comment="Фильтр для learning"
+    )
+
+    # === EXIT ===
+    exit_reason: Mapped[str] = mapped_column(
+        String(20),
+        index=True,
+        nullable=True,
+        comment="tp1, tp2, sl, manual, etc."
+    )
+    exit_price: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True
+    )
+    exit_timestamp: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    # === PNL ===
+    pnl_usd: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True
+    )
+    pnl_r: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="PnL / risk"
+    )
+    roe_pct: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="PnL / margin * 100"
+    )
+
+    # === MAE/MFE ===
+    mae_r: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Max Adverse Excursion in R"
+    )
+    mfe_r: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Max Favorable Excursion in R"
+    )
+    capture_efficiency: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="pnl / mfe"
+    )
+
+    # === TIME METRICS ===
+    time_in_trade_min: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True
+    )
+    time_to_mfe_min: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Минут до макс profit"
+    )
+    time_to_mae_min: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="Минут до макс drawdown"
+    )
+    post_sl_mfe_r: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="MFE после SL (если SL был неправильным)"
+    )
+
+    # === CONFIDENCE ===
+    confidence_raw: Mapped[Optional[float]] = mapped_column(
+        Float,
+        index=True,
+        nullable=True,
+        comment="Оригинальный AI confidence"
+    )
+    confidence_calibrated: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Калиброванный confidence"
+    )
+
+    # === ARCHETYPE ===
+    primary_archetype: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        index=True,
+        nullable=True
+    )
+    tags: Mapped[Optional[list]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment='["tag1", "tag2"]'
+    )
+    label: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        index=True,
+        nullable=True,
+        comment="win, loss, breakeven"
+    )
+
+    # === JSONB DATA ===
+    execution_data: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Execution Report (слой B)"
+    )
+    attribution_data: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Attribution (слой D)"
+    )
+    scenario_snapshot: Mapped[Optional[dict]] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Полный snapshot сценария"
+    )
+
+    # === TIMESTAMPS ===
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False
+    )
+
+    # === INDEXES ===
+    __table_args__ = (
+        Index('ix_outcomes_user_created', 'user_id', 'created_at'),
+        Index('ix_outcomes_symbol_tf', 'symbol', 'timeframe', 'created_at'),
+        Index('ix_outcomes_archetype_created', 'primary_archetype', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return f"<TradeOutcome(id={self.id}, trade_id={self.trade_id}, label={self.label})>"
+
+
+class ConfidenceBucket(Base):
+    """
+    Confidence Bucket - агрегированная статистика по корзинам confidence.
+
+    Используется для калибровки AI confidence на основе реальных результатов.
+    Применяется Laplace smoothing для малых выборок.
+    """
+    __tablename__ = "confidence_buckets"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True
+    )
+
+    # === BUCKET DEFINITION ===
+    bucket_name: Mapped[str] = mapped_column(
+        String(20),
+        unique=True,
+        nullable=False,
+        comment='e.g., "0.55-0.70"'
+    )
+    confidence_min: Mapped[float] = mapped_column(
+        Float,
+        nullable=False
+    )
+    confidence_max: Mapped[float] = mapped_column(
+        Float,
+        nullable=False
+    )
+
+    # === STATISTICS ===
+    total_trades: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    wins: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    losses: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    breakevens: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+
+    # === WINRATE (raw + smoothed) ===
+    actual_winrate_raw: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="wins / total"
+    )
+    actual_winrate_smoothed: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="Laplace: (wins + 1) / (total + 2)"
+    )
+
+    # === ADDITIONAL METRICS ===
+    avg_pnl_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    avg_mae_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    avg_mfe_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+
+    # === CALIBRATION ===
+    calibration_offset: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="smoothed_winrate - bucket_midpoint"
+    )
+
+    # === META ===
+    sample_size: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="Размер выборки для расчёта"
+    )
+    last_calculated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    def __repr__(self) -> str:
+        return f"<ConfidenceBucket(name={self.bucket_name}, winrate={self.actual_winrate_smoothed:.1%})>"
+
+
+class ArchetypeStats(Base):
+    """
+    Archetype Stats - статистика по архетипам сетапов.
+
+    Группируется по:
+    - archetype (обязательно)
+    - symbol (опционально)
+    - timeframe (опционально)
+    - volatility_regime (опционально)
+
+    Используется для оптимизации SL/TP по типам сетапов.
+    """
+    __tablename__ = "archetype_stats"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True
+    )
+
+    # === GROUPING ===
+    archetype: Mapped[str] = mapped_column(
+        String(50),
+        index=True,
+        nullable=False
+    )
+    symbol: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        comment="None = все символы"
+    )
+    timeframe: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        nullable=True,
+        comment="None = все TF"
+    )
+    volatility_regime: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        nullable=True,
+        comment="low/normal/high или None"
+    )
+
+    # === STATISTICS ===
+    total_trades: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    wins: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    losses: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    winrate: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    avg_pnl_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    profit_factor: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="gross_profit / gross_loss"
+    )
+
+    # === MAE/MFE ===
+    avg_mae_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    avg_mfe_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    p75_mae_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="75th percentile MAE"
+    )
+    p90_mae_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="90th percentile MAE"
+    )
+    p50_mfe_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="median MFE"
+    )
+
+    # === OPTIMIZATION SUGGESTIONS ===
+    suggested_sl_atr_mult: Mapped[float] = mapped_column(
+        Float,
+        default=1.0,
+        nullable=False,
+        comment="SL = X * ATR"
+    )
+    suggested_tp1_r: Mapped[float] = mapped_column(
+        Float,
+        default=1.5,
+        nullable=False
+    )
+    suggested_tp2_r: Mapped[float] = mapped_column(
+        Float,
+        default=2.5,
+        nullable=False
+    )
+
+    # === META ===
+    last_calculated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+
+    # === UNIQUE CONSTRAINT ===
+    __table_args__ = (
+        UniqueConstraint(
+            'archetype', 'symbol', 'timeframe', 'volatility_regime',
+            name='uq_archetype_group'
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ArchetypeStats(archetype={self.archetype}, winrate={self.winrate:.1%})>"
+
+
+# Feedback indexes:
+# - trade_outcomes.trade_id (unique)
+# - trade_outcomes.idempotency_key (unique)
+# - trade_outcomes.user_id, created_at (composite)
+# - trade_outcomes.symbol, timeframe, created_at (composite)
+# - trade_outcomes.primary_archetype, created_at (composite)
+# - trade_outcomes.confidence_raw (for bucket queries)
+# - trade_outcomes.is_testnet (for filtering)
+# - archetype_stats.archetype (index)
+# - archetype_stats unique constraint on (archetype, symbol, timeframe, volatility_regime)
