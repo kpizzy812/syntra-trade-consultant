@@ -13,6 +13,14 @@
     "currency": "Currency"
   },
 
+  "nav": {
+    "home": "Home",
+    "chat": "AI Chat",
+    "tasks": "Tasks",
+    "referral": "Referral",
+    "profile": "Profile"
+  },
+
   "premium": {
     "title": "Upgrade to Premium",
     "subtitle": "Choose your payment method",
@@ -23,25 +31,30 @@
       "basic": {
         "name": "Basic",
         "features": {
-          "requests": "20 requests per day",
-          "indicators": "Basic technical indicators",
-          "support": "Email support"
+          "limits": "15 text + 5 charts + 3 vision/day",
+          "thinking": "Thinking Mode — deep market analysis",
+          "indicators": "Technical indicators (RSI, MACD, Bollinger)",
+          "levels": "Support levels & resistance zones"
         }
       },
       "premium": {
         "name": "Premium",
         "features": {
-          "requests": "100 requests per day",
-          "indicators": "Advanced indicators + Liquidation data",
-          "support": "Priority support"
+          "limits": "20 text + 7 charts + 7 vision/day",
+          "includes": "Everything in Basic +",
+          "onchain": "On-chain data (whale alerts, exchange flows)",
+          "macro": "Pi Cycle & macro indicators",
+          "trial": "7-day free trial"
         }
       },
       "vip": {
         "name": "VIP",
         "features": {
-          "requests": "Unlimited requests",
-          "indicators": "All indicators + Real-time feeds",
-          "support": "24/7 VIP support"
+          "limits": "50 text + 15 charts + 15 vision/day",
+          "includes": "Everything in Premium +",
+          "reasoning": "Multi-step reasoning (complex scenarios)",
+          "priority": "Priority queue & fastest responses",
+          "support": "Dedicated support"
         }
       }
     },
@@ -73,9 +86,18 @@
     "plan_selection": {
       "title": "Select Your Plan",
       "select_tier": "Choose tier",
-      "select_duration": "Choose duration",
+      "select_duration": "Duration",
       "total": "Total",
-      "month_short": "mo"
+      "month_short": "mo",
+      "duration_1": "1 mo",
+      "duration_3": "3 mo",
+      "duration_12": "12 mo",
+      "points_bonus": "+ {points} $SYNTRA Points"
+    },
+
+    "crypto_bot": {
+      "select_currency": "Select Cryptocurrency",
+      "pay_with": "Pay with {asset}"
     },
 
     "confirmation": {
@@ -115,18 +137,94 @@
     "subtitle": "AI-Powered Crypto Trading Assistant",
     "cta": "Get Started",
     "open_chat": "Open Chat",
+    "loading": "Loading Syntra...",
+    "welcome_back": "Welcome back,",
+    "connection_error": "Connection Error",
+    "retry": "Retry",
+    "quick_actions_title": "Quick Actions",
     "features": {
       "analysis": "Market Analysis",
       "indicators": "Technical Indicators",
       "alerts": "Price Alerts"
+    },
+    "quick_actions": {
+      "ask_ai": "Ask AI about market",
+      "full_analytics": "View full analytics",
+      "full_analytics_prompt": "Provide a comprehensive crypto market analysis right now including Bitcoin and top altcoins trends, key support/resistance levels, Fear & Greed index interpretation, and trading recommendations."
+    },
+    "market": {
+      "overview_title": "Market Overview",
+      "top_movers_title": "Top Movers",
+      "fear_greed": "Fear & Greed",
+      "total_market_cap": "Total Market Cap",
+      "volume_24h": "24h Volume",
+      "btc_dominance": "BTC Dom",
+      "eth_dominance": "ETH Dom",
+      "gainers": "Gainers",
+      "losers": "Losers",
+      "show_more": "Show More ({count} each)",
+      "show_less": "Show Less",
+      "now": "Now",
+      "active_cryptocurrencies": "{count} active cryptocurrencies",
+      "what_does_it_mean": "What does it mean?",
+      "explain_market_prompt": "Analyze and explain in simple terms what the current market data means:\n\n- Fear & Greed Index: {fearGreed} ({classification})\n- Total Market Cap: {marketCap} ({change24h}% in 24h)\n- 24h Volume: {volume}\n- BTC Dominance: {btcDom}%\n- ETH Dominance: {ethDom}%\n\nProvide a comprehensive analysis: What does this mean for traders and investors? What are the key insights and what should I pay attention to? Give actionable insights."
     }
   },
 
+  "sidebar": {
+    "new_chat": "New chat",
+    "new_chat_created": "New chat created",
+    "failed_create": "Failed to create chat",
+    "delete_confirm": "Delete this chat?",
+    "chat_deleted": "Chat deleted",
+    "failed_delete": "Failed to delete chat",
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "close": "Close",
+    "collapse": "Collapse",
+    "expand": "Expand",
+    "show_all_chats": "Show all chats →",
+    "your_chats": "YOUR CHATS",
+    "no_chats": "No chats yet",
+    "nav": {
+      "home": "Home",
+      "tasks": "Tasks",
+      "referral": "Referral Program",
+      "profile": "Profile"
+    },
+    "support": "Support"
+  },
+
   "chat": {
-    "input_placeholder": "Ask about crypto markets...",
+    "title": "AI Chat",
+    "input_placeholder": "Message Syntra...",
+    "input_placeholder_limit": "Daily limit reached...",
     "upgrade_prompt": "Upgrade to Premium →",
     "requests_left": "{count} requests left today",
-    "unlimited": "Unlimited requests"
+    "requests_remaining": "{remaining} / {limit} requests today",
+    "limit_reached": "Limit reached",
+    "unlimited": "Unlimited requests",
+    "intro_greeting": "👋 Hi! I'm **Syntra AI** — your crypto trading co-pilot.",
+    "intro_capabilities": "I can help you with:\n• BTC / altcoin analysis with technical indicators\n• Fear & Greed index, market cycles, on-chain data\n• Entry/exit points and risk management strategies",
+    "suggested_prompts": {
+      "analyze_btc": "Analyze BTC",
+      "fear_greed": "Fear & Greed",
+      "top_altcoins": "Top Altcoins",
+      "eth_analysis": "ETH Analysis"
+    },
+    "prompts": {
+      "analyze_btc": "Analyze current Bitcoin price action and trends",
+      "fear_greed": "What does the Fear & Greed index tell us?",
+      "top_altcoins": "What are the most promising altcoins right now?",
+      "eth_analysis": "Provide technical analysis for Ethereum"
+    },
+    "daily_limit_reached": "You've reached your daily limit ({limit} requests)",
+    "rate_limit_reached": "Request limit reached. Try again later or upgrade to Premium for more requests!",
+    "loading_chat": "Loading chat...",
+    "error_load_history": "Failed to load chat history",
+    "error_simple": "Sorry, I encountered an error. Please try again.",
+    "error_detailed": "Sorry, I encountered an error. Please try again or contact support if the issue persists.",
+    "error_regenerate": "Failed to regenerate message"
   },
 
   "profile": {
@@ -137,7 +235,39 @@
     "active": "Active",
     "inactive": "Inactive",
     "expires": "Expires",
-    "upgrade": "Upgrade"
+    "upgrade": "Upgrade",
+    "current_plan": "Current plan",
+    "daily_requests": "daily requests",
+    "days_remaining": "days remaining",
+    "upgrade_plan": "Upgrade Plan",
+    "upgrade_description": "Upgrade to unlock 30+ requests/day, advanced analytics, faster models and priority support.",
+    "requests_left": "left",
+    "used": "Used",
+    "remaining": "Left",
+    "limit": "Limit",
+    "daily_usage": "Daily usage",
+    "referrals_title": "Referrals",
+    "total": "Total",
+    "active_short": "Active",
+    "bonus": "Bonus",
+    "discount": "Discount",
+    "balance": "Balance",
+    "withdraw": "Withdraw",
+    "earned": "Earned",
+    "withdrawn": "Withdrawn",
+    "language": "Language",
+    "russian": "Russian",
+    "english": "English",
+    "support": "Support",
+    "email_support": "Email support",
+    "telegram_support": "Community Manager",
+    "sign_out": "Sign Out",
+    "sign_out_confirm": "Sign Out?",
+    "sign_out_description": "Are you sure you want to sign out? You will need to use magic link to sign in again.",
+    "redirect_note": "You will be redirected to the landing page",
+    "failed_load": "Failed to load profile",
+    "language_changed": "Language changed to",
+    "failed_update_language": "Failed to update language"
   },
 
   "referral": {
@@ -146,12 +276,437 @@
     "share": "Share",
     "earnings": "Earnings",
     "total_referrals": "Total Referrals",
-    "active_referrals": "Active Referrals"
+    "active_referrals": "Active Referrals",
+
+    "how_it_works": "How it works",
+    "bonuses_title": "Invite Bonuses",
+    "friend_gets": "Your friend gets",
+    "friend_bonus": "+5 bonus requests + 500 $SYNTRA points",
+    "you_get": "You get",
+    "you_bonus": "+10 requests + 500 $SYNTRA points (on signup) + 1,000 $SYNTRA points (when they buy Premium)",
+    "activation_note": "Activation = >24h in service + 5 requests",
+    "points_rewards": "$SYNTRA Points Rewards",
+    "points_signup": "+500 points when friend registers",
+    "points_premium": "+1,000 points when friend buys Premium",
+
+    "tiers_title": "Tiers & Rewards",
+    "tiers_subtitle": "The more you invite — the more you earn",
+
+    "bronze": "Bronze",
+    "bronze_range": "0-4 referrals",
+    "bronze_benefit1": "Basic bonuses",
+    "bronze_benefit2": "+10 requests per referral",
+
+    "silver": "Silver",
+    "silver_range": "5-14 referrals",
+    "silver_benefit1": "+50 requests/month",
+    "silver_benefit2": "-10% subscription discount",
+    "silver_benefit3": "5% revenue share",
+
+    "gold": "Gold",
+    "gold_range": "15-49 referrals",
+    "gold_benefit1": "+150 requests/month",
+    "gold_benefit2": "-20% subscription discount",
+    "gold_benefit3": "10% revenue share",
+
+    "platinum": "Platinum",
+    "platinum_range": "50+ referrals",
+    "platinum_benefit1": "+500 requests/month",
+    "platinum_benefit2": "-30% subscription discount",
+    "platinum_benefit3": "15% revenue share",
+
+    "revenue_share_title": "What is Revenue Share?",
+    "revenue_share_desc": "You get a percentage of all payments from your active referrals. Lifetime, as long as they remain active users.",
+    "revenue_share_example": "Example: 10 referrals with Premium ($24.99) = ~$25/mo at 10% revenue share",
+
+    "your_tier": "Your Tier",
+    "your_stats": "Your Stats",
+    "total": "Total",
+    "active": "Active",
+    "premium": "Premium",
+    "conversion": "Conversion",
+    "current_benefits": "Your Benefits",
+    "monthly_bonus": "Monthly bonus",
+    "discount": "Discount",
+    "next_tier": "Next tier",
+    "more_needed": "more needed",
+    "your_link": "Your Link",
+    "referral_code": "Referral Code",
+    "copy": "Copy",
+    "link_copied": "Link copied!",
+    "link_type": "Link Type",
+    "link_type_miniapp": "Mini App",
+    "link_type_web": "Web",
+    "link_type_bot": "Bot",
+    "link_type_miniapp_desc": "Opens Syntra directly in Telegram app",
+    "link_type_web_desc": "Opens website in browser",
+    "link_type_bot_desc": "Opens Telegram bot chat",
+    "history": "Referral History",
+    "no_referrals": "No referrals yet",
+    "share_to_earn": "Share your link and start earning!",
+    "joined": "Joined"
+  },
+
+  "coin": {
+    "market_cap": "Market Cap",
+    "volume_24h": "Volume (24h)",
+    "ath": "All-Time High",
+    "atl": "All-Time Low",
+    "circulating_supply": "Circulating Supply",
+    "max_supply": "Max Supply",
+    "price_changes": "Price Changes",
+    "no_chart_data": "No chart data available",
+    "ask_ai": "Ask AI about this coin"
   },
 
   "errors": {
     "network": "Network error. Please try again.",
     "unknown": "An unknown error occurred",
     "validation": "Please check your input"
+  },
+
+  "points": {
+    "your_rewards": "💎 Your Rewards",
+    "current_balance": "Current Balance",
+    "level": "Level",
+    "next_level": "Next Level",
+    "points_needed": "points to next level",
+
+    "what_are_points": "What are $SYNTRA Points?",
+    "description": "$SYNTRA Points are your currency within the Syntra AI ecosystem. Earn points for activity, level up, and unlock exclusive benefits.",
+
+    "how_to_earn": "How to Earn",
+    "earn_chat_requests": "💬 AI assistant requests",
+    "earn_daily_login": "📅 Daily login",
+    "earn_tasks": "🎯 Complete tasks",
+    "earn_subscriptions": "⭐ Premium subscription (up to 3x multiplier)",
+    "earn_referrals": "👥 Invite friends",
+
+    "earning_rates": "Earning Rates",
+    "rate_text_request": "+5 points per message (up to 3x with Premium)",
+    "rate_suggested_prompt": "+10 points per suggested prompt",
+    "rate_market_analysis": "+15 points for market analysis",
+    "rate_daily_login": "+50-3,000 points daily login (streak bonus)",
+    "rate_referral_signup": "+500 points when friend signs up",
+    "rate_referral_premium": "+1,000 points when friend buys Premium",
+
+    "day_streak": "day streak",
+    "longest": "Longest",
+    "days": "days",
+    "streak_bonus_info": "Keep logging in daily for bonus points!",
+
+    "future_value_title": "🚀 Future Value",
+    "future_value_hint": "Your $SYNTRA Points are more than just scores. They reflect your activity in the ecosystem and may hold value in the future. Keep earning!",
+
+    "total_earned": "Total Earned",
+    "multiplier": "Earning Multiplier"
+  },
+
+  "leaderboard": {
+    "title": "Leaderboard",
+    "subtitle": "Top $SYNTRA Points holders",
+    "your_position": "Your position",
+    "to_top_10": "to reach top 10",
+    "pts": "pts",
+    "you": "You",
+    "level": "Lvl",
+    "no_participants": "No participants yet",
+    "updated_realtime": "Updated in real-time",
+    "refresh": "Refresh",
+    "failed_load": "Failed to load leaderboard",
+    "try_again": "Try again",
+    "top": "Top"
+  },
+
+  "landing": {
+    "header": {
+      "nav": {
+        "how": "How it works",
+        "features": "Features",
+        "forwho": "For whom",
+        "referral": "Referral",
+        "faq": "FAQ"
+      },
+      "channel": "Channel",
+      "open": "Open"
+    },
+
+    "hero": {
+      "badge": "Telegram & Web",
+      "title": "AI for Crypto Analytics",
+      "subtitle": "Syntra AI analyzes the market and explains what's happening — in simple terms. No magic, no charlatanism, no promises of easy gains.",
+      "trial_feature": "7 days <strong>Premium trial</strong> free",
+      "trial_requests": "30 requests/day during trial",
+      "trial_after": "After trial: 1 request/day or subscription from $9.99",
+      "cta_telegram": "🤖 Start for free",
+      "cta_web": "🚀 Start 7-Day Trial",
+      "channel_btn": "Channel",
+      "quick_login": "Already have an account?",
+      "sign_in": "Sign in →",
+      "note_telegram": "7 days Premium free, then 1 request/day. Not a 'signal channel' — a platform for conscious decisions.",
+      "note_web": "No credit card required • 7-day Premium trial • Telegram & Web"
+    },
+
+    "problem": {
+      "title": "Why crypto feels like chaos",
+      "subtitle": "Most people enter crypto the same way: telegram channels, noise, 'buy this urgently' tips, Twitter threads and YouTube videos. The result is a mess in your head instead of a clear picture.",
+      "noise_title": "Info Noise",
+      "noise_text": "Every day there's a new 'token of the day', a new expert, and a new 'last chance to enter'.",
+      "emotions_title": "Emotions",
+      "emotions_text": "Enter on FOMO, exit on panic. A couple of drawdowns — and it feels like the market is personally against you.",
+      "structure_title": "No Structure",
+      "structure_text": "Everything looks like a casino, not a tool: levels, news, and risks don't add up to a picture."
+    },
+
+    "solution": {
+      "title": "Syntra AI gathers the picture and speaks to the point",
+      "subtitle": "This is not a signal channel. Syntra AI is an assistant that looks at the market and coins like a cold analyst, but explains everything in simple terms.",
+      "market_title": "Clear Market Picture",
+      "market_text": "What's happening with Bitcoin and altcoins now: growth, pullback, or just noise. No extra charts, just the essence.",
+      "coins_title": "Coin Analysis on Request",
+      "coins_text": "You write: 'What do you think about SOL?' — you get an explanation: what the coin is about, what risks exist, and what to watch.",
+      "risks_title": "Focus on Risks",
+      "risks_text": "If you want to jump in 'before it's too late', the bot will carefully show where exactly you're risking now."
+    },
+
+    "how": {
+      "title": "How it works",
+      "subtitle": "Works where it's convenient for you: in Telegram without registration or on the web via email. No complex settings — choose a platform and start.",
+      "step1_title": "Choose your format",
+      "step1_text": "Telegram bot — one tap, no registration. Web version — quick email authorization in 30 seconds.",
+      "step2_title": "Write like to a human",
+      "step2_text": "'What's up with the market today?', 'Tell me about TON', 'Should I keep holding this coin?'",
+      "step3_title": "Get an answer and act consciously",
+      "step3_text": "The bot doesn't promise anything. It explains the picture and helps remove unnecessary emotions."
+    },
+
+    "forwho": {
+      "title": "Who is Syntra AI for",
+      "newbies_title": "Crypto Newbies",
+      "newbies_text": "If you're just getting into crypto and want to understand what's happening and how risky it all is.",
+      "burned_title": "Those who've been burned",
+      "burned_text": "If you've made impulsive entries and experienced unpleasant drawdowns — here you'll get a calmer view of the market.",
+      "traders_title": "Traders and Investors",
+      "traders_text": "If you need a second opinion on an idea, coin, or portfolio — without fanaticism and info-gypsyism."
+    },
+
+    "features": {
+      "title": "What Syntra AI can do",
+      "subtitle": "Inside — complex mechanics and data, but what matters to you is one thing: the bot helps you organize your thoughts and stop acting 'on a whim'.",
+      "market_title": "Tracks market and news",
+      "market_text": "Watches market movement and important events so you have context, not just a chart.",
+      "risks_title": "Explains risks",
+      "risks_text": "Says not only 'looks interesting', but also 'here's where you could lose money'.",
+      "friend_title": "Responds like a smart friend",
+      "friend_text": "A bit sarcastic, but honest. No rose-colored glasses and promises of quick gains."
+    },
+
+    "personality": {
+      "title": "Bot's character: honest and no hype",
+      "subtitle": "Syntra AI won't convince you that everything is great. It will tell you if it sees risks, call things by their names, and is a bit sarcastic — but always to the point.",
+      "quote": "Not sure this is your best moment to enter, but if you're ready for volatility — okay, here's what I see...",
+      "quote_author": "— Typical Syntra AI response",
+      "direct_title": "🎯 Straightforward",
+      "direct_text": "Doesn't romanticize. If a coin looks like a bubble — it will say so.",
+      "rational_title": "🧠 Rational",
+      "rational_text": "Relies on data, indicators, and facts. Leaves emotions behind the scenes.",
+      "irony_title": "😏 With light irony",
+      "irony_text": "Can tease if you're entering at highs or panicking at lows. But it's not anger — it's care."
+    },
+
+    "pricing": {
+      "title": "Start with 7-Day Premium Trial",
+      "subtitle": "New users get <strong>7 days of Premium</strong> free — 30 requests/day, charts, screenshot analysis. Then choose: free plan or subscription.",
+
+      "free_title": "Free",
+      "free_price": "$0/month",
+      "free_note": "After trial period",
+      "free_feature1": "1 text request/day",
+      "free_feature2": "1 chart/day",
+      "free_feature3": "Basic indicators",
+      "free_feature4": "Market news",
+      "free_cta": "Start trial",
+
+      "basic_title": "Basic",
+      "basic_price": "$9.99/month",
+      "basic_note": "For active traders",
+      "basic_feature1": "15 requests + 5 charts + 3 screenshots/day",
+      "basic_feature2": "🧠 AI Thinking Mode",
+      "basic_feature3": "All technical indicators",
+      "basic_feature4": "Candlestick patterns",
+      "basic_feature5": "Funding rates",
+      "basic_cta": "Choose Basic",
+
+      "premium_badge": "Popular",
+      "premium_title": "Premium",
+      "premium_price": "$24.99/month",
+      "premium_note": "Full functionality + AI 2025",
+      "premium_feature1": "20 requests + 7 charts + 7 screenshots/day",
+      "premium_feature2": "🔥 Advanced AI models (2025)",
+      "premium_feature3": "On-chain metrics",
+      "premium_feature4": "Liquidations history",
+      "premium_feature5": "Market cycle analysis",
+      "premium_feature6": "🎁 7-day free trial",
+      "premium_cta": "Start Premium trial",
+      "premium_discount": "🎁 -20% discount on first payment (48 hours after trial)"
+    },
+
+    "referral": {
+      "title": "Invite friends — earn with us",
+      "subtitle": "Referral program with <strong>revenue share</strong> — get a percentage of your referrals' subscriptions. The more you invite, the more you earn.",
+
+      "bonuses_title": "🎁 Registration bonuses",
+      "friend_gets": "Your friend gets:",
+      "friend_bonus": "+5 bonus requests right after registration",
+      "you_get": "You get:",
+      "you_bonus": "+10 requests after referral activation (>24h + 5 requests)",
+
+      "how_title": "⚡ How it works",
+      "how_step1": "Get your referral link in the bot",
+      "how_step2": "Share the link with friends",
+      "how_step3": "They register and get bonuses",
+      "how_step4": "You get bonuses + tier upgrade",
+
+      "tiers_title": "Tier system for active inviters",
+      "bronze": "Bronze",
+      "bronze_range": "0-4 referrals",
+      "bronze_benefits": "Basic bonuses",
+
+      "silver": "Silver",
+      "silver_range": "5-14 referrals",
+      "silver_benefit1": "+50 requests/month",
+      "silver_benefit2": "-10% discount",
+      "silver_benefit3": "5% revenue share",
+
+      "gold": "Gold",
+      "gold_range": "15-49 referrals",
+      "gold_benefit1": "+150 requests/month",
+      "gold_benefit2": "-20% discount",
+      "gold_benefit3": "10% revenue share",
+
+      "platinum": "Platinum",
+      "platinum_range": "50+ referrals",
+      "platinum_benefit1": "+500 requests/month",
+      "platinum_benefit2": "-30% discount",
+      "platinum_benefit3": "15% revenue share",
+
+      "revenue_note": "💰 Revenue share = percentage of revenue from your active referrals' subscriptions",
+
+      "tasks_title": "🎯 Tasks",
+      "tasks_desc": "Complete tasks in the app and earn even more $SYNTRA Points"
+    },
+
+    "faq": {
+      "title": "Frequently Asked Questions",
+      "q1_title": "Is this signals?",
+      "q1_text": "No. Syntra AI doesn't give magical entries. It helps you understand what's happening and highlights risks. The decision is always yours.",
+      "q2_title": "Do I need to understand trading?",
+      "q2_text": "No. You can come with zero experience. You ask in simple terms — the bot also responds in simple terms.",
+      "q3_title": "Is it safe?",
+      "q3_text": "The bot doesn't ask for logins, passwords, seed phrases, and doesn't manage your money. It provides information and helps you think.",
+      "q4_title": "What languages does the bot respond in?",
+      "q4_text": "Currently: Russian and English. You can write in whichever is convenient.",
+      "q5_title": "If I don't understand anything about crypto, will it make fun of me?",
+      "q5_text": "Syntra can be a bit sarcastic, but to the point. The goal is not to humiliate, but to help you stop losing on stupid decisions."
+    },
+
+    "final_cta": {
+      "title": "Want to stop playing with crypto 'by luck'?",
+      "subtitle": "Give Syntra AI a couple of questions a day — and see how your approach to the market changes.",
+      "bot_btn": "🤖 Open @SyntraAI_bot",
+      "channel_btn": "📢 Channel @SyntraTrade"
+    },
+
+    "points": {
+      "your_rewards": "💎 Your Rewards",
+      "current_balance": "Current Balance",
+      "level": "Level",
+      "next_level": "Next Level",
+      "points_needed": "points to next level",
+
+      "what_are_points": "What are $SYNTRA Points?",
+      "description": "$SYNTRA Points are your currency within the Syntra AI ecosystem. Earn points for activity, level up, and unlock exclusive benefits.",
+
+      "how_to_earn": "How to Earn",
+      "earn_chat_requests": "💬 AI assistant requests",
+      "earn_daily_login": "📅 Daily login",
+      "earn_subscriptions": "⭐ Premium subscription (up to 3x multiplier)",
+      "earn_referrals": "👥 Invite friends",
+      "earn_special_events": "🎁 Special events and contests",
+
+      "earning_rates": "Earning Rates",
+      "rate_text_request": "+5 points per message (up to 3x with Premium)",
+      "rate_suggested_prompt": "+10 points per suggested prompt",
+      "rate_market_analysis": "+15 points for market analysis",
+      "rate_daily_login": "+50-3,000 points daily login (streak bonus)",
+      "rate_referral_signup": "+500 points when friend signs up",
+      "rate_referral_premium": "+1,000 points when friend buys Premium",
+
+      "your_streak": "Your Streak",
+      "day_streak": "day streak",
+      "longest": "Longest",
+      "days": "days",
+      "streak_bonus_info": "Keep logging in daily for bonus points!",
+
+      "future_value_title": "🚀 Future Value",
+      "future_value_hint": "Your $SYNTRA Points are more than just scores. They reflect your activity in the ecosystem and may hold value in the future. Keep earning!",
+
+      "total_earned": "Total Earned",
+      "total_spent": "Total Spent",
+      "multiplier": "Earning Multiplier",
+
+      "close": "Close"
+    },
+
+    "footer": {
+      "bot": "Bot",
+      "channel": "Channel",
+      "support": "Support",
+      "terms": "Terms of Use",
+      "privacy": "Privacy Policy",
+      "copyright": "© Syntra AI. This is not financial advice."
+    }
+  },
+
+  "tasks": {
+    "title": "Tasks",
+    "earn_points": "Earn $SYNTRA",
+    "subtitle": "Complete tasks to earn points",
+    "available_tasks": "Available Tasks",
+    "completed_tasks": "Completed",
+    "all_done": "All Done!",
+    "check_back": "Check back later for new tasks",
+    "load_error": "Failed to load tasks",
+    "start_error": "Failed to start task",
+    "verify_error": "Failed to verify task",
+    "verify_failed": "Verification failed. Make sure you completed the task.",
+    "task_started": "Task started! Complete it and click Verify",
+    "start": "Start",
+    "verify": "Verify",
+    "verifying": "Checking...",
+    "opening": "Opening...",
+    "awaiting_review": "Awaiting review",
+    "if_unsub": "if unsubscribe",
+    "status_completed": "Done",
+    "status_pending": "In Progress",
+    "status_review": "Under Review",
+    "status_verified": "Verified",
+    "status_failed": "Failed",
+    "status_revoked": "Revoked",
+    "important": "Important",
+    "rule_stay_subscribed": "Stay subscribed to keep your points",
+    "rule_penalty": "Unsubscribing results in penalty",
+    "rule_verify": "Click Verify after completing the task",
+    "upload_screenshot": "Upload Screenshot",
+    "screenshot_instruction": "Take a screenshot of your X (Twitter) follow",
+    "tap_to_upload": "Tap to select",
+    "up_to": "up to",
+    "uploading": "Uploading...",
+    "screenshot_hint": "Screenshot should show your profile and follow to @SyntraTrade",
+    "screenshot_submitted": "Screenshot submitted for review!",
+    "screenshot_error": "Failed to submit screenshot",
+    "invalid_image": "Please select an image",
+    "image_too_large": "Image too large (max 5MB)",
+    "cancel": "Cancel"
   }
 }

@@ -6,7 +6,6 @@ This extends the base OpenAI service with intelligent function calling capabilit
 AI decides when to call functions to get crypto data automatically.
 """
 import json
-import logging
 from typing import AsyncGenerator, Optional, List, Dict, Any
 from datetime import datetime
 
@@ -20,7 +19,7 @@ from src.services.openai_service import OpenAIService
 from src.services.crypto_tools import CRYPTO_TOOLS, execute_tool
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class OpenAIServiceWithTools(OpenAIService):

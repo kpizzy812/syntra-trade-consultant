@@ -11,16 +11,19 @@ Run: python demo_new_features.py
 """
 
 import asyncio
-import logging
 from datetime import datetime
 
 from src.services.binance_service import BinanceService
 from src.services.cycle_analysis_service import CycleAnalysisService
 from src.services.coinmetrics_service import CoinMetricsService
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Setup logging with loguru
+from loguru import logger
+import sys
+
+# Configure loguru for demo (simple console output)
+logger.remove()  # Remove default handler
+logger.add(sys.stdout, level="INFO", format="<green>{time:HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>")
 
 
 async def demo_funding_rates():

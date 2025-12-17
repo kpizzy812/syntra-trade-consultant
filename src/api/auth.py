@@ -1,6 +1,7 @@
 """
-Telegram Mini App Authentication
-Валидация initData через HMAC-SHA256
+Multi-Platform Authentication
+- Telegram Mini App: HMAC-SHA256 validation of initData
+- Web: NextAuth JWT validation
 """
 
 import hashlib
@@ -13,10 +14,17 @@ from urllib.parse import parse_qsl
 
 from fastapi import HTTPException, Header, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+from jose import JWTError, jwt
+from loguru import logger
 
-from src.database.crud import get_user_by_telegram_id
+from src.database.crud import get_user_by_telegram_id, get_user_by_email, get_or_create_user
 from src.database.models import User
+from src.database.engine import get_session
 from config.config import BOT_TOKEN
+
+# NextAuth JWT secret (должен совпадать с NEXTAUTH_SECRET в .env.local фронтенда)
+NEXTAUTH_SECRET = os.getenv('NEXTAUTH_SECRET', 'your-nextauth-secret-here')
+NEXTAUTH_ALGORITHM = "HS256"
 
 # Expiration time для initData (по умолчанию 24 часа = 86400 секунд)
 INIT_DATA_EXPIRATION = int(os.getenv('INIT_DATA_EXPIRATION', '86400'))
@@ -135,16 +143,60 @@ def validate_telegram_init_data(init_data: str, bot_token: str) -> Dict[str, Any
         )
 
 
-async def get_current_user(
-    authorization: str = Header(...),
-    session: AsyncSession = Depends()
-) -> User:
+def decode_nextauth_jwt(token: str) -> Dict[str, Any]:
     """
-    FastAPI Dependency для получения текущего пользователя
-    Извлекает и валидирует Telegram initData из Authorization header
+    Decode and validate NextAuth JWT token.
 
     Args:
-        authorization: Header в формате "tma <initDataRaw>"
+        token: JWT token from NextAuth
+
+    Returns:
+        dict: Decoded JWT payload with user data
+
+    Raises:
+        HTTPException: If token is invalid or expired
+    """
+    try:
+        # Decode JWT token
+        payload = jwt.decode(
+            token,
+            NEXTAUTH_SECRET,
+            algorithms=[NEXTAUTH_ALGORITHM]
+        )
+
+        # Validate required fields
+        if not payload.get('email'):
+            raise HTTPException(
+                status_code=401,
+                detail="Missing email in JWT payload"
+            )
+
+        return payload
+
+    except JWTError as e:
+        raise HTTPException(
+            status_code=401,
+            detail=f"Invalid JWT token: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=401,
+            detail=f"JWT validation failed: {str(e)}"
+        )
+
+
+async def get_current_user(
+    authorization: str = Header(...),
+    session: AsyncSession = Depends(get_session)
+) -> User:
+    """
+    FastAPI Dependency для получения текущего пользователя.
+    Поддерживает multi-platform authentication:
+    - Telegram Mini App: "tma <initDataRaw>"
+    - Web (NextAuth): "Bearer <jwt_token>"
+
+    Args:
+        authorization: Authorization header
         session: Database session
 
     Returns:
@@ -158,33 +210,160 @@ async def get_current_user(
         async def get_profile(user: User = Depends(get_current_user)):
             return {"user_id": user.id}
     """
-    # Check header format
-    if not authorization.startswith('tma '):
+    # Telegram Mini App authentication
+    if authorization.startswith('tma '):
+        # Extract initData
+        init_data_raw = authorization[4:]  # Remove "tma " prefix
+
+        # Validate initData
+        init_data = validate_telegram_init_data(init_data_raw, BOT_TOKEN)
+
+        # Get user from database
+        if not init_data.get('user'):
+            raise HTTPException(
+                status_code=401,
+                detail="No user data in init data"
+            )
+
+        telegram_id = init_data['user']['id']
+        telegram_user = init_data['user']
+
+        # Auto-create user if not exists (like bot's DatabaseMiddleware)
+        user, is_new = await get_or_create_user(
+            session,
+            telegram_id=telegram_id,
+            username=telegram_user.get('username'),
+            first_name=telegram_user.get('first_name'),
+            last_name=telegram_user.get('last_name'),
+            photo_url=telegram_user.get('photo_url'),
+            telegram_language=telegram_user.get('language_code'),
+        )
+
+        if is_new:
+            logger.info(f"Auto-created user from Mini App: telegram_id={telegram_id}, username={telegram_user.get('username')}")
+
+        # Check if user is banned
+        if user.is_banned:
+            raise HTTPException(
+                status_code=403,
+                detail="Your account has been suspended"
+            )
+
+        return user
+
+    # Web (NextAuth) authentication
+    elif authorization.startswith('Bearer '):
+        # Extract JWT token
+        token = authorization[7:]  # Remove "Bearer " prefix
+
+        # Decode and validate JWT
+        payload = decode_nextauth_jwt(token)
+
+        # Get user by email
+        email = payload.get('email')
+        if not email:
+            raise HTTPException(
+                status_code=401,
+                detail="Missing email in JWT payload"
+            )
+
+        user = await get_user_by_email(session, email)
+
+        if not user:
+            raise HTTPException(
+                status_code=404,
+                detail=f"User not found (email: {email})"
+            )
+
+        # Check if user is banned
+        if user.is_banned:
+            raise HTTPException(
+                status_code=403,
+                detail="Your account has been suspended"
+            )
+
+        return user
+
+    # Invalid auth header format
+    else:
         raise HTTPException(
             status_code=401,
-            detail="Invalid authorization header format. Expected: 'tma <initData>'"
+            detail="Invalid authorization header. Expected: 'tma <initData>' or 'Bearer <token>'"
         )
 
-    # Extract initData
-    init_data_raw = authorization[4:]  # Remove "tma " prefix
 
-    # Validate initData
-    init_data = validate_telegram_init_data(init_data_raw, BOT_TOKEN)
+# Tuple type for user+session dependency
+from typing import Tuple
 
-    # Get user from database
-    if not init_data.get('user'):
+
+async def get_current_user_with_session(
+    authorization: str = Header(...),
+    session: AsyncSession = Depends(get_session)
+) -> Tuple[User, AsyncSession]:
+    """
+    Get current user AND the session together.
+    Use this in endpoints that need to make additional DB queries.
+    This ensures user and queries use the SAME session, avoiding greenlet issues.
+
+    Usage:
+        @router.get("/endpoint")
+        async def handler(
+            user_session: Tuple[User, AsyncSession] = Depends(get_current_user_with_session)
+        ):
+            user, session = user_session
+            # Now use session for queries
+    """
+    # Telegram Mini App authentication
+    if authorization.startswith('tma '):
+        init_data_raw = authorization[4:]
+        init_data = validate_telegram_init_data(init_data_raw, BOT_TOKEN)
+
+        if not init_data.get('user'):
+            raise HTTPException(status_code=401, detail="No user data in init data")
+
+        telegram_id = init_data['user']['id']
+        telegram_user = init_data['user']
+
+        # Auto-create user if not exists (like bot's DatabaseMiddleware)
+        user, is_new = await get_or_create_user(
+            session,
+            telegram_id=telegram_id,
+            username=telegram_user.get('username'),
+            first_name=telegram_user.get('first_name'),
+            last_name=telegram_user.get('last_name'),
+            photo_url=telegram_user.get('photo_url'),
+            telegram_language=telegram_user.get('language_code'),
+        )
+
+        if is_new:
+            logger.info(f"Auto-created user from Mini App (with_session): telegram_id={telegram_id}")
+
+        if user.is_banned:
+            raise HTTPException(status_code=403, detail="Your account has been suspended")
+
+        return user, session
+
+    # Web (NextAuth) authentication
+    elif authorization.startswith('Bearer '):
+        token = authorization[7:]
+        payload = decode_nextauth_jwt(token)
+
+        email = payload.get('email')
+        if not email:
+            raise HTTPException(status_code=401, detail="Missing email in JWT payload")
+
+        user = await get_user_by_email(session, email)
+
+        if not user:
+            raise HTTPException(status_code=404, detail=f"User not found (email: {email})")
+
+        if user.is_banned:
+            raise HTTPException(status_code=403, detail="Your account has been suspended")
+
+        return user, session
+
+    else:
         raise HTTPException(
             status_code=401,
-            detail="No user data in init data"
+            detail="Invalid authorization header. Expected: 'tma <initData>' or 'Bearer <token>'"
         )
-
-    telegram_id = init_data['user']['id']
-    user = await get_user_by_telegram_id(session, telegram_id)
-
-    if not user:
-        raise HTTPException(
-            status_code=404,
-            detail=f"User not found (telegram_id: {telegram_id})"
-        )
-
-    return user

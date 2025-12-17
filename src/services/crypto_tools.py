@@ -10,7 +10,7 @@ Following OpenAI best practices 2025:
 - Validation
 """
 import json
-import logging
+import time
 from typing import Dict, Any, List
 from datetime import datetime
 
@@ -29,7 +29,7 @@ from src.services.price_levels_service import PriceLevelsService
 from src.utils.coin_parser import normalize_coin_name
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 def convert_to_serializable(obj: Any) -> Any:
@@ -267,6 +267,56 @@ CRYPTO_TOOLS = [
                     },
                 },
                 "required": ["coin_id"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_coins_by_category",
+            "description": (
+                "Get cryptocurrencies by specific category (Layer-1, DeFi, Gaming, etc.). "
+                "Use this when user asks about specific categories like: "
+                "'show me Layer-1 coins', 'what are the best DeFi projects', "
+                "'gaming tokens', 'which Layer-2 solutions exist', etc. "
+                "Popular categories: layer-1, smart-contract-platform, decentralized-finance-defi, "
+                "layer-2, gaming, metaverse, ethereum-ecosystem, solana-ecosystem, "
+                "binance-smart-chain, polygon-ecosystem, avalanche-ecosystem, "
+                "decentralized-exchange, lending-borrowing, yield-farming, "
+                "oracle, privacy-coins, meme-token, infrastructure. "
+                "Returns top coins in that category by market cap, excluding BTC/ETH."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": (
+                            "Category ID. Popular categories:\n"
+                            "- layer-1: Layer 1 blockchains (SOL, ADA, AVAX, DOT)\n"
+                            "- smart-contract-platform: Smart contract platforms\n"
+                            "- decentralized-finance-defi: DeFi projects (UNI, AAVE, MKR)\n"
+                            "- layer-2: Layer 2 solutions (ARB, OP, MATIC)\n"
+                            "- gaming: Gaming & Metaverse (AXS, SAND, MANA)\n"
+                            "- ethereum-ecosystem: Ethereum ecosystem projects\n"
+                            "- solana-ecosystem: Solana ecosystem projects\n"
+                            "- decentralized-exchange: DEX tokens (UNI, SUSHI, CAKE)\n"
+                            "- lending-borrowing: Lending protocols (AAVE, COMP)\n"
+                            "- oracle: Oracle networks (LINK, BAND)\n"
+                            "- meme-token: Meme coins (DOGE, SHIB, PEPE)\n"
+                            "If unsure, use closest match (e.g., 'layer-1' for 'L1')."
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Number of coins to return (5-20). Default: 10",
+                        "default": 10,
+                        "minimum": 5,
+                        "maximum": 20,
+                    },
+                },
+                "required": ["category"],
                 "additionalProperties": False,
             },
         },
@@ -552,12 +602,13 @@ async def compare_cryptos(coin_ids: List[str]) -> Dict[str, Any]:
         return {"success": False, "error": f"Failed to compare cryptos: {str(e)}"}
 
 
-async def get_top_cryptos(limit: int = 10) -> Dict[str, Any]:
+async def get_top_cryptos(limit: int = 10, altcoins_only: bool = False) -> Dict[str, Any]:
     """
     Get top cryptocurrencies by market cap
 
     Args:
         limit: Number of coins (5-20)
+        altcoins_only: If True, exclude BTC and ETH (default: False)
 
     Returns:
         Dict with top coins data or error
@@ -566,8 +617,15 @@ async def get_top_cryptos(limit: int = 10) -> Dict[str, Any]:
         # Validate limit
         limit = max(5, min(limit, 20))
 
-        # Get top coins
-        top_coins = await coingecko_service.get_trending_coins(limit=limit)
+        # OPTIMIZATION: Use new get_top_altcoins if altcoins_only requested
+        if altcoins_only:
+            top_coins = await coingecko_service.get_top_altcoins(
+                limit=limit,
+                exclude_stablecoins=True
+            )
+        else:
+            # Get all top coins including BTC/ETH
+            top_coins = await coingecko_service.get_trending_coins(limit=limit)
 
         if not top_coins:
             return {"success": False, "error": "Failed to fetch top cryptocurrencies"}
@@ -597,9 +655,74 @@ async def get_top_cryptos(limit: int = 10) -> Dict[str, Any]:
         return {"success": False, "error": f"Failed to fetch top cryptos: {str(e)}"}
 
 
+async def get_coins_by_category(category: str, limit: int = 10) -> Dict[str, Any]:
+    """
+    Get cryptocurrencies by category
+
+    Args:
+        category: Category ID (e.g., 'layer-1', 'decentralized-finance-defi')
+        limit: Number of coins (5-20)
+
+    Returns:
+        Dict with coins data or error
+    """
+    try:
+        # Validate limit
+        limit = max(5, min(limit, 20))
+
+        # Get coins by category
+        coins = await coingecko_service.get_coins_by_category(
+            category=category,
+            per_page=limit,
+            exclude_btc_eth=True
+        )
+
+        if not coins:
+            return {
+                "success": False,
+                "error": f"No coins found for category '{category}' or category doesn't exist"
+            }
+
+        # Format data
+        formatted_coins = []
+        for coin in coins:
+            formatted_coins.append(
+                {
+                    "name": coin.get("name", "Unknown"),
+                    "symbol": coin.get("symbol", "").upper(),
+                    "price_usd": coin.get("current_price", 0),
+                    "change_24h_percent": coin.get("price_change_percentage_24h", 0),
+                    "market_cap_usd": coin.get("market_cap", 0),
+                    "rank": coin.get("market_cap_rank", 0),
+                    "ath_usd": coin.get("ath", 0),
+                    "ath_change_percent": coin.get("ath_change_percentage", 0),
+                }
+            )
+
+        return {
+            "success": True,
+            "category": category,
+            "coins": formatted_coins,
+            "count": len(formatted_coins),
+        }
+
+    except Exception as e:
+        logger.error(f"Error in get_coins_by_category for {category}: {e}")
+        return {"success": False, "error": f"Failed to fetch coins for category: {str(e)}"}
+
+
+# Cache for market overview results (to avoid rate limits)
+_market_overview_cache = None
+_market_overview_cache_time = 0
+MARKET_OVERVIEW_CACHE_TTL = 120  # 2 minutes cache
+
+
 async def get_market_overview() -> Dict[str, Any]:
     """
     Get comprehensive crypto market overview with BTC/ETH prices, technical analysis, and relevant news
+
+    Uses aggressive caching (2 minutes) to prevent rate limit issues when multiple users
+    request market data simultaneously.
 
     Returns:
         Dict with structured market data:
@@ -610,6 +733,15 @@ async def get_market_overview() -> Dict[str, Any]:
             "news": [{"title", "summary", "sentiment", "source", "url"}]
         }
     """
+    global _market_overview_cache, _market_overview_cache_time
+
+    # Check cache first
+    current_time = time.time()
+    if _market_overview_cache and (current_time - _market_overview_cache_time) < MARKET_OVERVIEW_CACHE_TTL:
+        cache_age = int(current_time - _market_overview_cache_time)
+        logger.info(f"📦 Returning cached market overview (age: {cache_age}s, TTL: {MARKET_OVERVIEW_CACHE_TTL}s)")
+        return _market_overview_cache
+
     try:
         logger.info("Starting comprehensive market overview collection...")
 
@@ -674,15 +806,35 @@ async def get_market_overview() -> Dict[str, Any]:
                         long_short_ratio = long_short_data.get("long_short_ratio")
                         ls_sentiment = long_short_data.get("sentiment")
 
-                    # Extract cycle data (Rainbow Chart - market phase)
+                    # Extract cycle data (Rainbow Chart + Pi Cycle - market phase)
                     cycle_data = btc_ta.get("cycle_data")
                     market_phase = None
+                    pi_cycle_signal = None
+                    pi_cycle_distance = None
+                    ma_200w_distance = None
+
                     if cycle_data:
                         market_phase = cycle_data.get("current_band")  # e.g., "Buy zone", "Accumulate", "HODL", "Sell zone"
+
+                        # Pi Cycle Top indicator
+                        pi_cycle = cycle_data.get("pi_cycle")
+                        if pi_cycle:
+                            pi_cycle_signal = pi_cycle.get("signal")  # "top_signal", "overheated", "bullish"
+                            pi_cycle_distance = pi_cycle.get("distance_to_top_pct")
+
+                        # 200 Week MA distance
+                        ma_200w_distance = cycle_data.get("distance_from_200w_pct")
+
+                    # Extract ATH data from extended market data
+                    extended_data = btc_ta.get("extended_market_data", {})
+                    ath = extended_data.get("ath", 0)
+                    ath_change_pct = extended_data.get("ath_change_percentage", 0)
 
                 btc_data = {
                     "price": btc_price,
                     "change_24h": btc_change_24h,
+                    "ath": ath,
+                    "ath_change_pct": ath_change_pct,
                     "rsi": rsi,
                     "macd": macd,
                     "ema_20": ema_20,
@@ -693,7 +845,10 @@ async def get_market_overview() -> Dict[str, Any]:
                     "funding_sentiment": funding_sentiment,
                     "long_short_ratio": long_short_ratio,
                     "ls_sentiment": ls_sentiment,
-                    "market_phase": market_phase,
+                    "market_phase": market_phase,  # Rainbow Chart band
+                    "pi_cycle_signal": pi_cycle_signal,  # Pi Cycle Top signal
+                    "pi_cycle_distance": pi_cycle_distance,  # Distance to top %
+                    "ma_200w_distance": ma_200w_distance,  # Distance from 200W MA floor %
                     "tf": "1d"
                 }
                 logger.info(f"BTC data collected: ${btc_price:,.2f} ({btc_change_24h:+.2f}%)")
@@ -701,35 +856,115 @@ async def get_market_overview() -> Dict[str, Any]:
             logger.warning(f"Failed to get BTC data: {e}")
             btc_data = {"error": str(e)}
 
-        # ========== 2. GET ETH PRICE ==========
+        # ========== 2. GET ETH + TOP ALTCOINS DATA DYNAMICALLY ==========
         eth_data = {}
+        alts_data = []
+
         try:
+            # OPTIMIZATION: Use dynamic top altcoins method instead of hardcoded list
+            # This gets the most relevant altcoins by market cap, excluding BTC, ETH and stablecoins
+            logger.info("Fetching top altcoins dynamically from CoinGecko...")
+
+            # Get top 30 altcoins (we'll process top 15-20 for overview)
+            top_altcoins = await coingecko_service.get_top_altcoins(
+                vs_currency="usd",
+                limit=30,
+                exclude_stablecoins=True
+            )
+
+            if top_altcoins:
+                logger.info(f"✅ Got {len(top_altcoins)} top altcoins in 1 API call")
+
+                # Process altcoins data
+                for coin in top_altcoins[:15]:  # Use top 15 for analysis
+                    coin_info = {
+                        "id": coin.get("id"),
+                        "symbol": coin.get("symbol", "").upper(),
+                        "price": coin.get("current_price", 0),
+                        "change_24h": coin.get("price_change_percentage_24h", 0),
+                        "ath": coin.get("ath", 0),
+                        "ath_change_pct": coin.get("ath_change_percentage", 0),
+                    }
+                    alts_data.append(coin_info)
+
+                # Calculate average drawdown from ATH for altcoins
+                if alts_data:
+                    avg_drawdown = sum(alt["ath_change_pct"] for alt in alts_data) / len(alts_data)
+                    median_drawdown = sorted([alt["ath_change_pct"] for alt in alts_data])[len(alts_data) // 2]
+                    logger.info(
+                        f"Alts data: {len(alts_data)} coins, "
+                        f"avg drawdown: {avg_drawdown:.1f}%, median: {median_drawdown:.1f}%"
+                    )
+
+            # Get ETH data separately (simple price check)
             eth_price_result = await get_crypto_price("ethereum")
             if eth_price_result.get("success"):
-                eth_data = {
-                    "price": eth_price_result.get("price_usd", 0),
-                    "change_24h": eth_price_result.get("change_24h_percent", 0)
-                }
-                logger.info(f"ETH data collected: ${eth_data['price']:,.2f} ({eth_data['change_24h']:+.2f}%)")
-        except Exception as e:
-            logger.warning(f"Failed to get ETH data: {e}")
-            eth_data = {"error": str(e)}
+                # Get extended data for ATH from the markets call if available
+                # Otherwise make separate request
+                eth_market_data = next(
+                    (coin for coin in top_altcoins if coin.get("id") == "ethereum"),
+                    None
+                ) if top_altcoins else None
 
-        # ========== 3. GET GLOBAL MARKET DATA ==========
+                if eth_market_data:
+                    eth_data = {
+                        "price": eth_market_data.get("current_price", 0),
+                        "change_24h": eth_market_data.get("price_change_percentage_24h", 0),
+                        "ath": eth_market_data.get("ath", 0),
+                        "ath_change_pct": eth_market_data.get("ath_change_percentage", 0),
+                    }
+                else:
+                    # Fallback to extended market data
+                    eth_extended = await coingecko_service.get_extended_market_data("ethereum")
+                    eth_data = {
+                        "price": eth_price_result.get("price_usd", 0),
+                        "change_24h": eth_price_result.get("change_24h_percent", 0),
+                        "ath": eth_extended.get("ath", 0) if eth_extended else 0,
+                        "ath_change_pct": eth_extended.get("ath_change_percentage", 0) if eth_extended else 0,
+                    }
+                logger.info(f"ETH data collected: ${eth_data['price']:,.2f} ({eth_data['change_24h']:+.2f}%)")
+
+        except Exception as e:
+            logger.warning(f"Failed to get dynamic altcoins data: {e}")
+            # Fallback: try to get at least ETH data
+            try:
+                eth_price_result = await get_crypto_price("ethereum")
+                if eth_price_result.get("success"):
+                    eth_extended = await coingecko_service.get_extended_market_data("ethereum")
+                    eth_data = {
+                        "price": eth_price_result.get("price_usd", 0),
+                        "change_24h": eth_price_result.get("change_24h_percent", 0),
+                        "ath": eth_extended.get("ath", 0) if eth_extended else 0,
+                        "ath_change_pct": eth_extended.get("ath_change_percentage", 0) if eth_extended else 0,
+                    }
+                    logger.info(f"ETH data collected (fallback): ${eth_data['price']:,.2f}")
+            except Exception as fallback_error:
+                logger.warning(f"Fallback ETH fetch also failed: {fallback_error}")
+                eth_data = {"error": str(fallback_error)}
+
+        # ========== 4. GET GLOBAL MARKET DATA ==========
         market_data = {}
         try:
             global_data = await coingecko_service.get_global_market_data()
 
-            if global_data:
-                # Extract dominance data
-                market_cap_percentage = global_data.get("market_cap_percentage", {})
-                btc_dominance = market_cap_percentage.get("btc")
-                eth_dominance = market_cap_percentage.get("eth")
+            if not global_data:
+                logger.warning("CoinGecko API returned no global data (API error, rate limit, or network issue)")
 
-                # Calculate altcoin dominance (others.d)
-                altcoin_dominance = None
-                if btc_dominance is not None and eth_dominance is not None:
-                    altcoin_dominance = 100 - btc_dominance - eth_dominance
+            if global_data:
+                # Extract dominance data (coingecko_service now returns enhanced metrics)
+                # NEW: Now includes stablecoin_dominance, total2/total3, and real altcoin_dominance
+                btc_dominance = global_data.get("btc_dominance", 0)
+                eth_dominance = global_data.get("eth_dominance", 0)
+                stablecoin_dominance = global_data.get("stablecoin_dominance", 0)
+                altcoin_dominance = global_data.get("altcoin_dominance", 0)  # Now excludes stablecoins
+                total2_dominance = global_data.get("total2_dominance", 0)
+                total3_dominance = global_data.get("total3_dominance", 0)
+
+                # Log warning if dominance values are missing or zero
+                if btc_dominance == 0 or eth_dominance == 0:
+                    logger.warning(
+                        f"Missing dominance data from coingecko_service: BTC={btc_dominance}, ETH={eth_dominance}"
+                    )
 
                 # Calculate dominance change (we don't have historical, so estimate from BTC vs market change)
                 total_mcap_change = global_data.get("market_cap_change_percentage_24h_usd", 0)
@@ -744,25 +979,48 @@ async def get_market_overview() -> Dict[str, Any]:
                 fear_greed = await fear_greed_service.get_current()
                 fear_greed_value = fear_greed.get("value", 50) if fear_greed else 50
 
-                # Determine market trend
+                # Determine market trend based on multiple factors
                 trend = "sideways"
                 if btc_change > 2 and total_mcap_change > 1:
                     trend = "bullish"
                 elif btc_change < -2 and total_mcap_change < -1:
                     trend = "bearish"
 
+                # Determine market phase for altseason detection
+                # Altseason indicators:
+                # - BTC dominance declining
+                # - Real Alts dominance rising (excluding stablecoins)
+                # - TOTAL3 dominance rising
+                market_phase = "btc_season"  # Default
+                if altcoin_dominance > 25 and total3_dominance > 35:
+                    market_phase = "alt_season"
+                elif eth_dominance > 15 and btc_dominance < 50:
+                    market_phase = "eth_season"
+                elif stablecoin_dominance > 12:
+                    market_phase = "risk_off"  # Capital flowing to stablecoins
+
                 market_data = {
+                    # Core dominance metrics
                     "btc_dominance": btc_dominance,
                     "eth_dominance": eth_dominance,
-                    "altcoin_dominance": altcoin_dominance,
+                    "stablecoin_dominance": stablecoin_dominance,
+                    "altcoin_dominance": altcoin_dominance,  # Real alts (excludes stablecoins)
+                    # TradingView-style metrics
+                    "total2_dominance": total2_dominance,  # All except BTC
+                    "total3_dominance": total3_dominance,  # All except BTC & ETH
+                    # Market metrics
                     "dominance_change_24h": dominance_change_24h,
                     "fear_greed_index": fear_greed_value,
                     "total_mcap_change_24h": total_mcap_change,
-                    "trend": trend
+                    "trend": trend,
+                    "market_phase": market_phase,  # NEW: alt_season/btc_season/eth_season/risk_off
                 }
+                # Log enhanced market data
                 logger.info(
                     f"Market data: BTC {btc_dominance:.2f}%, ETH {eth_dominance:.2f}%, "
-                    f"Alts {altcoin_dominance:.2f}%, F&G: {fear_greed_value}, trend: {trend}"
+                    f"Stables {stablecoin_dominance:.2f}%, Real Alts {altcoin_dominance:.2f}% | "
+                    f"TOTAL2 {total2_dominance:.2f}%, TOTAL3 {total3_dominance:.2f}% | "
+                    f"F&G: {fear_greed_value}, Phase: {market_phase}, Trend: {trend}"
                 )
         except Exception as e:
             logger.warning(f"Failed to get market data: {e}")
@@ -794,17 +1052,32 @@ async def get_market_overview() -> Dict[str, Any]:
             except:
                 pass
 
-        # ========== 5. RETURN STRUCTURED DATA ==========
-        return {
+        # ========== 5. CACHE AND RETURN STRUCTURED DATA ==========
+        result = {
             "success": True,
             "btc": btc_data,
             "eth": eth_data,
+            "alts": alts_data,  # Top altcoins with ATH data for risk/reward analysis
             "market": market_data,
             "news": news_data
         }
 
+        # Cache the result
+        _market_overview_cache = result
+        _market_overview_cache_time = time.time()
+        logger.info(f"✅ Market overview cached for {MARKET_OVERVIEW_CACHE_TTL}s")
+
+        return result
+
     except Exception as e:
         logger.error(f"Error in get_market_overview: {e}")
+
+        # If we have cached data, return it even if expired (graceful degradation)
+        if _market_overview_cache:
+            cache_age = int(time.time() - _market_overview_cache_time)
+            logger.warning(f"⚠️ Error occurred, returning stale cache (age: {cache_age}s)")
+            return _market_overview_cache
+
         return {"success": False, "error": f"Failed to fetch market overview: {str(e)}"}
 
 
@@ -866,15 +1139,23 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
             if symbol:
                 funding = await binance_service.get_latest_funding_rate(symbol)
                 if funding:
+                    # Convert funding_time to string if it's a Timestamp
+                    funding_time = funding.get("funding_time")
+                    if funding_time and hasattr(funding_time, 'isoformat'):
+                        funding_time = funding_time.isoformat()
+
                     funding_data = {
                         "funding_rate_pct": funding["funding_rate_pct"],
                         "sentiment": funding["sentiment"],
-                        "funding_time": funding.get("funding_time"),
+                        "funding_time": funding_time,
                     }
                     # Get Open Interest
                     oi = await binance_service.get_open_interest(symbol)
                     if oi:
                         funding_data["open_interest"] = oi["open_interest"]
+                        # Convert timestamp to string if present
+                        if "timestamp" in oi and hasattr(oi["timestamp"], 'isoformat'):
+                            funding_data["open_interest_timestamp"] = oi["timestamp"].isoformat()
                     logger.info(
                         f"Got funding rate for {symbol}: {funding['funding_rate_pct']:.4f}%"
                     )
@@ -892,12 +1173,13 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
                     symbol, period="5m", limit=30
                 )
                 if ls_ratio:
+                    # timestamp уже строка из binance_service (строка 618)
                     long_short_data = {
                         "long_account": ls_ratio["long_account"],
                         "short_account": ls_ratio["short_account"],
                         "long_short_ratio": ls_ratio["long_short_ratio"],
                         "sentiment": ls_ratio["sentiment"],
-                        "timestamp": ls_ratio.get("timestamp"),
+                        "timestamp": ls_ratio.get("timestamp"),  # Already a string
                     }
                     logger.info(
                         f"Got Long/Short ratio for {symbol}: "
@@ -949,7 +1231,9 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
             try:
                 current_price = extended_data.get("current_price")
                 if current_price:
+                    # Rainbow Chart
                     rainbow = cycle_service.get_rainbow_chart_data(current_price)
+
                     cycle_data = {
                         "current_band": rainbow["current_band"],
                         "sentiment": rainbow["sentiment"],
@@ -961,9 +1245,70 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
                         },
                         "days_since_genesis": rainbow["days_since_genesis"],
                     }
+
                     logger.info(
                         f"Bitcoin Rainbow Chart: {rainbow['current_band']} band"
                     )
+
+                    # Pi Cycle Top Indicator (requires 350+ days of data)
+                    # Загружаем исторические данные только для Pi Cycle
+                    try:
+                        pi_cycle_klines = await binance_service.get_klines_by_coin_id(
+                            "bitcoin",
+                            interval="1d",  # Daily candles
+                            limit=400,      # 400 days for Pi Cycle (350 needed + buffer)
+                        )
+
+                        if pi_cycle_klines is not None and len(pi_cycle_klines) >= 350:
+                            pi_cycle_result = cycle_service.calculate_pi_cycle_top(pi_cycle_klines)
+
+                            if "error" not in pi_cycle_result:
+                                cycle_data["pi_cycle"] = {
+                                    "ma_111": pi_cycle_result["ma_111"],
+                                    "ma_350_x2": pi_cycle_result["ma_350_x2"],
+                                    "signal": pi_cycle_result["signal"],
+                                    "distance_to_top_pct": pi_cycle_result["distance_to_top_pct"],
+                                }
+                                logger.info(
+                                    f"Bitcoin Pi Cycle: {pi_cycle_result['signal']} "
+                                    f"(distance: {pi_cycle_result['distance_to_top_pct']:.2f}%)"
+                                )
+                            else:
+                                logger.warning(f"Pi Cycle insufficient data: {pi_cycle_result.get('error')}")
+                        else:
+                            logger.warning(
+                                f"Not enough historical data for Pi Cycle "
+                                f"(got {len(pi_cycle_klines) if pi_cycle_klines is not None else 0} days, need 350+)"
+                            )
+                    except Exception as pi_error:
+                        logger.warning(f"Could not calculate Pi Cycle for Bitcoin: {pi_error}")
+                        # Pi Cycle is optional, continue without it
+
+                    # 200 Week MA (requires ~1400 days)
+                    try:
+                        ma_200w_klines = await binance_service.get_klines_by_coin_id(
+                            "bitcoin",
+                            interval="1d",
+                            limit=1500,  # ~1500 days = ~214 weeks
+                        )
+
+                        if ma_200w_klines is not None and len(ma_200w_klines) >= 1400:
+                            ma_200w = cycle_service.calculate_200_week_ma(ma_200w_klines)
+
+                            if ma_200w:
+                                cycle_data["ma_200w"] = ma_200w
+                                distance_from_ma = ((current_price - ma_200w) / ma_200w) * 100
+                                cycle_data["distance_from_200w_pct"] = distance_from_ma
+                                logger.info(
+                                    f"Bitcoin 200W MA: ${ma_200w:,.0f} "
+                                    f"(current price {distance_from_ma:+.1f}% from floor)"
+                                )
+                        else:
+                            logger.debug("Not enough data for 200 Week MA")
+                    except Exception as ma_error:
+                        logger.warning(f"Could not calculate 200W MA for Bitcoin: {ma_error}")
+                        # 200W MA is optional, continue without it
+
             except Exception as e:
                 logger.warning(f"Could not calculate cycle data for Bitcoin: {e}")
                 # Cycle data is optional, continue without it
@@ -1007,6 +1352,45 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
             limit=200,  # Need enough data for indicators
         )
 
+        # 7.1 🕯️ MULTI-TIMEFRAME CANDLES for comprehensive analysis
+        # Load candles from multiple timeframes to give AI complete picture:
+        # - 1M = macro trend (≈20 months = almost 2 years)
+        # - 1w = medium-term trend (≈5 months)
+        # - 1d = current context (≈20 days)
+        # - 4h = intraday structure
+        # - 1h = micro movements
+        multi_tf_candles = {}
+        timeframes_to_fetch = ['1M', '1w', '1d', '4h', '1h']
+
+        logger.info(f"Fetching multi-timeframe candles for {normalized_id}: {timeframes_to_fetch}")
+
+        for tf in timeframes_to_fetch:
+            try:
+                tf_klines = await binance_service.get_klines_by_coin_id(
+                    normalized_id,
+                    interval=tf,
+                    limit=20  # 20 candles per timeframe as requested
+                )
+
+                if tf_klines is not None and len(tf_klines) >= 20:
+                    # Extract OHLCV columns and convert to serializable format
+                    candles_df = tf_klines.tail(20)[['timestamp', 'open', 'high', 'low', 'close', 'volume']].copy()
+
+                    # Convert timestamp to ISO string for JSON serialization
+                    candles_df['timestamp'] = candles_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                    multi_tf_candles[tf] = {
+                        "count": len(candles_df),
+                        "candles": candles_df.to_dict(orient="records")
+                    }
+                    logger.info(f"✓ Loaded {len(candles_df)} candles for {tf} timeframe")
+                else:
+                    logger.warning(f"✗ Insufficient data for {tf} timeframe (got {len(tf_klines) if tf_klines is not None else 0} candles)")
+
+            except Exception as e:
+                logger.error(f"Error fetching {tf} candles for {normalized_id}: {e}")
+                # Continue with other timeframes even if one fails
+
         # Initialize result dict
         result = {
             "success": True,
@@ -1045,6 +1429,7 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
             result["data_sources"].append("onchain_metrics")
 
         # 8. Calculate technical indicators (if klines available)
+        indicators = None  # Initialize to prevent UnboundLocalError
         if klines_df is not None and len(klines_df) >= 20:
             result["data_sources"].append("technical_indicators")
             result["data_sources"].append("candlestick_patterns")
@@ -1059,11 +1444,25 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
             if patterns:
                 result["candlestick_patterns"] = patterns
 
-            logger.info(
-                f"Technical analysis complete for {normalized_id}: "
-                f"{len(indicators or {})} indicators, "
-                f"{len(patterns.get('patterns_found', []))} patterns"
-            )
+            # 🕯️ ADD MULTI-TIMEFRAME CANDLES for comprehensive price action analysis
+            if multi_tf_candles:
+                result["multi_timeframe_candles"] = multi_tf_candles
+                result["data_sources"].append("multi_timeframe_candles")
+
+                total_candles = sum(tf_data["count"] for tf_data in multi_tf_candles.values())
+                logger.info(
+                    f"Technical analysis complete for {normalized_id}: "
+                    f"{len(indicators or {})} indicators, "
+                    f"{len(patterns.get('patterns_found', []))} patterns, "
+                    f"{total_candles} candles across {len(multi_tf_candles)} timeframes {list(multi_tf_candles.keys())}"
+                )
+            else:
+                logger.warning(f"No multi-timeframe candles loaded for {normalized_id}")
+                logger.info(
+                    f"Technical analysis complete for {normalized_id}: "
+                    f"{len(indicators or {})} indicators, "
+                    f"{len(patterns.get('patterns_found', []))} patterns"
+                )
         else:
             # 9. FALLBACK: Try DEXScreener for small/new tokens not on major CEX
             logger.warning(
@@ -1230,19 +1629,98 @@ async def get_technical_analysis(coin_id: str, timeframe: str = "4h") -> Dict[st
 # ============================================================================
 
 
-async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
+def check_tool_access(tool_name: str, user_tier: str) -> tuple[bool, str | None]:
+    """
+    Check if user's tier has access to a specific tool/feature
+
+    Args:
+        tool_name: Name of the tool to check
+        user_tier: User's subscription tier (free, basic, premium, vip)
+
+    Returns:
+        Tuple of (has_access: bool, reason: str | None)
+    """
+    from config.limits import has_feature
+    from src.database.models import SubscriptionTier
+
+    try:
+        tier_enum = SubscriptionTier(user_tier)
+    except ValueError:
+        tier_enum = SubscriptionTier.FREE
+
+    # Map tools to required features
+    # NOTE: get_technical_analysis is available for ALL tiers (FREE gets basic indicators only)
+    TOOL_FEATURE_MAP = {
+        # "get_technical_analysis" removed - available for FREE (with filtering)
+        "get_candlestick_patterns": "candlestick_patterns",  # BASIC+
+        "get_funding_rates": "funding_rates",  # BASIC+
+        "get_liquidation_history": "liquidations",  # PREMIUM+
+        "get_onchain_metrics": "onchain_metrics",  # PREMIUM+
+        "get_market_cycle_analysis": "cycle_analysis",  # PREMIUM+
+    }
+
+    # Check if tool requires specific feature
+    required_feature = TOOL_FEATURE_MAP.get(tool_name)
+    if required_feature:
+        if not has_feature(tier_enum, required_feature):
+            tier_names = {
+                "advanced_indicators": "BASIC",
+                "candlestick_patterns": "BASIC",
+                "funding_rates": "BASIC",
+                "liquidations": "PREMIUM",
+                "onchain_metrics": "PREMIUM",
+                "cycle_analysis": "PREMIUM",
+            }
+            required_tier = tier_names.get(required_feature, "PREMIUM")
+            reason = (
+                f"🔒 This feature requires {required_tier}+ subscription. "
+                f"Upgrade to unlock advanced analytics!"
+            )
+            return False, reason
+
+    # All other tools are available for FREE users
+    return True, None
+
+
+async def execute_tool(tool_name: str, arguments: Dict[str, Any], user_tier: str = "free") -> str:
     """
     Execute a tool (function) and return JSON result
 
+    🚨 TIER GATING: Some tools require paid subscription!
+
     Args:
         tool_name: Name of the tool to execute
-        arguments: Tool arguments as dict
+        arguments: Tool arguments as dict or JSON string
+        user_tier: User's subscription tier (for feature gating)
 
     Returns:
         JSON string with result
     """
     try:
-        logger.info(f"Executing tool: {tool_name} with args: {arguments}")
+        # Import tier utilities
+        from config.limits import has_feature
+        from src.database.models import SubscriptionTier
+
+        logger.info(f"Executing tool: {tool_name} with args: {arguments}, tier: {user_tier}")
+
+        # Convert user_tier string to enum
+        try:
+            tier_enum = SubscriptionTier(user_tier)
+        except ValueError:
+            tier_enum = SubscriptionTier.FREE
+
+        # Check tier access BEFORE executing
+        has_access, reason = check_tool_access(tool_name, user_tier)
+        if not has_access:
+            logger.warning(f"Tool {tool_name} blocked for tier {user_tier}: {reason}")
+            return json.dumps(
+                {"success": False, "error": reason, "upgrade_required": True},
+                ensure_ascii=False
+            )
+
+        # Parse JSON if arguments is a string (e.g., from OpenAI API)
+        if isinstance(arguments, str):
+            arguments = json.loads(arguments)
 
         # Route to appropriate function
         if tool_name == "get_crypto_price":
@@ -1257,6 +1735,118 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             result = await get_market_overview(**arguments)
         elif tool_name == "get_technical_analysis":
             result = await get_technical_analysis(**arguments)
+
+            # 🔒 FREE TIER FILTERING: Only basic indicators (RSI, MACD, EMA)
+            # FREE users get limited analysis to keep costs down
+            if tier_enum == SubscriptionTier.FREE:
+                logger.info(f"Filtering technical analysis for FREE tier user")
+
+                # Keep only basic data for FREE tier
+                filtered_result = {
+                    "success": result.get("success", True),
+                    "coin_id": result.get("coin_id"),
+                    "timeframe": result.get("timeframe"),
+                    "data_sources": [],
+                }
+
+                # ✅ ALLOWED: Basic market data (price, market cap, volume)
+                if "extended_data" in result:
+                    filtered_result["extended_data"] = result["extended_data"]
+                    filtered_result["data_sources"].append("extended_market_data")
+
+                # ✅ ALLOWED: Fear & Greed Index
+                if "fear_greed" in result:
+                    filtered_result["fear_greed"] = result["fear_greed"]
+                    filtered_result["data_sources"].append("fear_greed_index")
+
+                # ✅ ALLOWED: News
+                if "news" in result:
+                    filtered_result["news"] = result["news"]
+                    filtered_result["data_sources"].append("news")
+
+                # ✅ ALLOWED: Basic technical indicators ONLY (RSI, MACD, EMA)
+                if "technical_indicators" in result and result["technical_indicators"]:
+                    indicators = result["technical_indicators"]
+                    filtered_result["technical_indicators"] = {
+                        # Basic indicators available in FREE
+                        "rsi": indicators.get("rsi"),
+                        "macd": indicators.get("macd"),
+                        "macd_signal": indicators.get("macd_signal"),
+                        "macd_histogram": indicators.get("macd_histogram"),
+                        "ema_20": indicators.get("ema_20"),
+                        "ema_50": indicators.get("ema_50"),
+                        "ema_200": indicators.get("ema_200"),
+                    }
+                    filtered_result["data_sources"].append("technical_indicators")
+                    logger.info("FREE tier: Returning basic indicators (RSI, MACD, EMA)")
+
+                # ❌ BLOCKED: Advanced indicators, patterns, on-chain, etc.
+                # Add upgrade message if advanced data was available
+                blocked_features = []
+                if result.get("candlestick_patterns"):
+                    blocked_features.append("Candlestick Patterns")
+                if result.get("funding_data"):
+                    blocked_features.append("Funding Rates")
+                if result.get("long_short_data"):
+                    blocked_features.append("Long/Short Ratio")
+                if result.get("liquidation_data"):
+                    blocked_features.append("Liquidation Data")
+                if result.get("onchain_data"):
+                    blocked_features.append("On-Chain Metrics")
+                if result.get("cycle_data"):
+                    blocked_features.append("Cycle Analysis")
+
+                if blocked_features:
+                    filtered_result["upgrade_message"] = (
+                        f"🔓 Unlock {', '.join(blocked_features)} with BASIC+ subscription!\n\n"
+                        "💎 BASIC ($9.99/mo) includes:\n"
+                        "   • Candlestick Patterns\n"
+                        "   • Funding Rates & Long/Short Ratio\n"
+                        "   • All Advanced Indicators\n"
+                        "   • 15 requests/day\n\n"
+                        "🚀 Try 7-day FREE trial!"
+                    )
+
+                result = filtered_result
+
+            # 🔒 PREMIUM FEATURE GATING: Filter Pi Cycle for non-PREMIUM users
+            # Pi Cycle Top Indicator requires PREMIUM+ subscription
+            if not has_feature(tier_enum, "cycle_analysis"):
+                if "cycle_data" in result and result["cycle_data"]:
+                    cycle_data = result["cycle_data"]
+
+                    # Keep basic Rainbow Chart data (available for BASIC+)
+                    filtered_cycle = {
+                        "current_band": cycle_data.get("current_band"),
+                        "sentiment": cycle_data.get("sentiment"),
+                        "days_since_genesis": cycle_data.get("days_since_genesis"),
+                        "bands": cycle_data.get("bands", {}),
+                    }
+
+                    # 🔒 Block Pi Cycle Top Indicator (PREMIUM+ only)
+                    if "pi_cycle" in cycle_data:
+                        filtered_cycle["pi_cycle"] = {
+                            "locked": True,
+                            "tier_required": "PREMIUM",
+                            "message": (
+                                "🔒 Pi Cycle Top Indicator requires PREMIUM+ subscription.\n\n"
+                                "💎 This indicator has PERFECTLY predicted Bitcoin tops in:\n"
+                                "   • 2013 cycle\n"
+                                "   • 2017 cycle ($20k top)\n"
+                                "   • 2021 cycle ($69k top)\n\n"
+                                "⚠️ Median correction after 'top_signal': -50% to -80%\n\n"
+                                "Upgrade to PREMIUM to unlock this powerful market timing tool!"
+                            ),
+                        }
+
+                    # 🔒 Block 200 Week MA (PREMIUM+ only)
+                    if "ma_200w" in cycle_data:
+                        filtered_cycle["ma_200w_locked"] = True
+
+                    result["cycle_data"] = filtered_cycle
+
+        elif tool_name == "get_coins_by_category":
+            result = await get_coins_by_category(**arguments)
         else:
             result = {"success": False, "error": f"Unknown tool: {tool_name}"}
 

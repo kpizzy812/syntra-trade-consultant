@@ -3,22 +3,38 @@ Syntra Trade Consultant - Main Bot Entry Point
 """
 
 import asyncio
-import logging
 import sys
 import warnings
-from typing import Dict
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand
+from loguru import logger
 
 from config.config import BOT_TOKEN, validate_config
 from config.logging import setup_logging
 from config.sentry import init_sentry
-from src.database.engine import init_db, dispose_engine
-from src.bot.handlers import start, help_cmd, chat, vision, crypto, menu, admin, limits, premium, referral
+from src.database.engine import dispose_engine
+from src.cache import get_redis_manager
+from src.bot.handlers import (
+    start,
+    help_cmd,
+    chat,
+    vision,
+    crypto,
+    menu,
+    admin,
+    limits,
+    premium,
+    referral,
+    broadcast,
+    channel_repost,
+    points,
+    points_admin,
+    task_review,
+)
 from src.bot.middleware.database import DatabaseMiddleware
 from src.bot.middleware.subscription import SubscriptionMiddleware
 from src.bot.middleware.subscription_checker import SubscriptionCheckerMiddleware
@@ -31,12 +47,13 @@ from src.services.retention_service import (
     stop_retention_service,
 )
 from src.tasks.ton_scanner import start_ton_scanner
-
-
-logger = logging.getLogger(__name__)
+from src.tasks.referral_scheduler import schedule_referral_tasks
+from src.tasks.broadcast_scheduler import schedule_broadcast_tasks
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # Background tasks references
 _ton_scanner_task = None
+_scheduler = None
 
 
 async def setup_bot_commands(bot: Bot) -> None:
@@ -58,13 +75,20 @@ async def setup_bot_commands(bot: Bot) -> None:
 
 async def on_startup(bot: Bot, **kwargs) -> None:
     """Actions to perform on bot startup"""
-    global _ton_scanner_task
+    global _ton_scanner_task, _scheduler
 
     logger.info("Starting Syntra Trade Consultant Bot...")
 
-    # Initialize database
-    await init_db()
-    logger.info("Database initialized successfully")
+    # NOTE: Database tables managed by Alembic migrations
+    # Run: alembic upgrade head
+
+    # Initialize Redis cache
+    redis_mgr = get_redis_manager()
+    redis_available = await redis_mgr.initialize()
+    if redis_available:
+        logger.info("Redis cache initialized successfully")
+    else:
+        logger.warning("Redis cache unavailable - bot will work without caching")
 
     # Setup bot commands menu
     await setup_bot_commands(bot)
@@ -77,6 +101,14 @@ async def on_startup(bot: Bot, **kwargs) -> None:
     _ton_scanner_task = asyncio.create_task(start_ton_scanner())
     logger.info("TON blockchain scanner started")
 
+    # Start referral activation scheduler
+    _scheduler = AsyncIOScheduler()
+    schedule_referral_tasks(_scheduler)
+    schedule_broadcast_tasks(_scheduler, bot)
+    _scheduler.start()
+    logger.info("Referral activation scheduler started")
+    logger.info("Broadcast scheduler started")
+
     # Get bot info
     bot_info = await bot.get_me()
     logger.info(f"Bot started: @{bot_info.username} (ID: {bot_info.id})")
@@ -84,7 +116,7 @@ async def on_startup(bot: Bot, **kwargs) -> None:
 
 async def on_shutdown(bot: Bot, **kwargs) -> None:
     """Actions to perform on bot shutdown"""
-    global _ton_scanner_task
+    global _ton_scanner_task, _scheduler
 
     logger.info("Shutting down Syntra Trade Consultant Bot...")
 
@@ -100,6 +132,16 @@ async def on_shutdown(bot: Bot, **kwargs) -> None:
         except asyncio.CancelledError:
             pass
         logger.info("TON scanner stopped")
+
+    # Stop referral scheduler
+    if _scheduler:
+        _scheduler.shutdown(wait=False)
+        logger.info("Referral scheduler stopped")
+
+    # Close Redis connections
+    redis_mgr = get_redis_manager()
+    await redis_mgr.close()
+    logger.info("Redis cache closed")
 
     # Close database connections
     await dispose_engine()
@@ -174,13 +216,19 @@ async def main() -> None:
     dp.message.middleware(RequestLimitMiddleware())
 
     # Register routers (order matters - specific routes first, general last)
+    # Channel auto-repost (handles channel_post)
+    dp.include_router(channel_repost.router)
     dp.include_router(start.router)
     dp.include_router(menu.router)  # Menu callback handlers
     dp.include_router(premium.router)  # Premium subscription handlers
     dp.include_router(referral.router)  # Referral system handlers
     dp.include_router(admin.router)  # Admin panel (before help to catch admin commands)
+    dp.include_router(broadcast.router)  # Broadcast system (admin only)
+    dp.include_router(points_admin.router)  # Points admin panel (analytics, config)
+    dp.include_router(task_review.router)  # Task review callbacks (approve/reject)
     dp.include_router(help_cmd.router)
     dp.include_router(limits.router)  # Limits command (/limits)
+    dp.include_router(points.router)  # $SYNTRA points commands (/points, /level)
     dp.include_router(
         crypto.router
     )  # Crypto commands (/price, /analyze, /market, /news)

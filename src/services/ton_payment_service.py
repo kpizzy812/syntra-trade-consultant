@@ -13,8 +13,9 @@ Adapted from Tradient AI implementation
 
 import asyncio
 import hashlib
-import logging
+import json
 import os
+import uuid
 from typing import Optional, Dict, List
 from datetime import datetime, UTC
 from decimal import Decimal
@@ -29,7 +30,9 @@ try:
     TONUTILS_AVAILABLE = True
 except ImportError:
     TONUTILS_AVAILABLE = False
-    logging.warning("tonutils не установлен. Установите: pip install tonutils")
+    # Import logger here to avoid issues if tonutils is not installed
+    from loguru import logger as _logger
+    _logger.warning("tonutils не установлен. Установите: pip install tonutils")
 
 from src.database.models import (
     User,
@@ -40,7 +43,7 @@ from src.database.models import (
     Subscription,
 )
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class TonPaymentService:
@@ -97,8 +100,12 @@ class TonPaymentService:
         """
         Генерировать уникальный memo для payment идентификации
 
-        Формат: PAY_{hash}
-        где hash = первые 8 символов от sha256(user_id + tier + duration + timestamp)
+        Формат: PAY_{hash16}_{uuid8}
+        где:
+        - hash16 = первые 16 символов от sha256(user_id + tier + duration + timestamp)
+        - uuid8 = первые 8 символов от UUID4 для гарантированной уникальности
+
+        Защита от collision attacks через увеличение длины + UUID
 
         Args:
             user_id: ID пользователя
@@ -106,13 +113,17 @@ class TonPaymentService:
             duration_months: Длительность подписки
 
         Returns:
-            Memo строка (например: "PAY_a3f5c9d2")
+            Memo строка (например: "PAY_A3F5C9D2E1B4A7F6_8C4E2A1B")
         """
+        # Генерируем хеш с timestamp для дополнительной энтропии
         timestamp = datetime.now(UTC).isoformat()
         raw = f"{user_id}_{tier.value}_{duration_months}_{timestamp}"
-        hash_hex = hashlib.sha256(raw.encode()).hexdigest()[:8]
+        hash_hex = hashlib.sha256(raw.encode()).hexdigest()[:16]  # 16 символов вместо 8
 
-        return f"PAY_{hash_hex}".upper()
+        # Добавляем UUID для гарантированной уникальности
+        uuid_part = uuid.uuid4().hex[:8]
+
+        return f"PAY_{hash_hex}_{uuid_part}".upper()
 
     async def create_ton_payment_request(
         self,
@@ -158,6 +169,14 @@ class TonPaymentService:
             amount_usdt = float(amount_usd)
 
             # Создаем payment запись
+            provider_data_dict = {
+                "deposit_address": self.DEPOSIT_ADDRESS,
+                "memo": memo,
+                "amount_ton": amount_ton,
+                "amount_usdt": amount_usdt,
+                "ton_price_usd": ton_price_usd,
+            }
+
             payment = Payment(
                 user_id=user_id,
                 provider=PaymentProvider.TON_CONNECT,
@@ -167,13 +186,7 @@ class TonPaymentService:
                 tier=tier.value,
                 duration_months=duration_months,
                 provider_payment_id=memo,  # Используем memo как payment ID
-                metadata={
-                    "deposit_address": self.DEPOSIT_ADDRESS,
-                    "memo": memo,
-                    "amount_ton": amount_ton,
-                    "amount_usdt": amount_usdt,
-                    "ton_price_usd": ton_price_usd,
-                },
+                provider_data=json.dumps(provider_data_dict),  # JSON string для БД
             )
 
             session.add(payment)
@@ -314,15 +327,22 @@ class TonPaymentService:
                 logger.warning(f"Payment не найден для memo: {memo}")
                 return False
 
+            # Десериализуем provider_data из JSON
+            try:
+                provider_data = json.loads(payment.provider_data) if payment.provider_data else {}
+            except json.JSONDecodeError:
+                logger.error(f"Invalid JSON in payment.provider_data for payment {payment.id}")
+                return False
+
             # Валидируем сумму
             expected_amount = (
-                payment.metadata.get("amount_usdt")
+                provider_data.get("amount_usdt")
                 if asset == "USDT"
-                else payment.metadata.get("amount_ton")
+                else provider_data.get("amount_ton")
             )
 
             if not expected_amount:
-                logger.error(f"Expected amount не найден в payment metadata")
+                logger.error(f"Expected amount не найден в payment provider_data")
                 return False
 
             # Допускаем расхождение ±2%
@@ -339,10 +359,13 @@ class TonPaymentService:
             # Обновляем payment
             payment.status = PaymentStatus.COMPLETED
             payment.completed_at = datetime.now(UTC)
-            payment.metadata["tx_hash"] = tx_hash
-            payment.metadata["from_address"] = from_address
-            payment.metadata["received_amount"] = amount
-            payment.metadata["received_asset"] = asset
+
+            # Обновляем provider_data с информацией о транзакции
+            provider_data["tx_hash"] = tx_hash
+            provider_data["from_address"] = from_address
+            provider_data["received_amount"] = amount
+            provider_data["received_asset"] = asset
+            payment.provider_data = json.dumps(provider_data)
 
             # Активируем/создаем подписку
             await self._activate_subscription(
@@ -355,6 +378,41 @@ class TonPaymentService:
                 f"TON payment обработан: user={payment.user_id}, "
                 f"tier={payment.tier}, amount={amount} {asset}"
             )
+
+            # 💎 Award bonus points for subscription purchase
+            try:
+                from src.services.points_service import PointsService
+                from src.database.models import PointsTransactionType
+                from config.points_config import get_subscription_bonus
+
+                bonus_points = get_subscription_bonus(payment.tier, payment.duration_months)
+                if bonus_points > 0:
+                    points_transaction = await PointsService.earn_points(
+                        session=session,
+                        user_id=payment.user_id,
+                        transaction_type=PointsTransactionType.EARN_SUBSCRIPTION,
+                        amount=bonus_points,
+                        description=f"Бонус за покупку подписки {payment.tier.upper()} ({payment.duration_months} мес.)",
+                        metadata={
+                            "tier": payment.tier,
+                            "duration_months": payment.duration_months,
+                            "payment_id": payment.id,
+                            "payment_provider": "ton",
+                            "amount_usd": payment.amount,
+                            "amount_asset": amount,
+                            "asset": asset,
+                            "from_address": from_address,
+                        },
+                        transaction_id=f"sub_bonus:{payment.user_id}:{payment.id}",
+                    )
+                    if points_transaction:
+                        logger.info(
+                            f"💎 Awarded {bonus_points} bonus points to user {payment.user_id} "
+                            f"for subscription purchase (balance: {points_transaction.balance_after})"
+                        )
+            except Exception as points_error:
+                # Don't fail payment if points fail
+                logger.error(f"Failed to award subscription bonus points: {points_error}")
 
             return True
 

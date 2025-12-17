@@ -13,7 +13,6 @@ Calculates technical analysis indicators using the 'ta' library:
 
 Requires candlestick (OHLCV) data from Binance or other sources.
 """
-import logging
 from typing import Optional, Dict, Any
 import pandas as pd
 
@@ -21,7 +20,7 @@ import pandas as pd
 import ta
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class TechnicalIndicators:

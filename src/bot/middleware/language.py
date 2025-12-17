@@ -2,7 +2,7 @@
 Language middleware - automatically detects and sets user language
 """
 
-import logging
+
 from typing import Callable, Dict, Any, Awaitable
 
 from aiogram import BaseMiddleware
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.utils.i18n import get_user_language
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class LanguageMiddleware(BaseMiddleware):

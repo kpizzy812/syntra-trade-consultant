@@ -1,41 +1,231 @@
 /**
  * Chat Page - Main AI Chat Interface
- * Apple/OpenAI/Anthropic level design
- * SSE Streaming support
+ * ChatGPT-style с crypto analytics вайбом
+ * SSE Streaming support + Desktop адаптация
  */
 
 'use client';
 
-import { useState, useCallback } from 'react';
-import { motion } from 'framer-motion';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useSearchParams, useRouter } from 'next/navigation';
+import { useTranslations } from 'next-intl';
 import toast from 'react-hot-toast';
-import Header from '@/components/layout/Header';
 import TabBar from '@/components/layout/TabBar';
+import DesktopLayout from '@/components/layout/DesktopLayout';
 import MessageList, { Message } from '@/components/chat/MessageList';
 import ChatInput from '@/components/chat/ChatInput';
+import SuggestedPrompts from '@/components/chat/SuggestedPrompts';
+import ChatSidebar from '@/components/chat/ChatSidebar';
+import PremiumPurchaseModal from '@/components/modals/PremiumPurchaseModal';
+import LanguageSwitcher from '@/components/layout/LanguageSwitcher';
+import PointsEarnAnimation from '@/components/points/PointsEarnAnimation';
+import PointsBalance from '@/components/points/PointsBalance';
 import { useUserStore } from '@/shared/store/userStore';
+import { usePointsStore } from '@/shared/store/pointsStore';
 import { api } from '@/shared/api/client';
+import { usePostHog } from '@/components/providers/PostHogProvider';
+import { usePlatform } from '@/lib/platform';
+import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
+import { useAuthGuard } from '@/shared/hooks/useAuthGuard';
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const t = useTranslations();
+
+  // Initial bot messages with i18n - memoized to prevent unnecessary re-renders
+  const getInitialMessages = useCallback((): Message[] => [
+    {
+      id: 'intro-1',
+      role: 'assistant',
+      content: t('chat.intro_greeting'),
+      timestamp: new Date().toISOString(),
+    },
+    {
+      id: 'intro-2',
+      role: 'assistant',
+      content: t('chat.intro_capabilities'),
+      timestamp: new Date().toISOString(),
+    },
+  ], [t]);
+
+  // Memoized initial messages for comparison
+  const INITIAL_MESSAGES = useMemo(() => getInitialMessages(), [getInitialMessages]);
+
+  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
   const [isLoading, setIsLoading] = useState(false);
+  const [showPremiumModal, setShowPremiumModal] = useState(false);
+  const [referralDiscount, setReferralDiscount] = useState(0);
   const { user } = useUserStore();
+  const { updateBalance, setBalance } = usePointsStore();
+  const { platformType } = usePlatform();
+  const searchParams = useSearchParams();
+  const [initialPromptSent, setInitialPromptSent] = useState(false);
+  const posthog = usePostHog();
+  const [currentChatId, setCurrentChatId] = useState<number | null>(null);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const router = useRouter();
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [pointsEarnTrigger, setPointsEarnTrigger] = useState(0);
+  const [pointsEarnAmount, setPointsEarnAmount] = useState(0);
+
+  // Persist active chat ID to localStorage
+  const ACTIVE_CHAT_KEY = 'syntra_active_chat_id';
+
+  const isDesktop = platformType === 'web';
+
+  // Smart Auth Guard - редирект на /auth/choose если не залогинен
+  const { isChecking, isAuthenticated } = useAuthGuard();
+
+  // Enable keyboard shortcuts на desktop
+  useKeyboardShortcuts();
+
+  // Track keyboard visibility для адаптации layout
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.visualViewport) {
+      return;
+    }
+
+    const visualViewport = window.visualViewport;
+    const initialHeight = visualViewport.height;
+
+    const handleResize = () => {
+      const currentHeight = visualViewport.height;
+      const heightDiff = initialHeight - currentHeight;
+      setIsKeyboardVisible(heightDiff > 150);
+    };
+
+    visualViewport.addEventListener('resize', handleResize);
+    visualViewport.addEventListener('scroll', handleResize);
+
+    return () => {
+      visualViewport.removeEventListener('resize', handleResize);
+      visualViewport.removeEventListener('scroll', handleResize);
+    };
+  }, []);
+
+  // Open premium modal with referral discount loaded
+  const openPremiumModal = useCallback(async () => {
+    try {
+      const stats = await api.referral.getStats();
+      setReferralDiscount(stats.tier_benefits?.discount_percent || 0);
+    } catch (e) {
+      console.warn('Failed to load referral discount:', e);
+      setReferralDiscount(0);
+    }
+    setShowPremiumModal(true);
+  }, []);
+
+  // Redirect unauthenticated web users to auth flow
+  useEffect(() => {
+    if (!isChecking && !isAuthenticated && platformType === 'web') {
+      console.log('❌ User not authenticated, redirecting to /auth/choose');
+      router.push('/auth/choose');
+    }
+  }, [isChecking, isAuthenticated, platformType, router]);
+
+  // Load chat history for specific chat - memoized to prevent race conditions
+  const loadChatHistory = useCallback(async (chatId: number) => {
+    try {
+      setIsLoadingHistory(true);
+      const response = await api.chats.getChatMessages(chatId);
+
+      if (response.messages && response.messages.length > 0) {
+        // Convert API messages to Message format
+        const loadedMessages: Message[] = response.messages.map((msg: {
+          id: number;
+          role: 'user' | 'assistant';
+          content: string;
+          timestamp: string;
+        }) => ({
+          id: `msg-${msg.id}`,
+          role: msg.role,
+          content: msg.content,
+          timestamp: msg.timestamp,
+        }));
+        setMessages(loadedMessages);
+      } else {
+        // Empty chat - show initial messages
+        setMessages(getInitialMessages());
+      }
+    } catch (error) {
+      console.error('Failed to load chat history:', error);
+      toast.error(t('chat.error_load_history'));
+      setMessages(getInitialMessages());
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  }, [t, getInitialMessages]);
+
+  // Load chat history when chat_id changes or restore from localStorage
+  useEffect(() => {
+    const chatIdParam = searchParams.get('chat_id');
+
+    if (chatIdParam) {
+      // URL has chat_id - use it and save to localStorage
+      const chatId = parseInt(chatIdParam);
+      setCurrentChatId(chatId);
+      loadChatHistory(chatId);
+      // Persist to localStorage for session restoration
+      try {
+        localStorage.setItem(ACTIVE_CHAT_KEY, chatId.toString());
+      } catch (e) {
+        console.warn('Failed to save chat ID to localStorage:', e);
+      }
+    } else {
+      // No chat_id in URL - try to restore from localStorage
+      try {
+        const savedChatId = localStorage.getItem(ACTIVE_CHAT_KEY);
+        if (savedChatId) {
+          const chatId = parseInt(savedChatId);
+          if (!isNaN(chatId) && chatId > 0) {
+            // Redirect to chat with restored chat_id
+            router.replace(`/chat?chat_id=${chatId}`);
+            return;
+          }
+        }
+      } catch (e) {
+        console.warn('Failed to read chat ID from localStorage:', e);
+      }
+      // No saved chat - show initial messages
+      setMessages(getInitialMessages());
+      setCurrentChatId(null);
+    }
+  }, [searchParams, loadChatHistory, getInitialMessages, router, ACTIVE_CHAT_KEY]);
 
   // Send message handler with SSE streaming
   const handleSendMessage = useCallback(
-    async (content: string) => {
-      if (!content.trim() || isLoading) return;
+    async (content: string, image?: string, skipPointsAnimation = false) => {
+      if ((!content.trim() && !image) || isLoading) return;
 
       // Add user message to chat
       const userMessage: Message = {
         id: `user-${Date.now()}`,
         role: 'user',
         content: content.trim(),
+        image: image,
         timestamp: new Date().toISOString(),
       };
 
       setMessages((prev) => [...prev, userMessage]);
       setIsLoading(true);
+
+      // ✨ Trigger points earn animation (+10 for message) - unless skipped
+      if (!skipPointsAnimation) {
+        const earnedPoints = 10; // Базовая ставка из config/points_config.py
+        setPointsEarnAmount(earnedPoints);
+        setPointsEarnTrigger((prev) => prev + 1);
+        // Note: Real balance will be updated from API after stream completes
+      }
+
+      // 📊 Track AI request sent
+      if (posthog.__loaded) {
+        posthog.capture('ai_request_sent', {
+          tier: user?.subscription?.tier || 'free',
+          has_image: !!image,
+          message_length: content.trim().length,
+          platform: 'miniapp',
+        });
+      }
 
       // Create streaming AI message
       const aiMessageId = `assistant-${Date.now()}`;
@@ -71,16 +261,15 @@ export default function ChatPage() {
                 msg.id === aiMessageId
                   ? {
                       ...msg,
-                      content:
-                        'Sorry, I encountered an error. Please try again.',
+                      content: t('chat.error_simple'),
                       isStreaming: false,
                     }
                   : msg
               )
             );
           },
-          // On done
-          () => {
+          // On done (with chat_id from backend)
+          async (receivedChatId?: number) => {
             setMessages((prev) =>
               prev.map((msg) =>
                 msg.id === aiMessageId
@@ -89,46 +278,131 @@ export default function ChatPage() {
               )
             );
             setIsLoading(false);
-          }
+
+            // Save chat_id for future messages
+            if (receivedChatId && !currentChatId) {
+              setCurrentChatId(receivedChatId);
+              // Save to localStorage and URL
+              try {
+                localStorage.setItem(ACTIVE_CHAT_KEY, receivedChatId.toString());
+              } catch (e) {
+                console.warn('Failed to save chat ID to localStorage:', e);
+              }
+              // Update URL with chat_id (without page reload)
+              router.replace(`/chat?chat_id=${receivedChatId}`, { scroll: false });
+              console.log(`✅ Chat created and saved: chat_id=${receivedChatId}`);
+            }
+
+            // 💎 Fetch real balance from backend after message completion
+            try {
+              const balanceData = await api.points.getBalance();
+              setBalance(balanceData);
+              console.log('💎 Points balance updated from API:', balanceData.balance);
+            } catch (error) {
+              console.warn('Failed to refresh points balance:', error);
+            }
+          },
+          // Image (if provided)
+          image,
+          // Chat ID (if exists)
+          currentChatId || undefined
         );
-      } catch (error) {
+      } catch (error: unknown) {
         console.error('Failed to send message:', error);
 
-        // Update AI message with error
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === aiMessageId
-              ? {
-                  ...msg,
-                  content:
-                    'Sorry, I encountered an error. Please try again or contact support if the issue persists.',
-                  isStreaming: false,
-                }
-              : msg
-          )
-        );
+        // Type guard for error with custom properties
+        const apiError = error as { status?: number; errorCode?: string; message?: string; showUpgrade?: boolean };
+
+        // Check if rate limit error (429)
+        if (apiError.status === 429 || apiError.errorCode === 'RATE_LIMIT_EXCEEDED') {
+          // Show rate limit message and Premium modal
+          const errorMessage = apiError.message || t('chat.rate_limit_reached');
+
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === aiMessageId
+                ? {
+                    ...msg,
+                    content: errorMessage,
+                    isStreaming: false,
+                  }
+                : msg
+            )
+          );
+
+          // Show Premium modal if user should upgrade
+          if (apiError.showUpgrade) {
+            toast.error(errorMessage, { duration: 5000 });
+            setTimeout(() => openPremiumModal(), 500);
+          } else {
+            toast.error(errorMessage, { duration: 5000 });
+          }
+        } else {
+          // Generic error
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === aiMessageId
+                ? {
+                    ...msg,
+                    content: t('chat.error_detailed'),
+                    isStreaming: false,
+                  }
+                : msg
+            )
+          );
+        }
         setIsLoading(false);
       }
     },
-    [isLoading]
+    [isLoading, posthog, user, currentChatId, t, openPremiumModal, updateBalance, router, setBalance]
   );
 
-  // Simulate AI response (будет заменено на SSE streaming)
-  const simulateAIResponse = async (userMessage: string) => {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const aiMessage: Message = {
-          id: `assistant-${Date.now()}`,
-          role: 'assistant',
-          content: generateMockResponse(userMessage),
-          timestamp: new Date().toISOString(),
-        };
+  // Auto-send prompt from URL parameter (for "What does it mean?" button)
+  useEffect(() => {
+    const promptParam = searchParams.get('prompt');
+    const pointsParam = searchParams.get('points');
 
-        setMessages((prev) => [...prev, aiMessage]);
-        resolve(aiMessage);
-      }, 1500);
-    });
-  };
+    if (promptParam && !initialPromptSent && !isLoading) {
+      try {
+        const decodedPrompt = decodeURIComponent(promptParam);
+        setInitialPromptSent(true);
+
+        // ✨ Trigger points earn animation with custom amount if provided
+        if (pointsParam) {
+          const points = parseInt(pointsParam);
+          if (!isNaN(points) && points > 0) {
+            setPointsEarnAmount(points);
+            setPointsEarnTrigger((prev) => prev + 1);
+            // Note: Real balance will be updated from API after stream completes
+          }
+        }
+
+        // Remove prompt and points from URL to prevent re-sending on refresh
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.delete('prompt');
+        newUrl.searchParams.delete('points');
+        window.history.replaceState({}, '', newUrl.toString());
+
+        // Small delay to ensure UI is ready, then send
+        // Skip points animation because we already triggered it above
+        setTimeout(() => {
+          handleSendMessage(decodedPrompt, undefined, true);
+        }, 500);
+      } catch (error) {
+        console.error('Failed to decode prompt from URL:', error);
+        // Fallback: use the raw prompt if decoding fails
+        setInitialPromptSent(true);
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.delete('prompt');
+        newUrl.searchParams.delete('points');
+        window.history.replaceState({}, '', newUrl.toString());
+
+        setTimeout(() => {
+          handleSendMessage(promptParam, undefined, true);
+        }, 500);
+      }
+    }
+  }, [searchParams, initialPromptSent, isLoading, handleSendMessage, updateBalance]);
 
   // Regenerate message handler
   const handleRegenerateMessage = useCallback(
@@ -169,7 +443,7 @@ export default function ChatPage() {
           },
           (error) => {
             console.error('Regenerate error:', error);
-            toast.error(`Failed to regenerate: ${error}`);
+            toast.error(t('chat.error_regenerate'));
           },
           () => {
             // Regeneration complete
@@ -187,128 +461,172 @@ export default function ChatPage() {
         );
       } catch (error) {
         console.error('Failed to regenerate:', error);
-        toast.error('Failed to regenerate message');
+        toast.error(t('chat.error_regenerate'));
         setIsLoading(false);
         // Remove placeholder message on error
         setMessages((prev) => prev.slice(0, -1));
       }
     },
-    [messages]
+    [messages, t]
   );
 
   return (
-    <div className="bg-black mobile-body">
-      <Header title="AI Chat" showBack={false} />
+    <DesktopLayout>
+      {/* ChatGPT-style adaptive container */}
+      <div
+        className={`
+        flex flex-col h-full
+        ${isDesktop ? 'bg-black' : 'bg-black mobile-body'}
+      `}
+      >
+        {/* Header с гамбургер-меню для мобильных */}
+        <header className="border-b border-white/5 bg-black/80 backdrop-blur-lg px-4 py-1.5">
+          <div className="flex items-center justify-between max-w-[520px] mx-auto lg:max-w-full">
+            {/* Left: Hamburger + Title */}
+            <div className="flex items-center gap-3">
+              {/* Hamburger Menu Button (Mobile/Telegram) */}
+              {!isDesktop && (
+                <button
+                  onClick={() => setIsSidebarOpen(true)}
+                  className="p-2 -ml-2 rounded-lg hover:bg-white/5 transition-colors"
+                  aria-label="Open chats"
+                >
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className="text-gray-400"
+                  >
+                    <line x1="3" y1="6" x2="21" y2="6"></line>
+                    <line x1="3" y1="12" x2="21" y2="12"></line>
+                    <line x1="3" y1="18" x2="21" y2="18"></line>
+                  </svg>
+                </button>
+              )}
+              <span className="text-white font-semibold text-sm">AI Chat</span>
+            </div>
 
-      {/* Chat Container */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Messages Area */}
-        <MessageList
-          messages={messages}
-          isLoading={isLoading}
-          onRegenerateMessage={handleRegenerateMessage}
-        />
+            {/* Right: Points Balance and Language Switcher */}
+            <div className="flex items-center gap-2.5">
+              <LanguageSwitcher size="sm" />
+              {user && <PointsBalance />}
+            </div>
+          </div>
+        </header>
 
-        {/* Input Area */}
-        <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} />
+        {/* ChatSidebar для мобильных/Telegram */}
+        {!isDesktop && (
+          <ChatSidebar
+            isOpen={isSidebarOpen}
+            onToggle={() => setIsSidebarOpen(false)}
+            activeChatId={currentChatId}
+            onSelectChat={(chatId) => {
+              router.push(`/chat?chat_id=${chatId}`);
+              setIsSidebarOpen(false);
+            }}
+            onNewChat={() => {
+              // Clear saved chat ID when creating new chat
+              try {
+                localStorage.removeItem(ACTIVE_CHAT_KEY);
+              } catch (e) {
+                console.warn('Failed to clear chat ID from localStorage:', e);
+              }
+              router.push('/chat');
+              setIsSidebarOpen(false);
+            }}
+          />
+        )}
+
+        {/* Messages Area - Adaptive width */}
+        {/* pb динамический: больше когда показаны рекомендации, меньше когда скрыты */}
+        <div
+          className={`
+          flex-1 overflow-hidden overflow-x-hidden transition-[padding] duration-300
+          ${isDesktop
+            ? 'max-w-[1200px] mx-auto w-full px-4 pb-28'
+            : messages.length === INITIAL_MESSAGES.length && !isLoading
+              ? 'pb-[140px]'
+              : 'pb-[80px]'
+          }
+        `}
+        >
+          {isLoadingHistory ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="text-center">
+                <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                <p className="text-gray-400 text-sm">{t('chat.loading_chat')}</p>
+              </div>
+            </div>
+          ) : (
+            <MessageList
+              messages={messages}
+              isLoading={isLoading}
+              onRegenerateMessage={handleRegenerateMessage}
+            />
+          )}
+        </div>
+
+        {/* Input Section - ChatGPT Style */}
+        {/* Отступ снизу адаптируется: с TabBar или без него (когда клавиатура открыта) */}
+        <div
+          className={`
+            fixed bottom-0 left-0 right-0 bg-gradient-to-t from-black via-black to-transparent pt-2
+            transition-all duration-300 ease-in-out
+          `}
+          style={{
+            paddingBottom: isDesktop
+              ? '0.75rem'
+              : isKeyboardVisible
+                ? 'max(env(safe-area-inset-bottom), 0.5rem)'
+                : 'calc(60px + max(env(safe-area-inset-bottom), 0.5rem))',
+          }}
+        >
+          {/* Suggested Prompts */}
+          <SuggestedPrompts
+            onSelectPrompt={(prompt) => handleSendMessage(prompt, undefined, false)}
+            show={messages.length === INITIAL_MESSAGES.length && !isLoading}
+          />
+
+          {/* Requests Counter - компактно между рекомендациями и инпутом */}
+          {user?.subscription && (
+            <div className="flex items-center justify-center gap-1.5 text-xs mb-1">
+              {(user.subscription.requests_remaining ?? 0) > 0 ? (
+                <>
+                  <div className="w-1.5 h-1.5 rounded-full bg-blue-500 shadow-sm shadow-blue-500/50" />
+                  <span className="text-blue-400/80">
+                    {user.subscription.requests_remaining} requests left
+                  </span>
+                </>
+              ) : (
+                <>
+                  <div className="w-1.5 h-1.5 rounded-full bg-orange-500" />
+                  <span className="text-orange-400">Limit reached</span>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Chat Input */}
+          <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} />
+        </div>
+
+        {/* TabBar - отдельно, фиксированный внизу */}
+        <TabBar />
       </div>
 
-      <TabBar />
-    </div>
+      {/* Premium Purchase Modal - shown on rate limit */}
+      <PremiumPurchaseModal
+        isOpen={showPremiumModal}
+        onClose={() => setShowPremiumModal(false)}
+        onSuccess={() => setShowPremiumModal(false)}
+        referralDiscount={referralDiscount}
+      />
+
+      {/* Points Earn Animation */}
+      <PointsEarnAnimation amount={pointsEarnAmount} trigger={pointsEarnTrigger} />
+    </DesktopLayout>
   );
-}
-
-// Mock response generator (будет заменено на SSE streaming)
-function generateMockResponse(userMessage: string): string {
-  const lowerMessage = userMessage.toLowerCase();
-
-  if (lowerMessage.includes('btc') || lowerMessage.includes('bitcoin')) {
-    return `# Bitcoin Analysis
-
-Based on current market conditions:
-
-## Technical Overview
-- **Price Action**: BTC is showing strong momentum with bullish structure
-- **Support Levels**: $42,000 - $43,500
-- **Resistance**: $48,000 - $50,000
-
-## Key Indicators
-\`\`\`
-RSI: 62 (Neutral-Bullish)
-MACD: Bullish crossover
-Volume: Above average
-\`\`\`
-
-## Trading Recommendation
-Consider **accumulation** on dips to support levels. Set stop-loss below $42,000 for risk management.
-
-*This is AI-generated analysis. Always do your own research.*`;
-  }
-
-  if (lowerMessage.includes('eth') || lowerMessage.includes('ethereum')) {
-    return `# Ethereum Technical Analysis
-
-## Current Market Structure
-- ETH is consolidating after recent rally
-- Key support at **$2,800**
-- Resistance at **$3,200**
-
-## Technical Indicators
-| Indicator | Value | Signal |
-|-----------|-------|--------|
-| RSI (14) | 58 | Neutral |
-| MACD | Bullish | Buy |
-| MA(50) | $2,750 | Support |
-
-Looking strong for a continuation pattern. Watch for breakout above $3,200.`;
-  }
-
-  if (lowerMessage.includes('fear') || lowerMessage.includes('greed')) {
-    return `# Fear & Greed Index Analysis
-
-The current market sentiment shows **Fear (25/100)**.
-
-## What this means:
-- Investors are worried about market conditions
-- Potentially good buying opportunity (contrarian signal)
-- Market may be oversold
-
-## Historical Context:
-During extreme fear periods, Bitcoin has historically shown strong recoveries within 2-4 weeks.
-
-**Strategy**: Consider DCA (Dollar Cost Averaging) into quality projects during fear periods.`;
-  }
-
-  if (lowerMessage.includes('altcoin') || lowerMessage.includes('alt')) {
-    return `# Top Altcoins to Watch
-
-## 1. **Solana (SOL)** 🚀
-- Strong ecosystem growth
-- High transaction throughput
-- Target: $120-$150
-
-## 2. **Avalanche (AVAX)** ❄️
-- DeFi adoption increasing
-- Low fees, fast finality
-- Target: $40-$50
-
-## 3. **Polygon (MATIC)** 🔷
-- Ethereum scaling solution
-- Enterprise partnerships
-- Target: $1.20-$1.50
-
-*Always manage risk and only invest what you can afford to lose.*`;
-  }
-
-  // Default response
-  return `I understand you're asking about: "${userMessage}"
-
-I'm Syntra AI, your crypto trading assistant. I can help you with:
-
-- 📊 **Market Analysis**: BTC, ETH, and altcoin analysis
-- 📈 **Technical Indicators**: RSI, MACD, support/resistance
-- 💡 **Trading Strategies**: Entry/exit points, risk management
-- 🎯 **Portfolio Advice**: Diversification and allocation
-
-Ask me anything about crypto markets, and I'll provide detailed insights!`;
 }

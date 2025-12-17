@@ -2,12 +2,12 @@
 """
 Handler for photo/image analysis (Vision functionality)
 """
-import logging
 from io import BytesIO
 
 from aiogram import Router, F
 from aiogram.types import Message, BufferedInputFile
 from aiogram.utils.chat_action import ChatActionSender
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from openai import BadRequestError
 
@@ -15,11 +15,10 @@ from config.config import ModelConfig
 from config.prompt_selector import get_question_vision_prompt
 from src.services.openai_service import OpenAIService
 from src.services.coingecko_service import CoinGeckoService
+from src.services.points_service import PointsService
+from src.database.models import PointsTransactionType
 from src.utils.coin_parser import normalize_coin_name, extract_coin_from_text
 from src.utils.i18n import i18n
-
-
-logger = logging.getLogger(__name__)
 
 router = Router(name="vision")
 
@@ -28,7 +27,7 @@ openai_service = OpenAIService()
 coingecko_service = CoinGeckoService()
 
 
-@router.message(F.photo)
+@router.message(F.photo & (F.chat.type == "private"))
 async def handle_photo(
     message: Message, session: AsyncSession, user_language: str = "ru"
 ):
@@ -234,8 +233,8 @@ async def handle_photo(
                         logger.debug(f"Error updating message during streaming: {e}")
                         pass
 
-        # Final update with complete analysis and stats
-        # Note: stats are tracked in stream_image_analysis, we need to calculate them here
+        # Final update with complete analysis
+        # Note: stats are tracked in stream_image_analysis for cost tracking
         from src.utils.vision_tokens import calculate_image_tokens
 
         image_tokens = calculate_image_tokens(
@@ -248,8 +247,24 @@ async def handle_photo(
             image_tokens + prompt_tokens, output_tokens
         )
 
+        # 📊 Track vision request in PostHog
+        from src.services.posthog_service import track_ai_request
+
+        # Get user tier
+        user_tier = "free"
+        if hasattr(db_user, 'subscription') and db_user.subscription:
+            user_tier = db_user.subscription.tier
+
+        track_ai_request(
+            db_user.id,
+            user_tier,
+            ModelConfig.GPT_4O,  # Vision always uses GPT-4o
+            total_tokens,
+            cost,
+            request_type="vision"
+        )
+
         final_response = response_header + full_analysis
-        final_response += f"\n\n<i>Токены: {total_tokens} (~${cost:.4f})</i>"
 
         await thinking_msg.edit_text(final_response, parse_mode="HTML")
 
@@ -258,6 +273,31 @@ async def handle_photo(
             f"Coin: {coin_id or 'unknown'}, "
             f"Tokens: {total_tokens}, Cost: ${cost:.4f}"
         )
+
+        # 💎 Award points for successful vision request
+        try:
+            points_transaction = await PointsService.earn_points(
+                session=session,
+                user_id=db_user.id,
+                transaction_type=PointsTransactionType.EARN_VISION_REQUEST,
+                description=f"Vision анализ: {coin_id or 'график'}",
+                metadata={
+                    "file_id": file_id,
+                    "coin": coin_id,
+                    "tokens": total_tokens,
+                    "cost": cost,
+                    "language": user_language,
+                },
+                transaction_id=f"vision_req:{db_user.id}:{message.message_id}",
+            )
+            if points_transaction:
+                logger.info(
+                    f"💎 Awarded {points_transaction.amount} points to user {db_user.id} "
+                    f"for vision request (balance: {points_transaction.balance_after})"
+                )
+        except Exception as points_error:
+            # Don't fail the request if points fail
+            logger.error(f"Failed to award points: {points_error}")
 
     except BadRequestError as e:
         logger.error(f"Vision API BadRequest for user {telegram_id}: {e}")

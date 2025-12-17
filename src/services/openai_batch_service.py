@@ -14,7 +14,6 @@ Batch API позволяет:
 - Content generation
 """
 import json
-import logging
 from datetime import datetime, UTC
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -26,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from config.config import OPENAI_API_KEY, ModelConfig
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class BatchStatus(str, Enum):
@@ -511,7 +510,7 @@ async def example_usage():
         requests, description="Daily retention messages"
     )
 
-    print(f"Batch created: {batch_id}")
+    logger.info(f"Batch created: {batch_id}")
 
     # Check status (do this after some time)
     # status = await service.check_batch_status(batch_id)

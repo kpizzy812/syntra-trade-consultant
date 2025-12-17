@@ -10,8 +10,8 @@ The Fear & Greed Index is a measure of market sentiment ranging from 0-100:
 - 56-75: Greed
 - 76-100: Extreme Greed
 """
-import logging
 from typing import Optional, Dict, Any
+import logging  # Needed for tenacity before_sleep_log level constants
 import aiohttp
 
 from tenacity import (
@@ -23,7 +23,7 @@ from tenacity import (
 )
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class FearGreedService:

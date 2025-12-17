@@ -3,27 +3,95 @@
 CoinGecko API Service for cryptocurrency data
 """
 import time
-import logging
 import asyncio
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
 from collections import deque
 
 import aiohttp
 from loguru import logger
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-    before_sleep_log,
-)
 
-from config.config import COINGECKO_API_KEY, CACHE_TTL_COINGECKO
+from config.config import COINGECKO_API_KEY
+from src.cache import get_redis_manager, CacheKeyBuilder
 
 
-# Create standard logger for tenacity
-std_logger = logging.getLogger(__name__)
+# ============================================================================
+# STATIC FALLBACK DATA (Last resort when all caches fail)
+# ============================================================================
+# Эти данные используются ТОЛЬКО когда:
+# 1. CoinGecko API недоступен (503, 500, network errors)
+# 2. Redis cache недоступен или пуст
+# 3. In-memory cache пуст
+#
+# Данные примерные, но реалистичные для основных монет
+# ============================================================================
+
+STATIC_FALLBACK_PRICES = {
+    "bitcoin": {
+        "usd": 43000,
+        "usd_24h_change": 2.5,
+        "usd_market_cap": 840000000000,
+        "usd_24h_vol": 28000000000
+    },
+    "ethereum": {
+        "usd": 2300,
+        "usd_24h_change": 1.8,
+        "usd_market_cap": 275000000000,
+        "usd_24h_vol": 15000000000
+    },
+    "toncoin": {
+        "usd": 2.3,
+        "usd_24h_change": 3.2,
+        "usd_market_cap": 8000000000,
+        "usd_24h_vol": 120000000
+    },
+    "binancecoin": {
+        "usd": 310,
+        "usd_24h_change": 1.5,
+        "usd_market_cap": 47000000000,
+        "usd_24h_vol": 1200000000
+    },
+    "solana": {
+        "usd": 105,
+        "usd_24h_change": 4.2,
+        "usd_market_cap": 45000000000,
+        "usd_24h_vol": 2500000000
+    },
+    "ripple": {
+        "usd": 0.52,
+        "usd_24h_change": -0.8,
+        "usd_market_cap": 28000000000,
+        "usd_24h_vol": 1100000000
+    },
+    "cardano": {
+        "usd": 0.48,
+        "usd_24h_change": 1.2,
+        "usd_market_cap": 17000000000,
+        "usd_24h_vol": 450000000
+    },
+    "dogecoin": {
+        "usd": 0.085,
+        "usd_24h_change": -1.5,
+        "usd_market_cap": 12000000000,
+        "usd_24h_vol": 600000000
+    },
+    "polkadot": {
+        "usd": 7.2,
+        "usd_24h_change": 2.1,
+        "usd_market_cap": 9000000000,
+        "usd_24h_vol": 280000000
+    },
+    "chainlink": {
+        "usd": 15.5,
+        "usd_24h_change": 3.5,
+        "usd_market_cap": 8500000000,
+        "usd_24h_vol": 450000000
+    }
+}
+
+
+class RateLimitExceeded(Exception):
+    """Raised when rate limit is exceeded and waiting would take too long"""
+    pass
 
 
 class RateLimiter:
@@ -45,10 +113,18 @@ class RateLimiter:
         self.calls: deque = deque()
         self._lock = asyncio.Lock()
 
-    async def acquire(self) -> None:
+    async def acquire(self, max_wait: float = 10.0) -> bool:
         """
         Wait until a request slot is available
-        Removes old timestamps outside the time window
+
+        Args:
+            max_wait: Maximum time to wait in seconds (default: 10s)
+
+        Returns:
+            True if slot acquired, False if max_wait exceeded
+
+        Raises:
+            RateLimitError: If max_wait time exceeded
         """
         async with self._lock:
             now = time.time()
@@ -57,20 +133,33 @@ class RateLimiter:
             while self.calls and self.calls[0] < now - self.time_window:
                 self.calls.popleft()
 
-            # If at limit, wait until oldest call expires
+            # If at limit, check if we should wait
             if len(self.calls) >= self.max_calls:
                 sleep_time = self.calls[0] + self.time_window - now
+
                 if sleep_time > 0:
+                    # If wait time exceeds max_wait, raise error instead of waiting
+                    if sleep_time > max_wait:
+                        logger.error(
+                            f"Rate limit reached ({len(self.calls)}/{self.max_calls}). "
+                            f"Would need to wait {sleep_time:.1f}s, but max_wait is {max_wait:.1f}s. "
+                            f"Consider using cached data or reducing API calls."
+                        )
+                        raise RateLimitExceeded(
+                            f"Rate limit exceeded. Need to wait {sleep_time:.1f}s (max: {max_wait:.1f}s)"
+                        )
+
                     logger.warning(
                         f"Rate limit reached ({len(self.calls)}/{self.max_calls}), "
-                        f"waiting {sleep_time:.1f}s"
+                        f"waiting {sleep_time:.1f}s (max allowed: {max_wait:.1f}s)"
                     )
                     await asyncio.sleep(sleep_time)
                     # Recursively try again
-                    return await self.acquire()
+                    return await self.acquire(max_wait)
 
             # Record this call
             self.calls.append(now)
+            return True
 
     def get_stats(self) -> Dict[str, Any]:
         """Get current rate limiter statistics"""
@@ -112,31 +201,51 @@ class CoinGeckoService:
         "trending": 300,       # Trending coins: 5min
         "global": 300,         # Global market data: 5min
         "search": 600,         # Search results: 10min (rarely changes)
+        "categories": 3600,    # Categories with market data: 1 hour (changes slowly)
+        "categories_list": 86400,  # Category list: 24 hours (almost static)
+        "markets": 180,        # Coins markets endpoint: 3min
         "default": 180,        # Default: 3min
     }
 
     def __init__(self, rate_limit: int = 25):
         """
-        Initialize CoinGecko service with caching and rate limiting
+        Initialize CoinGecko service with Redis caching and rate limiting
 
         Args:
             rate_limit: Max API calls per minute (default: 25 for Demo API with free key)
                        Set to 10 for Public API without key
         """
         self.api_key = COINGECKO_API_KEY
-        self.cache: Dict[str, tuple[Any, float, str]] = {}  # (data, timestamp, cache_type)
 
-        # Initialize rate limiter
+        # Redis cache manager (graceful degradation if unavailable)
+        self.redis = get_redis_manager()
+
+        # Fallback in-memory cache (if Redis unavailable)
+        self._fallback_cache: Dict[str, tuple[Any, float, str]] = {}
+
+        # Initialize rate limiter (CRITICAL - must respect API limits!)
         # Default 25/min for Demo API (30 calls/min limit, буфер 5 запросов)
         # Для Public API без ключа установите 10/min
         self.rate_limiter = RateLimiter(max_calls=rate_limit, time_window=60)
 
-        logger.info(f"CoinGecko service initialized with {rate_limit} calls/min rate limit")
+        logger.info(
+            f"CoinGecko service initialized with {rate_limit} calls/min rate limit "
+            f"(Redis cache: {'enabled' if self.redis.is_available() else 'disabled'})"
+        )
 
-    def _get_cache_key(self, endpoint: str, params: Dict) -> str:
-        """Generate cache key from endpoint and params"""
-        param_str = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-        return f"{endpoint}?{param_str}"
+    def _build_cache_key(self, endpoint: str, params: Dict) -> str:
+        """
+        Build Redis cache key from endpoint and params
+
+        Format: syntra:coingecko:{method}:{params}
+        """
+        # Extract method from endpoint (e.g., "/simple/price" -> "price")
+        method = endpoint.strip("/").replace("/", "_")
+
+        # Build params string
+        params_dict = {k: str(v) for k, v in sorted(params.items()) if k != "x_cg_demo_api_key"}
+
+        return CacheKeyBuilder.build("coingecko", method, params_dict)
 
     def _get_cache_type(self, endpoint: str) -> str:
         """Determine cache type based on endpoint"""
@@ -144,6 +253,12 @@ class CoinGeckoService:
             return "price"
         elif "/coins/" in endpoint and "/market_chart" in endpoint:
             return "market_chart"
+        elif "/coins/categories/list" in endpoint:
+            return "categories_list"
+        elif "/coins/categories" in endpoint:
+            return "categories"
+        elif "/coins/markets" in endpoint:
+            return "markets"
         elif "/coins/" in endpoint:
             return "coin_data"
         elif "/search/trending" in endpoint:
@@ -155,27 +270,138 @@ class CoinGeckoService:
         else:
             return "default"
 
-    def _get_cached(self, cache_key: str, endpoint: str) -> Optional[Any]:
-        """Get cached data if not expired"""
-        if cache_key in self.cache:
-            data, timestamp, cache_type = self.cache[cache_key]
+    async def _get_cached(self, cache_key: str, endpoint: str) -> Optional[Any]:
+        """
+        Get cached data from Redis (with fallback to in-memory)
+
+        Uses differentiated TTL based on endpoint type
+        """
+        # Try Redis first
+        cached = await self.redis.get(cache_key)
+        if cached is not None:
+            cache_type = self._get_cache_type(endpoint)
+            ttl = self.CACHE_TTL.get(cache_type, self.CACHE_TTL["default"])
+            logger.debug(f"Redis cache HIT: {cache_key} (type: {cache_type}, TTL: {ttl}s)")
+            return cached
+
+        # Fallback to in-memory cache if Redis unavailable
+        if not self.redis.is_available() and cache_key in self._fallback_cache:
+            data, timestamp, cache_type = self._fallback_cache[cache_key]
             ttl = self.CACHE_TTL.get(cache_type, self.CACHE_TTL["default"])
 
             if time.time() - timestamp < ttl:
-                logger.debug(f"Cache hit for {cache_key} (TTL: {ttl}s, type: {cache_type})")
+                logger.debug(f"Fallback cache HIT: {cache_key} (TTL: {ttl}s)")
                 return data
             else:
-                # Remove expired cache
-                del self.cache[cache_key]
-                logger.debug(f"Cache expired for {cache_key} (type: {cache_type})")
+                # Don't delete expired cache - keep it for emergency fallback
+                logger.debug(f"Fallback cache EXPIRED: {cache_key} (kept for emergency fallback)")
+
         return None
 
-    def _set_cache(self, cache_key: str, data: Any, endpoint: str) -> None:
-        """Set cache with current timestamp and type"""
+    def _get_static_fallback(self, params: Dict[str, Any], endpoint: str) -> Optional[Dict[str, Any]]:
+        """
+        Get static fallback data as LAST RESORT when all other options fail
+
+        This returns hardcoded approximate prices for major coins when:
+        1. CoinGecko API is down
+        2. All caches (Redis + in-memory) are empty/unavailable
+        3. User still needs SOME data to display
+
+        Args:
+            params: Original request parameters
+            endpoint: API endpoint being requested
+
+        Returns:
+            Static fallback data or None
+        """
+        # Only provide static fallback for price endpoints
+        if "/simple/price" not in endpoint:
+            return None
+
+        # Extract coin IDs from params
+        coin_ids_str = params.get("ids", "")
+        if not coin_ids_str:
+            return None
+
+        coin_ids = coin_ids_str.split(",")
+
+        # Build response from static fallback data
+        result = {}
+        found_any = False
+
+        for coin_id in coin_ids:
+            coin_id = coin_id.strip()
+            if coin_id in STATIC_FALLBACK_PRICES:
+                result[coin_id] = STATIC_FALLBACK_PRICES[coin_id].copy()
+                found_any = True
+
+        if found_any:
+            logger.warning(
+                f"⚠️ Using STATIC FALLBACK data for {len(result)} coins. "
+                f"This is APPROXIMATE data - actual prices may differ!"
+            )
+            return result
+
+        return None
+
+    async def _get_stale_cache(self, cache_key: str, endpoint: str, params: Dict[str, Any]) -> Optional[Any]:
+        """
+        Get stale cached data (ignoring TTL) as emergency fallback when API is down
+
+        Priority:
+        1. Stale Redis cache (ignoring TTL)
+        2. Stale in-memory cache (ignoring TTL)
+        3. Static fallback data (hardcoded approximate values)
+
+        Args:
+            cache_key: Cache key to retrieve
+            endpoint: API endpoint (for logging)
+            params: Request parameters (for static fallback)
+
+        Returns:
+            Cached data or None
+        """
+        # Try Redis first (with extended TTL tolerance)
+        cached = await self.redis.get(cache_key)
+        if cached is not None:
+            logger.warning(f"Using STALE Redis cache as fallback: {cache_key}")
+            return cached
+
+        # Try in-memory cache (even if expired)
+        if cache_key in self._fallback_cache:
+            data, timestamp, cache_type = self._fallback_cache[cache_key]
+            age_hours = (time.time() - timestamp) / 3600
+            logger.warning(
+                f"Using STALE fallback cache (age: {age_hours:.1f}h): {cache_key}"
+            )
+            return data
+
+        # Last resort: static fallback data
+        static_data = self._get_static_fallback(params, endpoint)
+        if static_data is not None:
+            return static_data
+
+        logger.error(f"No stale cache or static fallback available for {cache_key}")
+        return None
+
+    async def _set_cache(self, cache_key: str, data: Any, endpoint: str) -> None:
+        """
+        Set cache in Redis (with fallback to in-memory)
+
+        Uses differentiated TTL based on endpoint type
+        """
         cache_type = self._get_cache_type(endpoint)
-        self.cache[cache_key] = (data, time.time(), cache_type)
         ttl = self.CACHE_TTL.get(cache_type, self.CACHE_TTL["default"])
-        logger.debug(f"Cached {cache_key} (TTL: {ttl}s, type: {cache_type})")
+
+        # Try Redis first
+        success = await self.redis.set(cache_key, data, ttl=ttl)
+
+        if success:
+            logger.debug(f"Redis cache SET: {cache_key} (TTL: {ttl}s, type: {cache_type})")
+        else:
+            # Fallback to in-memory cache
+            self._fallback_cache[cache_key] = (data, time.time(), cache_type)
+            logger.debug(f"Fallback cache SET: {cache_key} (TTL: {ttl}s, type: {cache_type})")
 
     async def _make_request(
         self, endpoint: str, params: Optional[Dict[str, Any]] = None,
@@ -205,8 +431,8 @@ class CoinGeckoService:
             params["x_cg_demo_api_key"] = self.api_key
 
         # Check cache first
-        cache_key = self._get_cache_key(endpoint, params)
-        cached = self._get_cached(cache_key, endpoint)
+        cache_key = self._build_cache_key(endpoint, params)
+        cached = await self._get_cached(cache_key, endpoint)
         if cached is not None:
             return cached
 
@@ -216,8 +442,13 @@ class CoinGeckoService:
 
         for attempt in range(max_retries):
             try:
-                # Wait for rate limiter before making request
-                await self.rate_limiter.acquire()
+                # Wait for rate limiter before making request (max 10s wait)
+                try:
+                    await self.rate_limiter.acquire(max_wait=10.0)
+                except RateLimitExceeded as e:
+                    logger.error(f"Rate limit exceeded: {e}")
+                    # Return cached data if available, otherwise None
+                    return self._get_cached(cache_key, endpoint)
 
                 async with aiohttp.ClientSession() as session:
                     async with session.get(
@@ -227,7 +458,7 @@ class CoinGeckoService:
                     ) as response:
                         if response.status == 200:
                             data = await response.json()
-                            self._set_cache(cache_key, data, endpoint)
+                            await self._set_cache(cache_key, data, endpoint)
                             return data
 
                         elif response.status == 429:
@@ -251,11 +482,17 @@ class CoinGeckoService:
                                 return None
 
                         else:
-                            # Other HTTP errors
+                            # Other HTTP errors (500, 503, etc.)
                             error_text = await response.text()
                             logger.error(
                                 f"CoinGecko API error {response.status}: {error_text}"
                             )
+
+                            # Return stale cache as fallback
+                            stale_cache = await self._get_stale_cache(cache_key, endpoint, params)
+                            if stale_cache is not None:
+                                return stale_cache
+
                             return None
 
             except (aiohttp.ClientError, TimeoutError, asyncio.TimeoutError) as e:
@@ -272,10 +509,22 @@ class CoinGeckoService:
                     continue
                 else:
                     logger.error(f"Request failed after {max_retries} attempts: {last_error}")
+
+                    # Return stale cache as emergency fallback
+                    stale_cache = await self._get_stale_cache(cache_key, endpoint, params)
+                    if stale_cache is not None:
+                        return stale_cache
+
                     return None
 
             except Exception as e:
                 logger.exception(f"Unexpected error making CoinGecko request: {e}")
+
+                # Return stale cache as emergency fallback
+                stale_cache = await self._get_stale_cache(cache_key, endpoint, params)
+                if stale_cache is not None:
+                    return stale_cache
+
                 return None
 
         return None
@@ -326,6 +575,118 @@ class CoinGeckoService:
             params["include_24hr_vol"] = "true"
 
         return await self._make_request("/simple/price", params)
+
+    async def get_batch_prices(
+        self,
+        coin_ids: List[str],
+        vs_currency: str = "usd",
+        include_24h_change: bool = True,
+        include_market_cap: bool = True,
+        include_24h_volume: bool = True,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get current prices for multiple cryptocurrencies in one request
+
+        This is more efficient than calling get_price() multiple times as it uses
+        only 1 API call instead of N calls for N coins.
+
+        Args:
+            coin_ids: List of coin IDs (e.g., ['bitcoin', 'ethereum', 'solana'])
+            vs_currency: Currency to compare against (default: 'usd')
+            include_24h_change: Include 24h price change percentage
+            include_market_cap: Include market cap
+            include_24h_volume: Include 24h volume
+
+        Returns:
+            Dict with price data for all coins or None
+
+        Example:
+            {
+                "bitcoin": {
+                    "usd": 45000,
+                    "usd_24h_change": 2.5,
+                    "usd_market_cap": 850000000000,
+                    "usd_24h_vol": 35000000000
+                },
+                "ethereum": {
+                    "usd": 3000,
+                    "usd_24h_change": 1.8,
+                    ...
+                }
+            }
+        """
+        if not coin_ids:
+            return {}
+
+        # Join coin IDs with comma for batch request
+        params = {
+            "ids": ",".join(coin_ids),
+            "vs_currencies": vs_currency,
+        }
+
+        if include_24h_change:
+            params["include_24hr_change"] = "true"
+
+        if include_market_cap:
+            params["include_market_cap"] = "true"
+
+        if include_24h_volume:
+            params["include_24hr_vol"] = "true"
+
+        return await self._make_request("/simple/price", params)
+
+    async def get_batch_coins_data(
+        self,
+        coin_ids: List[str],
+        vs_currency: str = "usd",
+        include_sparkline: bool = False
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get detailed market data for multiple coins using /coins/markets endpoint
+
+        This endpoint returns comprehensive data including ATH, ATL, price changes,
+        supply metrics, etc. - all in ONE API call.
+
+        Args:
+            coin_ids: List of coin IDs
+            vs_currency: Currency to compare against
+            include_sparkline: Include 7-day price sparkline
+
+        Returns:
+            List of coin market data dicts
+
+        Example:
+            [
+                {
+                    "id": "bitcoin",
+                    "symbol": "btc",
+                    "name": "Bitcoin",
+                    "current_price": 45000,
+                    "market_cap": 850000000000,
+                    "price_change_percentage_24h": 2.5,
+                    "ath": 69000,
+                    "ath_change_percentage": -34.78,
+                    "atl": 67.81,
+                    "atl_change_percentage": 66239.42,
+                    "circulating_supply": 19500000,
+                    "total_supply": 21000000,
+                    ...
+                },
+                ...
+            ]
+        """
+        if not coin_ids:
+            return []
+
+        params = {
+            "vs_currency": vs_currency,
+            "ids": ",".join(coin_ids),
+            "order": "market_cap_desc",
+            "sparkline": str(include_sparkline).lower(),
+            "price_change_percentage": "7d,30d,60d,1y",
+        }
+
+        return await self._make_request("/coins/markets", params)
 
     async def get_coin_data(self, coin_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -491,7 +852,7 @@ class CoinGeckoService:
         return await self._make_request("/search/trending")
 
     async def get_top_coins(
-        self, vs_currency: str = "usd", limit: int = 10
+        self, vs_currency: str = "usd", limit: int = 10, include_1h_7d_change: bool = True
     ) -> Optional[List[Dict[str, Any]]]:
         """
         Get top cryptocurrencies by market cap
@@ -499,6 +860,7 @@ class CoinGeckoService:
         Args:
             vs_currency: Currency to compare against
             limit: Number of coins to return
+            include_1h_7d_change: Include 1h and 7d price change percentages
 
         Returns:
             List of top coins with market data
@@ -510,6 +872,10 @@ class CoinGeckoService:
             "page": 1,
             "sparkline": "false",
         }
+
+        # Add price change percentages for 1h and 7d timeframes
+        if include_1h_7d_change:
+            params["price_change_percentage"] = "1h,24h,7d"
 
         return await self._make_request("/coins/markets", params)
 
@@ -541,12 +907,73 @@ class CoinGeckoService:
         """
         return await self.get_top_coins(vs_currency, limit)
 
+    async def get_stablecoins_market_cap(self) -> Optional[Dict[str, Any]]:
+        """
+        Get total market cap of all stablecoins
+
+        Uses /coins/categories endpoint to get accurate stablecoin market cap.
+        This is more accurate than summing individual stablecoins from top-10.
+
+        Returns:
+            Dict with stablecoin metrics or None
+
+        Example:
+            {
+                "market_cap_usd": 309957268056,
+                "volume_24h_usd": 12345678900,
+                "dominance_pct": 9.55,  # Based on total crypto market cap
+                "category_name": "Stablecoins"
+            }
+        """
+        try:
+            # Get all categories with market data
+            categories = await self.get_categories_with_data()
+            if not categories:
+                logger.warning("Failed to get categories data for stablecoins")
+                return None
+
+            # Find stablecoins category (case-insensitive search)
+            stablecoin_category = None
+            for cat in categories:
+                cat_name = cat.get("name", "").lower()
+                if cat_name == "stablecoins":
+                    stablecoin_category = cat
+                    break
+
+            if not stablecoin_category:
+                logger.warning("Stablecoins category not found in categories list")
+                return None
+
+            # Extract stablecoin data
+            stable_mcap = stablecoin_category.get("market_cap", 0)
+            stable_volume = stablecoin_category.get("volume_24h", 0)
+
+            # Get total market cap for dominance calculation
+            global_data = await self._make_request("/global")
+            if global_data and "data" in global_data:
+                total_mcap = global_data["data"]["total_market_cap"].get("usd", 0)
+                dominance_pct = (stable_mcap / total_mcap * 100) if total_mcap > 0 else 0
+            else:
+                dominance_pct = 0
+                logger.warning("Could not calculate stablecoin dominance - missing global data")
+
+            return {
+                "market_cap_usd": stable_mcap,
+                "volume_24h_usd": stable_volume,
+                "dominance_pct": round(dominance_pct, 2),
+                "category_name": stablecoin_category.get("name"),
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting stablecoins market cap: {e}")
+            return None
+
     async def get_global_market_data(self) -> Optional[Dict[str, Any]]:
         """
-        Get global cryptocurrency market data
+        Get global cryptocurrency market data with accurate dominance metrics
 
         Returns market dominance, total market cap, volume, and other global metrics.
-        Useful for understanding market phases (Bitcoin season vs Alt season).
+        Includes TOTAL2, TOTAL3, and Real Alts (Others) metrics for altseason analysis.
 
         Returns:
             Dict with global market data or None
@@ -557,7 +984,10 @@ class CoinGeckoService:
             "total_volume_24h_usd": 176924238498,
             "btc_dominance": 57.13,
             "eth_dominance": 11.57,
-            "altcoin_dominance": 31.30,  # Calculated: 100 - BTC - ETH
+            "stablecoin_dominance": 9.55,  # NEW: Accurate stablecoin dominance
+            "altcoin_dominance": 23.75,    # NEW: Real alts only (excludes stablecoins)
+            "total2_dominance": 42.87,     # NEW: Everything except BTC
+            "total3_dominance": 31.30,     # NEW: Everything except BTC and ETH
             "market_cap_change_24h": -2.5,
             "active_cryptocurrencies": 19425,
             "markets": 1415,
@@ -579,20 +1009,56 @@ class CoinGeckoService:
         btc_dominance = market_data.get("market_cap_percentage", {}).get("btc", 0)
         eth_dominance = market_data.get("market_cap_percentage", {}).get("eth", 0)
 
-        # Calculate altcoin dominance (everything except BTC and ETH)
-        altcoin_dominance = 100 - btc_dominance - eth_dominance
+        # Get accurate stablecoin dominance from categories
+        stablecoin_data = await self.get_stablecoins_market_cap()
+        stablecoin_dominance = 0
+        if stablecoin_data:
+            stablecoin_dominance = stablecoin_data.get("dominance_pct", 0)
+            logger.debug(f"Stablecoin dominance: {stablecoin_dominance:.2f}%")
+        else:
+            # Fallback: estimate from top-10 (USDT + USDC)
+            usdt_dom = market_data.get("market_cap_percentage", {}).get("usdt", 0)
+            usdc_dom = market_data.get("market_cap_percentage", {}).get("usdc", 0)
+            stablecoin_dominance = usdt_dom + usdc_dom
+            logger.warning(
+                f"Using fallback stablecoin dominance from top-10: {stablecoin_dominance:.2f}% "
+                f"(actual is likely ~1-2% higher)"
+            )
+
+        # Calculate new dominance metrics
+        # TOTAL2 = All market except BTC (includes ETH, alts, stablecoins)
+        total2_dominance = 100 - btc_dominance
+
+        # TOTAL3 = All market except BTC and ETH (includes alts and stablecoins)
+        total3_dominance = 100 - btc_dominance - eth_dominance
+
+        # Real Alts (Others) = All market except BTC, ETH, and Stablecoins
+        # This is the TRUE altcoin dominance for altseason analysis
+        altcoin_dominance = total3_dominance - stablecoin_dominance
 
         # Get DeFi data if available
         defi_market_cap = market_data.get("defi_market_cap", 0)
         defi_volume = market_data.get("defi_24h_vol", 0)
         defi_dominance = market_data.get("defi_dominance", 0)
 
+        logger.info(
+            f"Market dominance: BTC {btc_dominance:.2f}%, ETH {eth_dominance:.2f}%, "
+            f"Stables {stablecoin_dominance:.2f}%, Real Alts {altcoin_dominance:.2f}% | "
+            f"TOTAL2 {total2_dominance:.2f}%, TOTAL3 {total3_dominance:.2f}%"
+        )
+
         return {
             "total_market_cap_usd": total_market_cap,
             "total_volume_24h_usd": total_volume,
+            # Core dominance metrics
             "btc_dominance": round(btc_dominance, 2),
             "eth_dominance": round(eth_dominance, 2),
-            "altcoin_dominance": round(altcoin_dominance, 2),
+            "stablecoin_dominance": round(stablecoin_dominance, 2),
+            "altcoin_dominance": round(altcoin_dominance, 2),  # Real alts (excl. stablecoins)
+            # TradingView-style metrics for altseason analysis
+            "total2_dominance": round(total2_dominance, 2),  # All except BTC
+            "total3_dominance": round(total3_dominance, 2),  # All except BTC & ETH
+            # Other metrics
             "market_cap_change_24h": market_data.get(
                 "market_cap_change_percentage_24h_usd", 0
             ),
@@ -603,6 +1069,184 @@ class CoinGeckoService:
             "defi_dominance": defi_dominance,
             "updated_at": market_data.get("updated_at", 0),
         }
+
+    async def get_categories_list(self) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get list of all available coin categories
+
+        Returns:
+            List of categories with category_id and name
+
+        Example:
+            [
+                {"category_id": "layer-1", "name": "Layer 1 (L1)"},
+                {"category_id": "decentralized-finance-defi", "name": "DeFi"},
+                ...
+            ]
+        """
+        return await self._make_request("/coins/categories/list")
+
+    async def get_categories_with_data(
+        self, order: str = "market_cap_desc"
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get categories with market data (market cap, volume, top coins)
+
+        Args:
+            order: Sorting order
+                   - market_cap_desc/asc
+                   - name_desc/asc
+                   - market_cap_change_24h_desc/asc
+
+        Returns:
+            List of categories with market metrics
+
+        Example:
+            [
+                {
+                    "id": "layer-1",
+                    "name": "Layer 1 (L1)",
+                    "market_cap": 2060000000000,
+                    "market_cap_change_24h": -0.66,
+                    "volume_24h": 61100000000,
+                    "top_3_coins": ["bitcoin", "ethereum", "binancecoin"]
+                },
+                ...
+            ]
+        """
+        params = {"order": order}
+        return await self._make_request("/coins/categories", params)
+
+    async def get_coins_by_category(
+        self,
+        category: str,
+        vs_currency: str = "usd",
+        per_page: int = 100,
+        page: int = 1,
+        exclude_btc_eth: bool = True,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get coins by category with optional BTC/ETH filtering
+
+        Args:
+            category: Category ID (e.g., 'layer-1', 'decentralized-finance-defi')
+            vs_currency: Currency to compare against
+            per_page: Results per page (1-250)
+            page: Page number
+            exclude_btc_eth: Exclude Bitcoin and Ethereum from results
+
+        Returns:
+            List of coins with full market data sorted by market cap
+
+        Example:
+            [
+                {
+                    "id": "solana",
+                    "symbol": "sol",
+                    "name": "Solana",
+                    "current_price": 150.25,
+                    "market_cap": 65000000000,
+                    "price_change_percentage_24h": 5.2,
+                    "ath": 260.06,
+                    "ath_change_percentage": -42.2,
+                    ...
+                },
+                ...
+            ]
+        """
+        params = {
+            "vs_currency": vs_currency,
+            "category": category,
+            "order": "market_cap_desc",
+            "per_page": per_page,
+            "page": page,
+            "sparkline": "false",
+            "price_change_percentage": "1h,24h,7d,30d,200d,1y",
+        }
+
+        data = await self._make_request("/coins/markets", params)
+
+        if data and exclude_btc_eth:
+            return [coin for coin in data if coin["id"] not in ["bitcoin", "ethereum"]]
+
+        return data
+
+    async def get_top_altcoins(
+        self,
+        vs_currency: str = "usd",
+        limit: int = 50,
+        exclude_stablecoins: bool = True,
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Get top altcoins excluding BTC, ETH and optionally stablecoins
+
+        This method fetches top cryptocurrencies by market cap and filters out
+        Bitcoin, Ethereum and stablecoins to return only altcoins.
+
+        Args:
+            vs_currency: Currency to compare against
+            limit: Number of altcoins to return
+            exclude_stablecoins: Exclude stablecoins (USDT, USDC, etc.)
+
+        Returns:
+            List of altcoins sorted by market cap
+
+        Example:
+            [
+                {
+                    "id": "solana",
+                    "symbol": "sol",
+                    "current_price": 150.25,
+                    "market_cap": 65000000000,
+                    "ath": 260.06,
+                    "ath_change_percentage": -42.2,
+                    ...
+                },
+                ...
+            ]
+        """
+        # Request with buffer for filtering
+        params = {
+            "vs_currency": vs_currency,
+            "order": "market_cap_desc",
+            "per_page": 250,  # Max allowed, to ensure we get enough after filtering
+            "page": 1,
+            "sparkline": "false",
+            "price_change_percentage": "1h,24h,7d,30d,200d,1y",
+        }
+
+        data = await self._make_request("/coins/markets", params)
+
+        if not data:
+            return None
+
+        # Build exclusion list
+        excluded = ["bitcoin", "ethereum"]
+
+        if exclude_stablecoins:
+            stablecoins = [
+                "tether",
+                "usd-coin",
+                "binance-usd",
+                "dai",
+                "true-usd",
+                "frax",
+                "paxos-standard",
+                "gemini-dollar",
+                "first-digital-usd",
+                "paypal-usd",
+            ]
+            excluded.extend(stablecoins)
+
+        # Filter and limit
+        altcoins = [coin for coin in data if coin["id"] not in excluded]
+
+        logger.debug(
+            f"Filtered {len(data)} coins to {len(altcoins)} altcoins "
+            f"(excluded {len(excluded)} coins)"
+        )
+
+        return altcoins[:limit]
 
     def format_price_message(self, coin_data: Dict[str, Any], coin_id: str) -> str:
         """
@@ -672,13 +1316,13 @@ class CoinGeckoService:
 
         # Count cache entries by type
         cache_by_type = {}
-        for _, _, cache_type in self.cache.values():
+        for _, _, cache_type in self._fallback_cache.values():
             cache_by_type[cache_type] = cache_by_type.get(cache_type, 0) + 1
 
         return {
             "rate_limiter": rate_stats,
             "cache": {
-                "total_entries": len(self.cache),
+                "total_entries": len(self._fallback_cache),
                 "by_type": cache_by_type,
             }
         }

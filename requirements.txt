@@ -19,16 +19,28 @@ pycoingecko
 tonutils==0.5.4
 pytoniq-core
 
+# CryptoBot Payment (Crypto Pay API)
+aiocryptopay
+
+# NOWPayments (300+ crypto + fiat)
+requests  # HTTP library for NOWPayments API
+
 # Utilities
 python-dotenv
 python-dateutil
 tenacity
 APScheduler
 loguru
+posthog  # Product analytics
+resend  # Email service for magic link authentication (3,000 free emails/month)
 
 # API Server (для Telegram Mini App)
 fastapi
 uvicorn[standard]
+slowapi  # Rate limiting для защиты от абьюза
+python-jose[cryptography]  # JWT handling for NextAuth
+passlib[bcrypt]  # Password hashing for email/password auth
+email-validator  # Email validation for pydantic EmailStr type (magic link auth)
 
 # Data Processing
 pandas
@@ -48,6 +60,9 @@ black
 flake8
 mypy
 isort
+
+# Redis (caching)
+redis[hiredis]>=5.0.0  # Official Redis client with async support + hiredis for performance
 
 # Monitoring (optional)
 sentry-sdk

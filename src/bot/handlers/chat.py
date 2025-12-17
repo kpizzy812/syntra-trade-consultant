@@ -18,10 +18,13 @@ from aiogram.types import Message
 from aiogram.utils.chat_action import ChatActionSender
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.services.openai_service_extended import openai_service_with_tools
 from src.services.openai_service_two_step import two_step_service
+from src.services.ads_service import enhance_response_with_ad
+from src.services.points_service import PointsService
 from src.database.crud import get_or_create_user
+from src.database.models import PointsTransactionType
 from src.utils.i18n import i18n
+from src.utils.markdown_converter import convert_to_telegram_html
 from config.prompts import enhance_response_with_character
 
 
@@ -32,7 +35,7 @@ STREAM_UPDATE_INTERVAL = 1.5  # Update message every 1.5 seconds
 MIN_CHARS_FOR_UPDATE = 100  # Or every 100 characters
 
 
-@router.message(F.text & ~F.text.startswith("/"))
+@router.message(F.text & ~F.text.startswith("/") & (F.chat.type == "private"))
 async def handle_text_message(
     message: Message, session: AsyncSession, user_language: str = "ru"
 ):
@@ -75,6 +78,11 @@ async def handle_text_message(
         telegram_language=user.language_code,
     )
 
+    # Get user's tier (with fallback to FREE)
+    user_tier = "free"
+    if hasattr(db_user, 'subscription') and db_user.subscription:
+        user_tier = db_user.subscription.tier
+
     # Send initial "thinking" message
     thinking_msg = await message.answer(i18n.get("chat.thinking", user_language))
 
@@ -90,12 +98,13 @@ async def handle_text_message(
         last_update_length = 0
 
         async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
-            # Use two-step service for better personality
+            # Use two-step service for better personality (tier-aware)
             async for chunk in two_step_service.stream_two_step_completion(
                 session=session,
                 user_id=db_user.id,
                 user_message=user_text,
                 user_language=user_language,
+                user_tier=user_tier,  # 🚨 Pass tier for context/memory
             ):
                 full_response += chunk
 
@@ -111,8 +120,10 @@ async def handle_text_message(
 
                 if should_update and full_response.strip():
                     try:
+                        # Convert markdown to Telegram HTML
+                        html_response = convert_to_telegram_html(full_response)
                         await thinking_msg.edit_text(
-                            full_response, parse_mode="Markdown"
+                            html_response, parse_mode="HTML"
                         )
                         last_update_time = now
                         last_update_length = len(full_response)
@@ -124,13 +135,45 @@ async def handle_text_message(
         if full_response.strip():
             # Apply post-processing to enhance character
             enhanced_response = enhance_response_with_character(full_response)
+            # Add native ad if appropriate (based on context and frequency)
+            # Умная стратегия: первые 24ч и 7 сообщений — без рекламы
+            enhanced_response = enhance_response_with_ad(
+                response=enhanced_response,
+                user_id=db_user.id,
+                user_message=user_text,
+                user_language=user_language,
+                user_tier=user_tier,
+                user_created_at=db_user.created_at,
+            )
+            # Convert to Telegram HTML
+            html_response = convert_to_telegram_html(enhanced_response)
 
             try:
-                await thinking_msg.edit_text(enhanced_response, parse_mode="Markdown")
+                await thinking_msg.edit_text(html_response, parse_mode="HTML")
                 logger.info(
                     f"[TOOLS] Response sent to user {user.id} "
-                    f"({len(enhanced_response)} chars, enhanced: {enhanced_response != full_response})"
+                    f"({len(html_response)} chars, enhanced: {enhanced_response != full_response})"
                 )
+
+                # 💎 Award points for successful text request
+                try:
+                    points_transaction = await PointsService.earn_points(
+                        session=session,
+                        user_id=db_user.id,
+                        transaction_type=PointsTransactionType.EARN_TEXT_REQUEST,
+                        description=f"Анализ: {user_text[:50]}...",
+                        metadata={"message_id": message.message_id, "language": user_language},
+                        transaction_id=f"text_req:{db_user.id}:{message.message_id}",
+                    )
+                    if points_transaction:
+                        logger.info(
+                            f"💎 Awarded {points_transaction.amount} points to user {db_user.id} "
+                            f"for text request (balance: {points_transaction.balance_after})"
+                        )
+                except Exception as points_error:
+                    # Don't fail the request if points fail
+                    logger.error(f"Failed to award points: {points_error}")
+
             except Exception as e:
                 logger.error(f"Failed to send final response: {e}")
                 await thinking_msg.edit_text(

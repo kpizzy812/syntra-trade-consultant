@@ -13,12 +13,11 @@ Detects common candlestick patterns for technical analysis:
 
 Note: This is a simplified implementation. For production use, consider TA-Lib.
 """
-import logging
 from typing import Optional, List, Dict, Any
 import pandas as pd
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class CandlestickPatterns:

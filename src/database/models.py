@@ -22,6 +22,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Numeric,
     Index,
+    func,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import JSONB
@@ -3919,6 +3920,19 @@ class TradeOutcome(Base):
         comment="win, loss, breakeven"
     )
 
+    # === TERMINAL OUTCOME (для EV) ===
+    terminal_outcome: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        index=True,
+        nullable=True,
+        comment="sl/tp1/tp2/tp3/other — max TP hit"
+    )
+    max_tp_reached: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+        comment="0, 1, 2, или 3"
+    )
+
     # === JSONB DATA ===
     execution_data: Mapped[Optional[dict]] = mapped_column(
         JSONB,
@@ -4094,6 +4108,12 @@ class ArchetypeStats(Base):
         index=True,
         nullable=False
     )
+    side: Mapped[Optional[str]] = mapped_column(
+        String(10),
+        nullable=True,
+        index=True,
+        comment="long/short — критично для EV!"
+    )
     symbol: Mapped[Optional[str]] = mapped_column(
         String(20),
         nullable=True,
@@ -4141,6 +4161,44 @@ class ArchetypeStats(Base):
         default=0,
         nullable=False,
         comment="gross_profit / gross_loss"
+    )
+
+    # === TERMINAL OUTCOME COUNTS (для EV) ===
+    exit_sl_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="Не дошли ни до одного TP"
+    )
+    exit_tp1_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="Дошли до TP1"
+    )
+    exit_tp2_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="Дошли до TP2"
+    )
+    exit_tp3_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="Дошли до TP3"
+    )
+    exit_other_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="manual/timeout/breakeven ДО любого TP"
+    )
+    avg_pnl_r_other: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="Средний PnL для OTHER исходов"
     )
 
     # === MAE/MFE ===
@@ -4200,8 +4258,8 @@ class ArchetypeStats(Base):
     # === UNIQUE CONSTRAINT ===
     __table_args__ = (
         UniqueConstraint(
-            'archetype', 'symbol', 'timeframe', 'volatility_regime',
-            name='uq_archetype_group'
+            'archetype', 'side', 'symbol', 'timeframe', 'volatility_regime',
+            name='uq_archetype_group_v2'
         ),
     )
 
@@ -4219,3 +4277,437 @@ class ArchetypeStats(Base):
 # - trade_outcomes.is_testnet (for filtering)
 # - archetype_stats.archetype (index)
 # - archetype_stats unique constraint on (archetype, symbol, timeframe, volatility_regime)
+
+
+# =============================================================================
+# SCENARIO CLASS STATS (Learning Module - Class Backtesting)
+# =============================================================================
+
+class ScenarioClassStats(Base):
+    """
+    Scenario Class Stats - статистика по классам сценариев с context gates.
+
+    Класс = archetype + side + timeframe + [trend + vol + funding + sentiment]
+
+    Hierarchical Fallback:
+    - Level 1 (coarse): archetype + side + timeframe (buckets = '__any__')
+    - Level 2 (fine): + все bucket dimensions
+
+    Используется для:
+    - Kill switch для мусорных классов (EV < 0 с CI)
+    - Boost для топовых классов
+    - Context gates (архетип разрешён только в правильном контексте)
+    """
+    __tablename__ = "scenario_class_stats"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True
+    )
+
+    # === CLASS KEY (для быстрого lookup) ===
+    class_key_hash: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        index=True,
+        comment="SHA1 hash для быстрого lookup"
+    )
+    class_key_string: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="ARCHETYPE|SIDE|TF|TREND|VOL|FUND|SENT для дебага"
+    )
+
+    # === DECOMPOSED KEY (для UNIQUE + CHECK) ===
+    archetype: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        index=True
+    )
+    side: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        index=True,
+        comment="long/short"
+    )
+    timeframe: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+        index=True,
+        comment="1h/4h/1d"
+    )
+    trend_bucket: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        comment="bullish/bearish/sideways/__any__"
+    )
+    vol_bucket: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        comment="low/normal/high/__any__"
+    )
+    funding_bucket: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        comment="strong_negative/negative/neutral/positive/__any__"
+    )
+    sentiment_bucket: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        comment="fear/neutral/greed/__any__"
+    )
+
+    # === PROFITABILITY ===
+    total_trades: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="= traded_count"
+    )
+    wins: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    losses: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    winrate: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    winrate_lower_ci: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="Wilson score 95% CI lower bound"
+    )
+    avg_pnl_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    avg_ev_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="Mean expected value per trade"
+    )
+    ev_lower_ci: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="EV 95% CI lower bound"
+    )
+    profit_factor: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="gross_profit / gross_loss"
+    )
+
+    # === CONVERSION ===
+    generated_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="DISTINCT(analysis_id, scenario_local_id) из log"
+    )
+    traded_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="DISTINCT(trade_id)"
+    )
+    conversion_rate: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="traded_count / generated_count"
+    )
+
+    # === TERMINAL OUTCOMES ===
+    exit_sl_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    exit_tp1_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    exit_tp2_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    exit_tp3_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    exit_other_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False
+    )
+    avg_pnl_r_other: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="Средний PnL для OTHER исходов"
+    )
+
+    # === RISK ===
+    max_drawdown_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="Max DD на equity curve (sorted by closed_at!)"
+    )
+    avg_mae_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    avg_mfe_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    p75_mae_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    p90_mae_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    avg_time_in_trade_min: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+
+    # === EXECUTION ===
+    fill_rate: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="opened_trades / selected_trades"
+    )
+    avg_slippage_r: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+    other_exit_rate: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False
+    )
+
+    # === CONTEXT GATES ===
+    is_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+        comment="False = kill switch активен"
+    )
+    disable_reason: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Причина kill switch"
+    )
+    preliminary_warning: Mapped[Optional[str]] = mapped_column(
+        Text,
+        nullable=True,
+        comment="Warning для 20-49 trades"
+    )
+    confidence_modifier: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="+/- к confidence сценария"
+    )
+    ev_prior_boost: Mapped[float] = mapped_column(
+        Float,
+        default=0,
+        nullable=False,
+        comment="Boost для EV prior"
+    )
+
+    # === COOLDOWN ===
+    disabled_until: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Cooldown: держим disabled до этого времени"
+    )
+    last_state_change_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Когда последний раз менялся is_enabled"
+    )
+
+    # === META ===
+    window_days: Mapped[int] = mapped_column(
+        Integer,
+        default=90,
+        nullable=False,
+        comment="Rolling window в днях"
+    )
+    last_calculated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False
+    )
+
+    # === UNIQUE CONSTRAINT ===
+    __table_args__ = (
+        UniqueConstraint(
+            'archetype', 'side', 'timeframe', 'trend_bucket', 'vol_bucket',
+            'funding_bucket', 'sentiment_bucket',
+            name='uq_scenario_class_key'
+        ),
+        # CHECK constraints добавлены в миграции
+    )
+
+    @property
+    def class_level(self) -> int:
+        """1 = coarse (__any__ во всех buckets), 2 = fine."""
+        from src.learning.constants import ANY_BUCKET
+        if all(
+            b == ANY_BUCKET for b in [
+                self.trend_bucket, self.vol_bucket,
+                self.funding_bucket, self.sentiment_bucket
+            ]
+        ):
+            return 1
+        return 2
+
+    def get_sample_status(self) -> str:
+        """Вычисляемый статус sample size."""
+        if self.total_trades >= 50:
+            return "reliable"
+        if self.total_trades >= 20:
+            return "preliminary"
+        return "insufficient"
+
+    def __repr__(self) -> str:
+        return (
+            f"<ScenarioClassStats("
+            f"archetype={self.archetype}, side={self.side}, "
+            f"winrate={self.winrate:.1%}, is_enabled={self.is_enabled})>"
+        )
+
+
+class ScenarioGenerationLog(Base):
+    """
+    Scenario Generation Log - трекинг сгенерированных сценариев.
+
+    Используется для:
+    - Подсчёта generated_count (DISTINCT analysis_id + scenario_local_id)
+    - Вычисления conversion_rate = traded_count / generated_count
+    - Rolling window фильтрации (90 дней)
+
+    Идемпотентность: UNIQUE(analysis_id, scenario_local_id)
+    """
+    __tablename__ = "scenario_generation_log"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        autoincrement=True
+    )
+
+    # === ИДЕНТИФИКАЦИЯ ===
+    analysis_id: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+        index=True,
+        comment="UUID от Syntra анализа"
+    )
+    scenario_local_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        comment="1..N в рамках analysis"
+    )
+
+    # === CONTEXT ===
+    user_id: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        index=True
+    )
+    symbol: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        index=True
+    )
+    timeframe: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False
+    )
+
+    # === CLASS KEY ===
+    class_key_hash: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        index=True,
+        comment="SHA1 для быстрого lookup в class_stats"
+    )
+    archetype: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False
+    )
+    side: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False
+    )
+
+    # === META ===
+    is_testnet: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+        index=True,
+        comment="Для rolling window filter"
+    )
+
+    # === UNIQUE CONSTRAINT ===
+    __table_args__ = (
+        UniqueConstraint(
+            'analysis_id', 'scenario_local_id',
+            name='uq_scenario_generation'
+        ),
+        Index('ix_gen_log_class_hash_created', 'class_key_hash', 'created_at'),
+    )
+
+    def __repr__(self) -> str:
+        return (
+            f"<ScenarioGenerationLog("
+            f"analysis={self.analysis_id}, scenario={self.scenario_local_id}, "
+            f"archetype={self.archetype})>"
+        )

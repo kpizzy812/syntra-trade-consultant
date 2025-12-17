@@ -12,9 +12,9 @@ Community endpoint: https://community-api.coinmetrics.io/v4
 Rate limit: 10 requests per 6 seconds (1.6 RPS)
 """
 
-import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, UTC
+import logging  # Needed for tenacity before_sleep_log level constants
 import aiohttp
 
 from tenacity import (
@@ -26,7 +26,7 @@ from tenacity import (
 )
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class CoinMetricsService:

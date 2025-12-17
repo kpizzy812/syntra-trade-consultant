@@ -9,11 +9,10 @@ Calculates key price levels for crypto analysis:
 
 Used for scenario generation with concrete entry/exit points.
 """
-import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timedelta
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class PriceLevelsService:

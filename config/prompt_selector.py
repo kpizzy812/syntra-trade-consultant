@@ -1,5 +1,5 @@
 """
-Prompt selector - chooses appropriate prompts based on user language
+Prompt selector - chooses appropriate prompts based on user language and subscription tier
 """
 
 # Import Russian prompts
@@ -10,30 +10,43 @@ from config import vision_prompts as vision_prompts_ru
 from config import prompts_en
 from config import vision_prompts_en
 
+# Import FREE tier prompts
+from config import prompts_free
+from src.database.models import SubscriptionTier
+
 
 def get_system_prompt(
-    language: str = "ru", mode: str = "medium", user_message: str = None
+    language: str = "ru",
+    mode: str = "medium",
+    user_message: str = None,
+    tier: SubscriptionTier = None,
 ) -> str:
     """
-    Get system prompt in user's language with dynamic sarcasm mode detection
+    Get system prompt in user's language with dynamic sarcasm mode detection and tier-based features
 
     Args:
         language: User language ('ru' or 'en')
         mode: Sarcasm mode ('soft', 'medium', 'hard', 'disabled')
               If user_message is provided, mode will be auto-detected
         user_message: Optional user message for automatic mode detection
+        tier: Subscription tier (FREE/BASIC/PREMIUM/VIP) - if FREE, uses simplified prompt
 
     Returns:
-        System prompt in appropriate language with appropriate sarcasm level
+        System prompt in appropriate language with appropriate sarcasm level and features
     """
-    # Auto-detect sarcasm mode from user message
+    # Check if user is on FREE tier - use simplified prompt
+    if tier == SubscriptionTier.FREE:
+        # FREE tier gets simplified prompt (only Russian for now, English uses same)
+        return prompts_free.get_free_tier_prompt()
+
+    # Auto-detect sarcasm mode from user message (for paid tiers)
     if user_message:
         if language == "en":
             mode = prompts_en.detect_sarcasm_level(user_message)
         else:
             mode = prompts_ru.detect_sarcasm_level(user_message)
 
-    # Use new compact architecture for both languages
+    # Use full prompts for BASIC/PREMIUM/VIP tiers
     if language == "en":
         return prompts_en.get_system_prompt(mode)
     else:
@@ -41,7 +54,10 @@ def get_system_prompt(
 
 
 def get_few_shot_examples(
-    language: str = "ru", mode: str = "medium", user_message: str = None
+    language: str = "ru",
+    mode: str = "medium",
+    user_message: str = None,
+    tier: SubscriptionTier = None,
 ) -> list:
     """
     Get few-shot examples in user's language for injecting into messages[]
@@ -51,34 +67,47 @@ def get_few_shot_examples(
         mode: Sarcasm mode ('soft', 'medium', 'hard', 'disabled')
               If user_message is provided, mode will be auto-detected
         user_message: Optional user message for automatic mode detection
+        tier: Subscription tier (FREE/BASIC/PREMIUM/VIP) - if FREE, uses simplified examples
 
     Returns:
         List of message dicts for few-shot learning
     """
-    # Auto-detect sarcasm mode from user message
+    # Check if user is on FREE tier - use simplified examples
+    if tier == SubscriptionTier.FREE:
+        return prompts_free.get_free_tier_examples()
+
+    # Auto-detect sarcasm mode from user message (for paid tiers)
     if user_message:
         if language == "en":
             mode = prompts_en.detect_sarcasm_level(user_message)
         else:
             mode = prompts_ru.detect_sarcasm_level(user_message)
 
-    # Use new architecture with few-shot examples for both languages
+    # Use full examples for BASIC/PREMIUM/VIP tiers
     if language == "en":
         return prompts_en.get_few_shot_examples(mode)
     else:
         return prompts_ru.get_few_shot_examples(mode)
 
 
-def get_vision_analysis_prompt(language: str = "ru") -> str:
+def get_vision_analysis_prompt(
+    language: str = "ru", tier: SubscriptionTier = None
+) -> str:
     """
-    Get vision analysis prompt in user's language
+    Get vision analysis prompt in user's language based on subscription tier
 
     Args:
         language: User language ('ru' or 'en')
+        tier: Subscription tier (FREE/BASIC/PREMIUM/VIP) - if FREE, uses simplified prompt
 
     Returns:
-        Vision analysis prompt in appropriate language
+        Vision analysis prompt in appropriate language and feature level
     """
+    # FREE tier gets simplified vision prompt
+    if tier == SubscriptionTier.FREE:
+        return prompts_free.VISION_ANALYSIS_PROMPT_FREE
+
+    # Paid tiers get full vision analysis
     if language == "en":
         return vision_prompts_en.BASIC_ANALYSIS_PROMPT
     else:

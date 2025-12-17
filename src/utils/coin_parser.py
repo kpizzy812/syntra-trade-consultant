@@ -166,7 +166,7 @@ def format_coin_name(coin_id: str) -> str:
 
 if __name__ == "__main__":
     # Tests
-    print("Coin Parser Tests:\n")
+    logger.info("Coin Parser Tests:\n")
 
     test_cases = [
         "BTC",
@@ -181,10 +181,10 @@ if __name__ == "__main__":
 
     for test in test_cases:
         result = normalize_coin_name(test)
-        print(f"{test:20} → {result}")
+        logger.info(f"{test:20} → {result}")
 
-    print("\n\nText extraction test:")
+    logger.info("\n\nText extraction test:")
     text = "Looking at BTCUSDT and ETHUSDT charts, Bitcoin is bullish"
     coins = extract_coin_from_text(text)
-    print(f"Text: {text}")
-    print(f"Found coins: {coins}")
+    logger.info(f"Text: {text}")
+    logger.info(f"Found coins: {coins}")

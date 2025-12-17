@@ -9,7 +9,6 @@ Aggregates and stores historical price data for long-term analysis:
 - Enables cycle analysis
 """
 
-import logging
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta, UTC
 import pandas as pd
@@ -21,7 +20,7 @@ from src.services.coingecko_service import CoinGeckoService
 from src.services.binance_service import BinanceService
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class HistoricalDataService:

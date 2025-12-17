@@ -12,7 +12,6 @@ Analytics Aggregator Service
 Используется для обогащения AI-промптов полным контекстом.
 """
 
-import logging
 from typing import Optional, Dict, Any
 from datetime import datetime, UTC
 
@@ -22,7 +21,7 @@ from src.services.cycle_analysis_service import CycleAnalysisService
 from src.services.coinmetrics_service import CoinMetricsService
 from src.services.fear_greed_service import FearGreedService
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class AnalyticsAggregator:

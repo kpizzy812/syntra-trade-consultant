@@ -1,22 +1,16 @@
 /**
- * Telegram Haptic Feedback Utilities
- * Вибрация для улучшения UX в Mini App
+ * Platform-agnostic Haptic Feedback Utilities
+ * Uses Platform Abstraction Layer for cross-platform support
  */
 
 'use client';
 
-type ImpactStyle = 'light' | 'medium' | 'heavy' | 'rigid' | 'soft';
-type NotificationType = 'error' | 'success' | 'warning';
+import { hapticImpact, hapticNotification, hapticSelection } from '@/lib/platform/platformHelper';
+import type { HapticStyle, NotificationType } from '@/lib/platform';
 
-/**
- * Проверка доступности Haptic Feedback
- */
-function isHapticAvailable(): boolean {
-  return (
-    typeof window !== 'undefined' &&
-    !!window.Telegram?.WebApp?.HapticFeedback
-  );
-}
+// Re-export types for backward compatibility
+export type ImpactStyle = HapticStyle;
+export type { NotificationType };
 
 /**
  * Вибрация при клике/тапе
@@ -34,14 +28,8 @@ function isHapticAvailable(): boolean {
  * </button>
  * ```
  */
-export function vibrate(style: ImpactStyle = 'light'): void {
-  if (!isHapticAvailable()) return;
-
-  try {
-    window.Telegram!.WebApp.HapticFeedback.impactOccurred(style);
-  } catch (error) {
-    console.error('Vibration failed:', error);
-  }
+export function vibrate(style: HapticStyle = 'light'): void {
+  hapticImpact(style);
 }
 
 /**
@@ -60,13 +48,7 @@ export function vibrate(style: ImpactStyle = 'light'): void {
  * ```
  */
 export function vibrateNotification(type: NotificationType): void {
-  if (!isHapticAvailable()) return;
-
-  try {
-    window.Telegram!.WebApp.HapticFeedback.notificationOccurred(type);
-  } catch (error) {
-    console.error('Notification vibration failed:', error);
-  }
+  hapticNotification(type);
 }
 
 /**
@@ -82,14 +64,5 @@ export function vibrateNotification(type: NotificationType): void {
  * ```
  */
 export function vibrateSelection(): void {
-  if (!isHapticAvailable()) return;
-
-  try {
-    window.Telegram!.WebApp.HapticFeedback.selectionChanged();
-  } catch (error) {
-    console.error('Selection vibration failed:', error);
-  }
+  hapticSelection();
 }
-
-// Экспортируем типы для использования в компонентах
-export type { ImpactStyle, NotificationType };

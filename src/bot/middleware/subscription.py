@@ -3,7 +3,6 @@ Subscription middleware - checks if user is subscribed to required channel
 """
 
 from typing import Callable, Dict, Any, Awaitable
-import logging
 
 from aiogram import BaseMiddleware
 from aiogram.types import (
@@ -15,12 +14,12 @@ from aiogram.types import (
 )
 from aiogram.enums import ChatMemberStatus
 from aiogram.exceptions import TelegramBadRequest
+from loguru import logger
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.config import REQUIRED_CHANNEL, SKIP_SUBSCRIPTION_CHECK
 from src.utils.i18n import i18n
-
-
-logger = logging.getLogger(__name__)
+from src.database.crud import update_user_subscription
 
 
 class SubscriptionMiddleware(BaseMiddleware):
@@ -132,6 +131,14 @@ class SubscriptionMiddleware(BaseMiddleware):
 
         # Check subscription
         is_subscribed = await self.check_subscription(bot, user.id)
+
+        # Update subscription status in database
+        session: AsyncSession = data.get("session")
+        if session:
+            try:
+                await update_user_subscription(session, user.id, is_subscribed)
+            except Exception as e:
+                logger.error(f"Failed to update subscription status in DB: {e}")
 
         if is_subscribed:
             # Update subscription status in handler data

@@ -14,12 +14,11 @@ Adapted from Tradient AI ton_monitor.py
 import json
 import asyncio
 import os
-from typing import Optional, List, Dict, AsyncGenerator
+from typing import Optional, List, Dict
 from datetime import datetime, UTC
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-import logging
 from src.utils.i18n import i18n
 
 # TON blockchain libraries
@@ -30,7 +29,9 @@ try:
     TONUTILS_AVAILABLE = True
 except ImportError:
     TONUTILS_AVAILABLE = False
-    logging.warning("tonutils не установлен. Установите: pip install tonutils pytoniq-core")
+    # Import logger here to avoid issues if tonutils is not installed
+    from loguru import logger as _logger
+    _logger.warning("tonutils не установлен. Установите: pip install tonutils pytoniq-core")
 
 from src.database.models import (
     Payment,
@@ -39,9 +40,10 @@ from src.database.models import (
     SubscriptionTier,
     User,
     Subscription,
+    TonScannerState,
 )
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class TonMonitorService:
@@ -526,7 +528,7 @@ class TonMonitorService:
         session: AsyncSession,
         address: Optional[str] = None,
         last_lt: Optional[int] = None
-    ) -> AsyncGenerator[Dict, None]:
+    ) -> List[Dict]:
         """
         Сканировать адрес на новые входящие транзакции
 
@@ -535,45 +537,61 @@ class TonMonitorService:
             address: TON адрес для мониторинга (по умолчанию DEPOSIT_ADDRESS)
             last_lt: Logical Time последней обработанной транзакции
 
-        Yields:
-            Словари с данными входящих транзакций
+        Returns:
+            Список словарей с данными входящих транзакций
         """
         address = address or self.deposit_address
         if not address:
             logger.error("TON deposit address не установлен!")
-            return
+            return []
+
+        found_transactions: List[Dict] = []
 
         try:
             # Нормализуем целевой адрес
             target_address = Address(address)
 
-            # Получаем последнюю обработанную транзакцию из БД (если last_lt не указан)
+            # Получаем или создаем state для этого адреса
             if last_lt is None:
                 result = await session.execute(
-                    select(Payment)
-                    .where(
-                        Payment.provider == PaymentProvider.TON_CONNECT,
-                        Payment.status != PaymentStatus.PENDING,
-                    )
-                    .order_by(Payment.created_at.desc())
-                    .limit(1)
+                    select(TonScannerState).where(TonScannerState.address == address)
                 )
-                last_payment = result.scalar_one_or_none()
+                scanner_state = result.scalar_one_or_none()
 
-                # Извлекаем lt из metadata если есть
-                if last_payment and last_payment.metadata:
-                    last_lt = last_payment.metadata.get("lt", 0)
+                if scanner_state:
+                    last_lt = scanner_state.last_lt
+                    logger.debug(f"📊 Loaded scanner state: last_lt={last_lt}")
                 else:
+                    # Создаем новый state
                     last_lt = 0
+                    scanner_state = TonScannerState(
+                        address=address,
+                        last_lt=0,
+                        last_tx_hash=None,
+                    )
+                    session.add(scanner_state)
+                    await session.commit()
+                    logger.info(f"✨ Created new scanner state for {address[:16]}...")
+            else:
+                # Если last_lt передан явно, получаем state для обновления
+                result = await session.execute(
+                    select(TonScannerState).where(TonScannerState.address == address)
+                )
+                scanner_state = result.scalar_one_or_none()
+
+            # Сохраняем начальный last_lt для сравнения
+            initial_last_lt = last_lt
 
             # Получаем транзакции
             transactions = await self.get_transactions(address, limit=100)
 
             if not transactions:
                 logger.debug(f"Нет транзакций для {address[:16]}...")
-                return
+                return []
 
             logger.debug(f"📊 Получено {len(transactions)} транзакций от TON API")
+
+            max_lt_found = last_lt
 
             for tx in transactions:
                 # Конвертируем Transaction объект в словарь
@@ -630,7 +648,7 @@ class TonMonitorService:
 
                     jetton_amount = self._extract_jetton_amount(tx_dict)
                     if jetton_amount:
-                        yield {
+                        found_transactions.append({
                             "tx_hash": tx_hash,
                             "lt": tx_lt,
                             "asset": "USDT",
@@ -640,11 +658,11 @@ class TonMonitorService:
                             "memo": memo,
                             "timestamp": datetime.fromtimestamp(tx_dict.get("utime", 0)),
                             "raw_data": json.dumps(tx_dict)
-                        }
+                        })
                 else:
                     # Нативный TON перевод
                     if value > 0:
-                        yield {
+                        found_transactions.append({
                             "tx_hash": tx_hash,
                             "lt": tx_lt,
                             "asset": "TON",
@@ -654,13 +672,34 @@ class TonMonitorService:
                             "memo": memo,
                             "timestamp": datetime.fromtimestamp(tx_dict.get("utime", 0)),
                             "raw_data": json.dumps(tx_dict)
-                        }
+                        })
 
-                # Обновляем last_lt после yield транзакции
-                last_lt = tx_lt
+                # Отслеживаем максимальный lt
+                if tx_lt > max_lt_found:
+                    max_lt_found = tx_lt
+
+            # Сохраняем обновленный state в БД после сбора всех транзакций
+            if scanner_state and max_lt_found > initial_last_lt:
+                scanner_state.last_lt = max_lt_found
+                scanner_state.updated_at = datetime.now(UTC)
+
+                # Также сохраняем последний tx_hash если есть
+                if transactions:
+                    last_tx = transactions[0]  # Первая транзакция - самая новая
+                    if hasattr(last_tx, '__dict__'):
+                        last_tx_dict = self._transaction_to_dict(last_tx)
+                    else:
+                        last_tx_dict = last_tx
+                    scanner_state.last_tx_hash = last_tx_dict.get("transaction_id", {}).get("hash", "")
+
+                await session.commit()
+                logger.debug(f"💾 Updated scanner state: last_lt={max_lt_found}")
+
+            return found_transactions
 
         except Exception as e:
             logger.error(f"Ошибка при сканировании адреса {address}: {e}", exc_info=True)
+            return []
 
     async def process_transaction(
         self,
@@ -686,7 +725,7 @@ class TonMonitorService:
             True если успешно обработано
         """
         try:
-            memo = tx_data.get("memo", "").strip().upper()
+            memo = (tx_data.get("memo") or "").strip().upper()
 
             if not memo or not memo.startswith("PAY_"):
                 logger.debug(f"Неверный или отсутствующий memo: {memo}")
@@ -705,15 +744,22 @@ class TonMonitorService:
                 logger.warning(f"Payment не найден для memo: {memo}")
                 return False
 
+            # Десериализуем provider_data из JSON
+            try:
+                provider_data = json.loads(payment.provider_data) if payment.provider_data else {}
+            except json.JSONDecodeError:
+                logger.error(f"Invalid JSON in payment.provider_data for payment {payment.id}")
+                return False
+
             # Валидируем сумму
             expected_amount = (
-                payment.metadata.get("amount_usdt")
+                provider_data.get("amount_usdt")
                 if tx_data["asset"] == "USDT"
-                else payment.metadata.get("amount_ton")
+                else provider_data.get("amount_ton")
             )
 
             if not expected_amount:
-                logger.error(f"Expected amount не найден в payment metadata")
+                logger.error(f"Expected amount не найден в payment provider_data")
                 return False
 
             # Допускаем расхождение ±2%
@@ -731,11 +777,14 @@ class TonMonitorService:
             # Обновляем payment
             payment.status = PaymentStatus.COMPLETED
             payment.completed_at = datetime.now(UTC)
-            payment.metadata["tx_hash"] = tx_data["tx_hash"]
-            payment.metadata["from_address"] = tx_data["from_address"]
-            payment.metadata["received_amount"] = received_amount
-            payment.metadata["received_asset"] = tx_data["asset"]
-            payment.metadata["lt"] = tx_data["lt"]
+
+            # Обновляем provider_data с информацией о транзакции
+            provider_data["tx_hash"] = tx_data["tx_hash"]
+            provider_data["from_address"] = tx_data["from_address"]
+            provider_data["received_amount"] = received_amount
+            provider_data["received_asset"] = tx_data["asset"]
+            provider_data["lt"] = tx_data["lt"]
+            payment.provider_data = json.dumps(provider_data)
 
             # Активируем подписку
             await self._activate_subscription(
@@ -820,15 +869,6 @@ class TonMonitorService:
                     auto_renew=False,
                 )
                 session.add(subscription)
-
-            # Обновляем user.is_premium
-            result = await session.execute(
-                select(User).where(User.id == user_id)
-            )
-            user = result.scalar_one_or_none()
-
-            if user:
-                user.is_premium = True  # type: ignore
 
             await session.commit()
 

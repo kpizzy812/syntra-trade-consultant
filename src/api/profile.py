@@ -3,11 +3,15 @@ Profile API Endpoints
 Provides user profile and subscription management for Mini App
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from datetime import datetime
+
+from loguru import logger
 
 from src.database.models import User, Subscription, ReferralTier, ReferralBalance
 from src.database.engine import get_session
@@ -67,12 +71,17 @@ async def get_profile(
         }
     """
     try:
+        # Import tier limit config
+        from config.limits import get_text_limit
+        from src.database.models import SubscriptionTier
+
         # Load subscription
         subscription_data = None
         if user.subscription:
             # Get today's request limit info
             from src.database.crud import get_daily_limit_info
             limit_info = await get_daily_limit_info(session, user.id)
+            tier_limit = get_text_limit(user.subscription.tier)
 
             subscription_data = {
                 "tier": user.subscription.tier,
@@ -80,16 +89,21 @@ async def get_profile(
                 "started_at": user.subscription.started_at.isoformat() if user.subscription.started_at else None,
                 "expires_at": user.subscription.expires_at.isoformat() if user.subscription.expires_at else None,
                 "is_trial": user.subscription.is_trial,
-                "trial_ends_at": user.subscription.trial_ends_at.isoformat() if user.subscription.trial_ends_at else None,
+                "trial_start": user.subscription.trial_start.isoformat() if user.subscription.trial_start else None,
+                "trial_end": user.subscription.trial_end.isoformat() if user.subscription.trial_end else None,
                 "auto_renew": user.subscription.auto_renew,
-                "daily_limit": limit_info.get("limit", 5),
+                "daily_limit": tier_limit,
                 "requests_used_today": limit_info.get("used", 0),
-                "requests_remaining": max(0, limit_info.get("limit", 5) - limit_info.get("used", 0)),
+                "requests_remaining": max(0, tier_limit - limit_info.get("used", 0)),
+                # Post-trial discount (20% off first subscription after trial)
+                "has_post_trial_discount": user.subscription.has_post_trial_discount,
+                "post_trial_discount_percent": 20 if user.subscription.has_post_trial_discount else 0,
             }
         else:
             # No subscription, return FREE tier defaults
             from src.database.crud import get_daily_limit_info
             limit_info = await get_daily_limit_info(session, user.id)
+            free_limit = get_text_limit(SubscriptionTier.FREE)
 
             subscription_data = {
                 "tier": "free",
@@ -97,11 +111,15 @@ async def get_profile(
                 "started_at": user.created_at.isoformat() if user.created_at else None,
                 "expires_at": None,
                 "is_trial": False,
-                "trial_ends_at": None,
+                "trial_start": None,
+                "trial_end": None,
                 "auto_renew": False,
-                "daily_limit": 5,
+                "daily_limit": free_limit,
                 "requests_used_today": limit_info.get("used", 0),
-                "requests_remaining": max(0, 5 - limit_info.get("used", 0)),
+                "requests_remaining": max(0, free_limit - limit_info.get("used", 0)),
+                # Post-trial discount (not available for users without subscription history)
+                "has_post_trial_discount": False,
+                "post_trial_discount_percent": 0,
             }
 
         # Load referral tier
@@ -150,6 +168,7 @@ async def get_profile(
             "user": {
                 "id": user.id,
                 "telegram_id": user.telegram_id,
+                "email": user.email,
                 "username": user.username,
                 "first_name": user.first_name,
                 "last_name": user.last_name,
@@ -175,6 +194,20 @@ class UpdateSettingsRequest(BaseModel):
     """Request model for updating user settings"""
     language: str | None = None
 
+    @field_validator('language')
+    @classmethod
+    def validate_language(cls, v):
+        if v is not None and v not in ["ru", "en"]:
+            raise ValueError("Language must be 'ru' or 'en'")
+        return v
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "language": "en"
+            }
+        }
+
 
 @router.patch("/settings")
 async def update_settings(
@@ -195,6 +228,9 @@ async def update_settings(
             "updated_at": "2025-01-18T12:30:00Z"
         }
     """
+    logger.info(f"Update settings request: {request.model_dump()}")
+    logger.info(f"User: {user.id}, current language: {user.language}")
+
     try:
         updated = False
 
@@ -273,8 +309,18 @@ async def get_subscription(
         }
     """
     try:
+        # Import tier limit config
+        from config.limits import get_text_limit, TIER_LIMITS
+        from src.database.models import SubscriptionTier
+
         # Get subscription
         subscription = user.subscription
+
+        # Get tier limits from config
+        free_limit = get_text_limit(SubscriptionTier.FREE)
+        basic_limit = get_text_limit(SubscriptionTier.BASIC)
+        premium_limit = get_text_limit(SubscriptionTier.PREMIUM)
+        vip_limit = get_text_limit(SubscriptionTier.VIP)
 
         if not subscription:
             # Create default FREE subscription data
@@ -290,16 +336,16 @@ async def get_subscription(
                 "is_trial": False,
                 "auto_renew": False,
                 "benefits": {
-                    "daily_limit": 5,
+                    "daily_limit": free_limit,
                     "features": [
                         "Basic crypto analysis",
-                        "5 requests per day",
+                        f"{free_limit} request{'s' if free_limit > 1 else ''} per day",
                         "Standard support"
                     ]
                 },
                 "usage": {
                     "requests_used_today": limit_info.get("used", 0),
-                    "requests_remaining": max(0, 5 - limit_info.get("used", 0)),
+                    "requests_remaining": max(0, free_limit - limit_info.get("used", 0)),
                     "reset_at": limit_info.get("reset_at"),
                 },
                 "available_upgrades": [
@@ -309,7 +355,7 @@ async def get_subscription(
                         "price_3months": 12.99,
                         "price_12months": 49.99,
                         "features": [
-                            "20 requests per day",
+                            f"{basic_limit} requests per day",
                             "Basic technical indicators",
                             "Email support"
                         ]
@@ -320,7 +366,7 @@ async def get_subscription(
                         "price_3months": 24.99,
                         "price_12months": 99.99,
                         "features": [
-                            "100 requests per day",
+                            f"{premium_limit} requests per day",
                             "Advanced technical indicators",
                             "Priority support",
                             "On-chain metrics"
@@ -332,7 +378,7 @@ async def get_subscription(
                         "price_3months": 79.99,
                         "price_12months": 299.99,
                         "features": [
-                            "Unlimited requests",
+                            f"{vip_limit} requests per day",
                             "All indicators and metrics",
                             "Dedicated support",
                             "Custom alerts",
@@ -355,37 +401,37 @@ async def get_subscription(
         from src.database.crud import get_daily_limit_info
         limit_info = await get_daily_limit_info(session, user.id)
 
-        # Define tier benefits
+        # Define tier benefits using config
         tier_benefits = {
             "free": {
-                "daily_limit": 5,
+                "daily_limit": free_limit,
                 "features": [
                     "Basic crypto analysis",
-                    "5 requests per day",
+                    f"{free_limit} request{'s' if free_limit > 1 else ''} per day",
                     "Standard support"
                 ]
             },
             "basic": {
-                "daily_limit": 20,
+                "daily_limit": basic_limit,
                 "features": [
-                    "20 requests per day",
+                    f"{basic_limit} requests per day",
                     "Basic technical indicators",
                     "Email support"
                 ]
             },
             "premium": {
-                "daily_limit": 100,
+                "daily_limit": premium_limit,
                 "features": [
-                    "100 requests per day",
+                    f"{premium_limit} requests per day",
                     "Advanced technical indicators",
                     "Priority support",
                     "On-chain metrics"
                 ]
             },
             "vip": {
-                "daily_limit": 999999,
+                "daily_limit": vip_limit,
                 "features": [
-                    "Unlimited requests",
+                    f"{vip_limit} requests per day",
                     "All indicators and metrics",
                     "Dedicated support",
                     "Custom alerts",
@@ -437,12 +483,13 @@ async def get_subscription(
             "expires_at": subscription.expires_at.isoformat() if subscription.expires_at else None,
             "days_remaining": days_remaining,
             "is_trial": subscription.is_trial,
-            "trial_ends_at": subscription.trial_ends_at.isoformat() if subscription.trial_ends_at else None,
+            "trial_start": subscription.trial_start.isoformat() if subscription.trial_start else None,
+            "trial_end": subscription.trial_end.isoformat() if subscription.trial_end else None,
             "auto_renew": subscription.auto_renew,
             "benefits": benefits,
             "usage": {
                 "requests_used_today": limit_info.get("used", 0),
-                "requests_remaining": max(0, limit_info.get("limit", 5) - limit_info.get("used", 0)),
+                "requests_remaining": max(0, benefits["daily_limit"] - limit_info.get("used", 0)),
                 "reset_at": limit_info.get("reset_at"),
             },
             "available_upgrades": available_upgrades,

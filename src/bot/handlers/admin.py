@@ -2,7 +2,6 @@
 """
 Admin panel handlers - statistics, user management, cost monitoring
 """
-import logging
 from datetime import datetime, timedelta, date, UTC
 from typing import Optional
 
@@ -13,11 +12,16 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.chat_action import ChatActionSender
 from aiogram.exceptions import TelegramBadRequest
-from sqlalchemy import select, func
+from loguru import logger
+from sqlalchemy import select, func, Integer, case
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
 
 from src.database.crud import (
     get_detailed_user_stats,
@@ -44,13 +48,47 @@ from src.database.crud import (
     get_expiring_subscriptions,
     get_expired_subscriptions,
     get_all_payments,
-    get_user_payments,
 )
 from src.database.models import User, Subscription, Payment, SubscriptionTier, PaymentStatus, Referral, ReferralBalance
+from src.services.unit_economics_service import (
+    get_unit_economics_dashboard,
+    get_tier_margin_with_fees,
+    get_free_tier_economics,
+    get_trial_economics,
+    get_referral_economics,
+    get_margin_scenarios,
+)
 
-
-logger = logging.getLogger(__name__)
 router = Router(name="admin")
+
+
+# ===========================
+# FSM States
+# ===========================
+
+class AdminUserStates(StatesGroup):
+    """FSM states for admin user management"""
+    waiting_for_limit = State()  # Ожидание ввода лимита
+
+
+def get_user_display_name(user: User) -> str:
+    """Get display name for user (first_name, username, email part, or ID)"""
+    if user.first_name:
+        return user.first_name
+    if user.username:
+        return user.username
+    if user.email:
+        return user.email.split('@')[0]
+    return f"ID {user.id}"
+
+
+def get_user_identifier(user: User) -> str:
+    """Get user identifier string (telegram_id or email)"""
+    if user.telegram_id:
+        return f"TG: <code>{user.telegram_id}</code>"
+    if user.email:
+        return f"📧 {user.email}"
+    return f"ID: <code>{user.id}</code>"
 
 
 async def safe_edit_message(
@@ -101,8 +139,37 @@ def get_admin_main_menu() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
+                    text="📢 Рассылка", callback_data="admin_broadcast"
+                ),
+                InlineKeyboardButton(
+                    text="📊 Unit Economics", callback_data="admin_unit_economics"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🚨 Fraud Detection", callback_data="admin_fraud"
+                ),
+                InlineKeyboardButton(
+                    text="📋 Задания", callback_data="admin_tasks"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🔗 Startapp Stats", callback_data="admin_startapp"
+                ),
+                InlineKeyboardButton(
                     text="⚙️ Настройки", callback_data="admin_settings"
                 ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📚 Class Stats", callback_data="admin_class_stats"
+                ),
+                InlineKeyboardButton(
+                    text="🧠 Learning", callback_data="admin_learning"
+                ),
+            ],
+            [
                 InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_refresh"),
             ],
         ]
@@ -445,10 +512,16 @@ async def admin_users_page_callback(callback: CallbackQuery, session: AsyncSessi
             if user.username:
                 response += f"(@{user.username})"
             response += f"\n"
-            response += f"   ID: <code>{user.telegram_id}</code> • {last_active}\n\n"
+            # Show telegram_id or email for web users
+            if user.telegram_id:
+                response += f"   TG: <code>{user.telegram_id}</code> • {last_active}\n\n"
+            elif user.email:
+                response += f"   📧 {user.email} • {last_active}\n\n"
+            else:
+                response += f"   ID: <code>{user.id}</code> • {last_active}\n\n"
 
-            # Add button for user
-            user_label = user.first_name or user.username or f"ID {user.telegram_id}"
+            # Add button for user - handle email users
+            user_label = user.first_name or user.username or (user.email.split('@')[0] if user.email else f"ID {user.id}")
             user_label = user_label[:20]  # Limit label length
             buttons.append(
                 [
@@ -586,7 +659,9 @@ async def admin_costs_period_callback(callback: CallbackQuery, session: AsyncSes
         if top_users:
             response += "👑 <b>Топ пользователей по расходам:</b>\n"
             for i, user_data in enumerate(top_users, start=1):
-                name = user_data["first_name"] or user_data["username"] or "Unknown"
+                # Support web users (email) and telegram users (first_name/username)
+                email = user_data.get("email")
+                name = user_data["first_name"] or user_data["username"] or (email.split('@')[0] if email else "Unknown")
                 cost = user_data["total_cost"]
                 requests = user_data["request_count"]
                 response += f"{i}. {name}: <b>${cost:.4f}</b> ({requests} зап.)\n"
@@ -883,8 +958,15 @@ async def admin_user_view_callback(
     try:
         from src.database.crud import check_request_limit, get_user_stats
 
-        # Get user by internal ID
-        stmt = select(User).where(User.id == user_id)
+        # Get user by internal ID with eager loading for relationships
+        stmt = (
+            select(User)
+            .options(
+                selectinload(User.subscription),
+                selectinload(User.payments)
+            )
+            .where(User.id == user_id)
+        )
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -892,12 +974,10 @@ async def admin_user_view_callback(
             await callback.answer("❌ Пользователь не найден", show_alert=True)
             return
 
-        # Get subscription separately to avoid MissingGreenlet error
-        stmt_sub = select(Subscription).where(Subscription.user_id == user.id)
-        result_sub = await session.execute(stmt_sub)
-        subscription = result_sub.scalar_one_or_none()
+        # Get subscription from eager-loaded relationship
+        subscription = user.subscription
 
-        # Get referral balance separately to avoid MissingGreenlet error
+        # Get referral balance separately
         stmt_bal = select(ReferralBalance).where(ReferralBalance.user_id == user.id)
         result_bal = await session.execute(stmt_bal)
         referral_balance = result_bal.scalar_one_or_none()
@@ -916,7 +996,16 @@ async def admin_user_view_callback(
         response += f"├ Имя: {user.first_name or 'N/A'}\n"
         if user.username:
             response += f"├ Username: @{user.username}\n"
-        response += f"├ Telegram ID: <code>{user.telegram_id}</code>\n"
+        # Show telegram_id or email depending on registration type
+        if user.telegram_id:
+            response += f"├ Telegram ID: <code>{user.telegram_id}</code>\n"
+        if user.email:
+            verified = "✅" if user.email_verified else "❌"
+            response += f"├ Email: {user.email} {verified}\n"
+        # Show registration platform for clarity
+        platform_icons = {"telegram": "📱", "web": "🌐", "ios": "🍎", "android": "🤖"}
+        platform_icon = platform_icons.get(user.registration_platform, "📱")
+        response += f"├ Платформа: {platform_icon} {user.registration_platform.upper()}\n"
         response += f"├ Язык: {user.language.upper()}\n"
         response += f"└ Регистрация: {user.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
 
@@ -937,6 +1026,8 @@ async def admin_user_view_callback(
         response += f"├ Подписка: {status_emoji} {'Активна' if has_active_premium else 'Неактивна'}\n"
         admin_emoji = "👑" if user.is_admin else "👤"
         response += f"├ Роль: {admin_emoji} {'Администратор' if user.is_admin else 'Пользователь'}\n"
+        if user.is_banned:
+            response += f"├ Статус: 🚫 <b>ЗАБАНЕН</b>\n"
 
         last_activity_str = (
             user.last_activity.strftime("%d.%m.%Y %H:%M")
@@ -949,6 +1040,10 @@ async def admin_user_view_callback(
         response += "📈 <b>Лимиты (сегодня):</b>\n"
         response += f"├ Использовано: <b>{current_count} из {limit}</b>\n"
         response += f"├ Осталось: <b>{remaining}</b> запросов\n"
+
+        # Show custom limit if set
+        if user.custom_daily_limit is not None:
+            response += f"├ Кастомный лимит: <b>{user.custom_daily_limit}</b> ✏️\n"
 
         if has_remaining:
             response += f"└ Статус: ✅ <b>Активен</b>\n\n"
@@ -984,8 +1079,12 @@ async def admin_user_view_callback(
             auto_renew_text = "Да" if subscription.auto_renew else "Нет"
             response += f"└ Автопродление: {auto_renew_text}\n\n"
 
-            # Recent payments
-            user_payments = await get_user_payments(session, user.id, limit=3)
+            # Recent payments - use eager-loaded relationship
+            user_payments = sorted(
+                user.payments,
+                key=lambda p: p.created_at,
+                reverse=True
+            )[:3]
             if user_payments:
                 response += "💳 <b>Последние платежи:</b>\n"
                 for payment in user_payments:
@@ -1036,142 +1135,61 @@ async def admin_user_view_callback(
         response += f"├ Баланс: <b>${balance:.2f}</b>\n"
         response += f"└ Всего заработано: <b>${total_earned:.2f}</b>\n\n"
 
-        # Build action buttons
+        # Build compact action buttons
         buttons = []
 
-        # Subscription management buttons (if user has subscription)
-        if subscription:
-            sub_buttons = []
+        # Row 1: Subscription + Limit input
+        buttons.append([
+            InlineKeyboardButton(
+                text="💎 Подписка",
+                callback_data=f"admin_user_sub_menu_{user.id}"
+            ),
+            InlineKeyboardButton(
+                text="📝 Задать лимит",
+                callback_data=f"admin_user_input_limit_{user.id}"
+            ),
+        ])
 
-            # Extend subscription button
-            sub_buttons.append([
+        # Row 2: Reset limits + clear custom limit (if set)
+        limit_row = [
+            InlineKeyboardButton(
+                text="🔄 Сбросить счётчик",
+                callback_data=f"admin_user_reset_{user.id}",
+            ),
+        ]
+        # Show "К тарифу" button only if custom limit is set
+        if user.custom_daily_limit is not None:
+            limit_row.append(
                 InlineKeyboardButton(
-                    text="➕ Продлить на 1 мес",
-                    callback_data=f"admin_sub_extend_{user.id}_1"
-                ),
-                InlineKeyboardButton(
-                    text="3 мес",
-                    callback_data=f"admin_sub_extend_{user.id}_3"
-                ),
-            ])
+                    text="🗑 К тарифу",
+                    callback_data=f"admin_user_clear_limit_{user.id}",
+                )
+            )
+        buttons.append(limit_row)
 
-            # Change tier buttons (if not FREE)
-            if subscription.tier != SubscriptionTier.FREE:
-                tier_buttons = []
+        # Row 3: Admin toggle + Ban toggle
+        admin_btn_text = "👤 Снять админа" if user.is_admin else "👑 Сделать админом"
+        ban_btn_text = "✅ Разбанить" if user.is_banned else "🚫 Забанить"
 
-                # Upgrade options
-                if subscription.tier == SubscriptionTier.BASIC:
-                    tier_buttons.append(
-                        InlineKeyboardButton(
-                            text="⬆️ → PREMIUM",
-                            callback_data=f"admin_sub_upgrade_{user.id}_premium"
-                        )
-                    )
-                    tier_buttons.append(
-                        InlineKeyboardButton(
-                            text="⬆️ → VIP",
-                            callback_data=f"admin_sub_upgrade_{user.id}_vip"
-                        )
-                    )
-                elif subscription.tier == SubscriptionTier.PREMIUM:
-                    tier_buttons.append(
-                        InlineKeyboardButton(
-                            text="⬆️ → VIP",
-                            callback_data=f"admin_sub_upgrade_{user.id}_vip"
-                        )
-                    )
-                    tier_buttons.append(
-                        InlineKeyboardButton(
-                            text="⬇️ → BASIC",
-                            callback_data=f"admin_sub_downgrade_{user.id}_basic"
-                        )
-                    )
-                elif subscription.tier == SubscriptionTier.VIP:
-                    tier_buttons.append(
-                        InlineKeyboardButton(
-                            text="⬇️ → PREMIUM",
-                            callback_data=f"admin_sub_downgrade_{user.id}_premium"
-                        )
-                    )
-                    tier_buttons.append(
-                        InlineKeyboardButton(
-                            text="⬇️ → BASIC",
-                            callback_data=f"admin_sub_downgrade_{user.id}_basic"
-                        )
-                    )
+        buttons.append([
+            InlineKeyboardButton(
+                text=admin_btn_text,
+                callback_data=f"admin_user_toggle_admin_{user.id}"
+            ),
+            InlineKeyboardButton(
+                text=ban_btn_text,
+                callback_data=f"admin_user_toggle_ban_{user.id}"
+            ),
+        ])
 
-                if tier_buttons:
-                    sub_buttons.append(tier_buttons)
-
-                # Cancel subscription button
-                sub_buttons.append([
-                    InlineKeyboardButton(
-                        text="❌ Отменить подписку",
-                        callback_data=f"admin_sub_cancel_{user.id}"
-                    )
-                ])
-            else:
-                # If FREE, offer upgrade
-                sub_buttons.append([
-                    InlineKeyboardButton(
-                        text="⬆️ Активировать BASIC",
-                        callback_data=f"admin_sub_activate_{user.id}_basic_1"
-                    ),
-                    InlineKeyboardButton(
-                        text="PREMIUM",
-                        callback_data=f"admin_sub_activate_{user.id}_premium_1"
-                    ),
-                ])
-
-            buttons.extend(sub_buttons)
-
-            # Separator
-            buttons.append([
-                InlineKeyboardButton(text="─────────────", callback_data="noop")
-            ])
-
-        # Request limit management buttons
-        buttons.extend([
-            [
-                InlineKeyboardButton(
-                    text="🔄 Сбросить лимиты",
-                    callback_data=f"admin_user_reset_{user.id}",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="📝 Установить лимит: 5",
-                    callback_data=f"admin_user_setlimit_{user.id}_5",
-                ),
-                InlineKeyboardButton(
-                    text="10", callback_data=f"admin_user_setlimit_{user.id}_10"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="15", callback_data=f"admin_user_setlimit_{user.id}_15"
-                ),
-                InlineKeyboardButton(
-                    text="20", callback_data=f"admin_user_setlimit_{user.id}_20"
-                ),
-                InlineKeyboardButton(
-                    text="50", callback_data=f"admin_user_setlimit_{user.id}_50"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="♾️ Безлимит (999)",
-                    callback_data=f"admin_user_setlimit_{user.id}_999",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text="« К списку", callback_data="admin_users_page_0"
-                ),
-                InlineKeyboardButton(
-                    text="« В меню", callback_data="admin_refresh"
-                ),
-            ],
+        # Row 4: Navigation
+        buttons.append([
+            InlineKeyboardButton(
+                text="« К списку", callback_data="admin_users_page_0"
+            ),
+            InlineKeyboardButton(
+                text="« В меню", callback_data="admin_refresh"
+            ),
         ])
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -1206,8 +1224,8 @@ async def admin_user_reset_callback(
         return
 
     try:
-        # Get user
-        stmt = select(User).where(User.id == user_id)
+        # Get user with eager loading
+        stmt = select(User).options(selectinload(User.subscription)).where(User.id == user_id)
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -1256,8 +1274,8 @@ async def admin_user_setlimit_callback(
         return
 
     try:
-        # Get user
-        stmt = select(User).where(User.id == user_id)
+        # Get user with eager loading
+        stmt = select(User).options(selectinload(User.subscription)).where(User.id == user_id)
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -1291,6 +1309,405 @@ async def admin_user_setlimit_callback(
     except Exception as e:
         logger.exception(f"Error setting user limit: {e}")
         await callback.answer("❌ Ошибка при установке лимита", show_alert=True)
+
+
+# ===========================
+# FSM: Input limit
+# ===========================
+
+@router.callback_query(F.data.startswith("admin_user_input_limit_"))
+async def admin_user_input_limit_callback(
+    callback: CallbackQuery, session: AsyncSession, state: FSMContext
+):
+    """Start FSM for limit input"""
+    try:
+        user_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Ошибка: неверный ID", show_alert=True)
+        return
+
+    # Save user_id to state
+    await state.set_state(AdminUserStates.waiting_for_limit)
+    await state.update_data(target_user_id=user_id)
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="❌ Отмена", callback_data=f"admin_user_view_{user_id}")]
+    ])
+
+    await callback.message.edit_text(
+        "📝 <b>Введите новый дневной лимит запросов</b>\n\n"
+        "Отправьте число от 1 до 999\n"
+        "999 = безлимит",
+        reply_markup=keyboard
+    )
+    await callback.answer()
+
+
+@router.message(StateFilter(AdminUserStates.waiting_for_limit))
+async def process_limit_input(
+    message: Message, session: AsyncSession, state: FSMContext
+):
+    """Process limit input from FSM"""
+    data = await state.get_data()
+    user_id = data.get("target_user_id")
+
+    if not user_id:
+        await state.clear()
+        await message.answer("❌ Ошибка: пользователь не найден")
+        return
+
+    # Validate input
+    try:
+        new_limit = int(message.text.strip())
+        if new_limit < 1 or new_limit > 999:
+            raise ValueError("Invalid range")
+    except ValueError:
+        await message.answer("❌ Введите число от 1 до 999")
+        return
+
+    try:
+        # Get user
+        stmt = select(User).options(selectinload(User.subscription)).where(User.id == user_id)
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            await state.clear()
+            await message.answer("❌ Пользователь не найден")
+            return
+
+        # Set limit
+        from src.database.crud import set_user_limit
+        await set_user_limit(session, user.id, new_limit)
+
+        # Log action
+        await log_admin_action(
+            session,
+            admin_id=message.from_user.id,
+            action="set_limit",
+            target_user_id=user.telegram_id or user.id,
+            details=f"Set limit to {new_limit} for user {user.id} via FSM",
+        )
+
+        await state.clear()
+
+        limit_text = "Безлимит" if new_limit >= 999 else f"{new_limit} запросов/день"
+        await message.answer(f"✅ Установлен лимит: {limit_text}")
+
+        # Show user card again
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="👤 Вернуться к карточке", callback_data=f"admin_user_view_{user_id}")]
+        ])
+        await message.answer("Нажмите для возврата:", reply_markup=keyboard)
+
+    except Exception as e:
+        logger.exception(f"Error setting limit via FSM: {e}")
+        await state.clear()
+        await message.answer("❌ Ошибка при установке лимита")
+
+
+# ===========================
+# Subscription submenu
+# ===========================
+
+@router.callback_query(F.data.startswith("admin_user_sub_menu_"))
+async def admin_user_sub_menu_callback(
+    callback: CallbackQuery, session: AsyncSession
+):
+    """Show subscription management submenu"""
+    try:
+        user_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Ошибка: неверный ID", show_alert=True)
+        return
+
+    try:
+        # Get user with subscription
+        stmt = select(User).options(selectinload(User.subscription)).where(User.id == user_id)
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            await callback.answer("❌ Пользователь не найден", show_alert=True)
+            return
+
+        subscription = user.subscription
+        current_tier = subscription.tier if subscription else "free"
+
+        # Build response
+        response = f"💎 <b>Управление подпиской</b>\n"
+        response += f"👤 {get_user_display_name(user)}\n\n"
+
+        tier_emojis = {"free": "🆓", "basic": "⭐", "premium": "💎", "vip": "👑"}
+        current_emoji = tier_emojis.get(current_tier.lower() if isinstance(current_tier, str) else current_tier.value, "🆓")
+
+        response += f"Текущий тариф: {current_emoji} <b>{current_tier.upper() if isinstance(current_tier, str) else current_tier.value.upper()}</b>\n"
+
+        if subscription and subscription.expires_at:
+            days_left = (subscription.expires_at - datetime.now(UTC)).days
+            response += f"Истекает: {subscription.expires_at.strftime('%d.%m.%Y')} ({days_left} дн.)\n"
+
+        response += "\n<b>Выберите действие:</b>"
+
+        # Build buttons
+        buttons = []
+
+        # Tier selection row
+        buttons.append([
+            InlineKeyboardButton(text="🆓 FREE", callback_data=f"admin_sub_set_{user_id}_free"),
+            InlineKeyboardButton(text="⭐ BASIC", callback_data=f"admin_sub_set_{user_id}_basic"),
+        ])
+        buttons.append([
+            InlineKeyboardButton(text="💎 PREMIUM", callback_data=f"admin_sub_set_{user_id}_premium"),
+            InlineKeyboardButton(text="👑 VIP", callback_data=f"admin_sub_set_{user_id}_vip"),
+        ])
+
+        # Duration row (for paid tiers)
+        buttons.append([
+            InlineKeyboardButton(text="➕ 1 мес", callback_data=f"admin_sub_extend_{user_id}_1"),
+            InlineKeyboardButton(text="➕ 3 мес", callback_data=f"admin_sub_extend_{user_id}_3"),
+            InlineKeyboardButton(text="➕ 12 мес", callback_data=f"admin_sub_extend_{user_id}_12"),
+        ])
+
+        # Cancel subscription (if has paid sub)
+        if subscription and current_tier.lower() != "free" if isinstance(current_tier, str) else current_tier != SubscriptionTier.FREE:
+            buttons.append([
+                InlineKeyboardButton(text="❌ Отменить подписку", callback_data=f"admin_sub_cancel_{user_id}")
+            ])
+
+        # Back button
+        buttons.append([
+            InlineKeyboardButton(text="« Назад", callback_data=f"admin_user_view_{user_id}")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing subscription menu: {e}")
+        await callback.answer("❌ Ошибка загрузки", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_sub_set_"))
+async def admin_sub_set_callback(
+    callback: CallbackQuery, session: AsyncSession, bot: Bot
+):
+    """Set subscription tier directly"""
+    try:
+        parts = callback.data.split("_")
+        user_id = int(parts[-2])
+        new_tier = parts[-1].lower()
+    except (ValueError, IndexError):
+        await callback.answer("❌ Ошибка: неверный формат", show_alert=True)
+        return
+
+    if new_tier not in ["free", "basic", "premium", "vip"]:
+        await callback.answer("❌ Неверный тариф", show_alert=True)
+        return
+
+    try:
+        # Get user
+        stmt = select(User).options(selectinload(User.subscription)).where(User.id == user_id)
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            await callback.answer("❌ Пользователь не найден", show_alert=True)
+            return
+
+        subscription = user.subscription
+
+        if new_tier == "free":
+            # Deactivate subscription
+            if subscription:
+                subscription.tier = SubscriptionTier.FREE
+                subscription.is_active = False
+                subscription.expires_at = None
+                await session.commit()
+        else:
+            # Activate/upgrade subscription
+            if not subscription:
+                from src.database.crud import create_subscription
+                subscription = await create_subscription(
+                    session,
+                    user_id=user.id,
+                    tier=new_tier,
+                    duration_months=1
+                )
+            else:
+                subscription.tier = SubscriptionTier(new_tier)
+                subscription.is_active = True
+                if not subscription.expires_at or subscription.expires_at < datetime.now(UTC):
+                    subscription.expires_at = datetime.now(UTC) + timedelta(days=30)
+                await session.commit()
+
+        # Log action
+        await log_admin_action(
+            session,
+            admin_id=callback.from_user.id,
+            action="set_subscription_tier",
+            target_user_id=user.telegram_id or user.id,
+            details=f"Set tier to {new_tier.upper()} for user {user.id}",
+        )
+
+        tier_emojis = {"free": "🆓", "basic": "⭐", "premium": "💎", "vip": "👑"}
+        await callback.answer(f"✅ Установлен тариф: {tier_emojis[new_tier]} {new_tier.upper()}", show_alert=True)
+
+        # Return to user card
+        callback.data = f"admin_user_view_{user_id}"
+        await admin_user_view_callback(callback, session, bot)
+
+    except Exception as e:
+        logger.exception(f"Error setting subscription tier: {e}")
+        await callback.answer("❌ Ошибка при изменении тарифа", show_alert=True)
+
+
+# ===========================
+# Admin/Ban toggles
+# ===========================
+
+@router.callback_query(F.data.startswith("admin_user_toggle_admin_"))
+async def admin_user_toggle_admin_callback(
+    callback: CallbackQuery, session: AsyncSession, bot: Bot
+):
+    """Toggle admin status for user"""
+    try:
+        user_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Ошибка: неверный ID", show_alert=True)
+        return
+
+    try:
+        stmt = select(User).options(selectinload(User.subscription)).where(User.id == user_id)
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            await callback.answer("❌ Пользователь не найден", show_alert=True)
+            return
+
+        # Don't allow removing admin from self
+        if user.telegram_id == callback.from_user.id and user.is_admin:
+            await callback.answer("❌ Нельзя снять админа с себя", show_alert=True)
+            return
+
+        # Toggle admin status
+        user.is_admin = not user.is_admin
+        await session.commit()
+
+        # Log action
+        action = "grant_admin" if user.is_admin else "revoke_admin"
+        await log_admin_action(
+            session,
+            admin_id=callback.from_user.id,
+            action=action,
+            target_user_id=user.telegram_id or user.id,
+            details=f"{'Granted' if user.is_admin else 'Revoked'} admin for user {user.id}",
+        )
+
+        status = "👑 Теперь админ" if user.is_admin else "👤 Админ снят"
+        await callback.answer(f"✅ {status}", show_alert=True)
+
+        # Refresh user view
+        callback.data = f"admin_user_view_{user_id}"
+        await admin_user_view_callback(callback, session, bot)
+
+    except Exception as e:
+        logger.exception(f"Error toggling admin: {e}")
+        await callback.answer("❌ Ошибка", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_user_toggle_ban_"))
+async def admin_user_toggle_ban_callback(
+    callback: CallbackQuery, session: AsyncSession, bot: Bot
+):
+    """Toggle ban status for user"""
+    try:
+        user_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Ошибка: неверный ID", show_alert=True)
+        return
+
+    try:
+        stmt = select(User).options(selectinload(User.subscription)).where(User.id == user_id)
+        result = await session.execute(stmt)
+        user = result.scalar_one_or_none()
+
+        if not user:
+            await callback.answer("❌ Пользователь не найден", show_alert=True)
+            return
+
+        # Don't allow banning admins
+        if user.is_admin:
+            await callback.answer("❌ Нельзя забанить админа", show_alert=True)
+            return
+
+        # Don't allow banning self
+        if user.telegram_id == callback.from_user.id:
+            await callback.answer("❌ Нельзя забанить себя", show_alert=True)
+            return
+
+        # Toggle ban status
+        user.is_banned = not user.is_banned
+        await session.commit()
+
+        # Log action
+        action = "ban_user" if user.is_banned else "unban_user"
+        await log_admin_action(
+            session,
+            admin_id=callback.from_user.id,
+            action=action,
+            target_user_id=user.telegram_id or user.id,
+            details=f"{'Banned' if user.is_banned else 'Unbanned'} user {user.id}",
+        )
+
+        status = "🚫 Забанен" if user.is_banned else "✅ Разбанен"
+        await callback.answer(f"{status}", show_alert=True)
+
+        # Refresh user view
+        callback.data = f"admin_user_view_{user_id}"
+        await admin_user_view_callback(callback, session, bot)
+
+    except Exception as e:
+        logger.exception(f"Error toggling ban: {e}")
+        await callback.answer("❌ Ошибка", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_user_clear_limit_"))
+async def admin_user_clear_limit_callback(
+    callback: CallbackQuery, session: AsyncSession, bot: Bot
+):
+    """Clear custom limit for user (revert to tier-based)"""
+    try:
+        user_id = int(callback.data.split("_")[-1])
+    except (ValueError, IndexError):
+        await callback.answer("❌ Ошибка: неверный ID", show_alert=True)
+        return
+
+    try:
+        from src.database.crud import clear_user_custom_limit
+
+        user = await clear_user_custom_limit(session, user_id)
+
+        # Log action
+        await log_admin_action(
+            session,
+            admin_id=callback.from_user.id,
+            action="clear_custom_limit",
+            target_user_id=user.telegram_id or user.id,
+            details=f"Cleared custom limit for user {user.id}, reverted to tier-based",
+        )
+
+        await callback.answer("✅ Лимит сброшен к тарифу", show_alert=True)
+
+        # Refresh user view
+        callback.data = f"admin_user_view_{user_id}"
+        await admin_user_view_callback(callback, session, bot)
+
+    except Exception as e:
+        logger.exception(f"Error clearing custom limit: {e}")
+        await callback.answer("❌ Ошибка", show_alert=True)
 
 
 @router.message(Command("admin_limits"))
@@ -1495,7 +1912,7 @@ async def cmd_admin_users(
                 if user.username:
                     response += f"(@{user.username})"
                 response += f"\n"
-                response += f"   ID: <code>{user.telegram_id}</code>\n"
+                response += f"   {get_user_identifier(user)}\n"
                 response += f"   Регистрация: {user.created_at.strftime('%d.%m.%Y')}\n"
                 response += f"   Активность: {last_active}\n\n"
 
@@ -1586,7 +2003,9 @@ async def cmd_admin_margin(message: Message, session: AsyncSession):
 
                 # Show top 5 low-margin users
                 for user_data in alerts['low_margin_users'][:5]:
-                    response += f"├ {user_data['username']} (ID: {user_data['telegram_id']})\n"
+                    # Support both telegram_id and email users
+                    user_id_str = user_data.get('telegram_id') or user_data.get('email') or f"ID {user_data.get('id', '?')}"
+                    response += f"├ {user_data['username']} ({user_id_str})\n"
                     response += f"│  Маржа: <b>{user_data['margin_percent']:.1f}%</b> (${user_data['margin_usd']:.2f})\n"
                     response += f"│  Revenue: ${user_data['revenue']:.2f} | Cost: ${user_data['cost']:.2f}\n\n"
 
@@ -1613,6 +2032,435 @@ async def cmd_admin_margin(message: Message, session: AsyncSession):
             "❌ <b>Произошла ошибка при загрузке margin analytics</b>\n\n"
             "Попробуйте позже или обратитесь к разработчику."
         )
+
+
+# ===========================
+# SOCIAL TASKS MANAGEMENT
+# ===========================
+
+
+@router.callback_query(F.data == "admin_tasks")
+async def admin_tasks_callback(callback: CallbackQuery, session: AsyncSession):
+    """
+    Show social tasks admin panel with pending reviews and task list
+    """
+    from src.services.social_tasks_service import SocialTasksService
+    from src.database.models import TaskCompletion, TaskCompletionStatus
+
+    try:
+        # Get pending reviews count
+        pending = await SocialTasksService.get_pending_reviews(session)
+        pending_count = len(pending)
+
+        # Get active tasks count
+        tasks = await SocialTasksService.get_all_tasks(session, status_filter="active")
+        active_count = len(tasks)
+
+        # Get total tasks count
+        all_tasks = await SocialTasksService.get_all_tasks(session)
+        total_count = len(all_tasks)
+
+        # Get completed today
+        from sqlalchemy import func, and_
+        from datetime import datetime, UTC
+
+        today_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        stmt = select(func.count(TaskCompletion.id)).where(
+            and_(
+                TaskCompletion.status == TaskCompletionStatus.COMPLETED.value,
+                TaskCompletion.completed_at >= today_start
+            )
+        )
+        result = await session.execute(stmt)
+        completed_today = result.scalar() or 0
+
+        response = "📋 <b>Управление заданиями</b>\n\n"
+        response += f"📊 <b>Статистика:</b>\n"
+        response += f"├ Всего заданий: <b>{total_count}</b>\n"
+        response += f"├ Активных: <b>{active_count}</b>\n"
+        response += f"├ Выполнено сегодня: <b>{completed_today}</b>\n"
+        response += f"└ На проверке: <b>{pending_count}</b>\n\n"
+
+        if pending_count > 0:
+            response += f"⚠️ <b>{pending_count} скриншотов ожидают проверки!</b>\n\n"
+
+        response += "Выберите действие:"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=f"📸 На проверке ({pending_count})",
+                        callback_data="admin_tasks_pending"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="✅ Активные задания",
+                        callback_data="admin_tasks_list_active"
+                    ),
+                    InlineKeyboardButton(
+                        text="📝 Все задания",
+                        callback_data="admin_tasks_list_all"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="➕ Создать задание",
+                        callback_data="admin_tasks_create"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(text="« В меню", callback_data="admin_refresh"),
+                ],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error in admin tasks panel: {e}")
+        await callback.answer("❌ Ошибка загрузки", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_tasks_pending")
+async def admin_tasks_pending_callback(callback: CallbackQuery, session: AsyncSession):
+    """
+    Show pending screenshot reviews with approve/reject buttons
+    """
+    from src.services.social_tasks_service import SocialTasksService
+
+    try:
+        pending = await SocialTasksService.get_pending_reviews(session)
+
+        if not pending:
+            await callback.answer("✅ Нет скриншотов на проверке", show_alert=True)
+            return
+
+        # Show first pending item with action buttons
+        completion = pending[0]
+        user = completion.user
+        task = completion.task
+        user_name = user.first_name or user.username or f"ID {user.id}"
+
+        response = f"📸 <b>На проверке ({len(pending)})</b>\n\n"
+        response += f"📋 <b>{task.title_ru if task else 'Unknown'}</b>\n"
+        response += f"👤 {user_name}"
+        if user.username:
+            response += f" (@{user.username})"
+        response += f"\n💰 Награда: +{task.reward_points} $SYNTRA\n"
+
+        if completion.screenshot_url:
+            response += f"\n🔗 <a href='{completion.screenshot_url}'>Открыть скриншот</a>"
+
+        if len(pending) > 1:
+            response += f"\n\n<i>Ещё {len(pending) - 1} на проверке</i>"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="✅ Одобрить",
+                        callback_data=f"task_approve:{completion.id}"
+                    ),
+                    InlineKeyboardButton(
+                        text="❌ Отклонить",
+                        callback_data=f"task_reject:{completion.id}"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔗 Скриншот",
+                        url=completion.screenshot_url or "https://example.com"
+                    ),
+                ] if completion.screenshot_url else [],
+                [
+                    InlineKeyboardButton(
+                        text="⏭ Пропустить",
+                        callback_data="admin_tasks_pending_skip"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(text="« Назад", callback_data="admin_tasks"),
+                ],
+            ]
+        )
+
+        # Remove empty rows
+        keyboard.inline_keyboard = [
+            row for row in keyboard.inline_keyboard if row
+        ]
+
+        await callback.message.edit_text(
+            response,
+            reply_markup=keyboard,
+            disable_web_page_preview=True
+        )
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing pending tasks: {e}")
+        await callback.answer("❌ Ошибка загрузки", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_tasks_pending_skip")
+async def admin_tasks_pending_skip(callback: CallbackQuery, session: AsyncSession):
+    """Skip current pending review and show next"""
+    # Just refresh the pending list - items are ordered so next one shows
+    await callback.answer("⏭ Пропущено")
+    await admin_tasks_pending_callback(callback, session)
+
+
+@router.callback_query(F.data.startswith("admin_tasks_list_"))
+async def admin_tasks_list_callback(callback: CallbackQuery, session: AsyncSession):
+    """
+    Show tasks list (active or all)
+    """
+    from src.services.social_tasks_service import SocialTasksService
+
+    filter_type = callback.data.split("_")[-1]  # "active" or "all"
+
+    try:
+        if filter_type == "active":
+            tasks = await SocialTasksService.get_all_tasks(session, status_filter="active")
+            title = "Активные задания"
+        else:
+            tasks = await SocialTasksService.get_all_tasks(session)
+            title = "Все задания"
+
+        if not tasks:
+            await callback.answer(f"📋 Нет заданий", show_alert=True)
+            return
+
+        response = f"📋 <b>{title} ({len(tasks)})</b>\n\n"
+
+        for task in tasks[:15]:
+            status_emoji = {
+                "active": "✅",
+                "draft": "📝",
+                "paused": "⏸",
+                "completed": "🏁",
+                "expired": "⏰"
+            }.get(task.status, "❓")
+
+            response += f"{status_emoji} <b>{task.title_ru}</b>\n"
+            response += f"   💰 +{task.reward_points} | "
+            response += f"👥 {task.current_completions}"
+            if task.max_completions:
+                response += f"/{task.max_completions}"
+            response += "\n\n"
+
+        if len(tasks) > 15:
+            response += f"<i>...и ещё {len(tasks) - 15}</i>\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="« Назад", callback_data="admin_tasks"),
+                ],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing tasks list: {e}")
+        await callback.answer("❌ Ошибка загрузки", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_tasks_create")
+async def admin_tasks_create_callback(callback: CallbackQuery):
+    """
+    Show task creation guide
+    """
+    response = (
+        "➕ <b>Создание задания</b>\n\n"
+        "Используйте команду <code>/task_add</code>\n\n"
+        "Выберите тип для подробной инструкции:"
+    )
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✈️ Telegram канал",
+                    callback_data="admin_tasks_new_telegram_channel"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="💬 Telegram чат",
+                    callback_data="admin_tasks_new_telegram_chat"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="🐦 Twitter подписка",
+                    callback_data="admin_tasks_new_twitter"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📖 Полный гайд",
+                    callback_data="admin_tasks_guide"
+                ),
+            ],
+            [
+                InlineKeyboardButton(text="« Назад", callback_data="admin_tasks"),
+            ],
+        ]
+    )
+
+    await callback.message.edit_text(response, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin_tasks_new_"))
+async def admin_tasks_new_type_callback(callback: CallbackQuery):
+    """
+    Show instructions for creating task via command
+    """
+    task_type = callback.data.replace("admin_tasks_new_", "")
+
+    type_info = {
+        "telegram_channel": (
+            "✈️ <b>Задание: Подписка на Telegram канал</b>\n\n"
+            "<b>Публичный канал:</b>\n"
+            "<code>/task_add telegram_channel @channel 100</code>\n\n"
+            "<b>Приватный канал:</b>\n"
+            "<code>/task_add telegram_channel -1001234567890 https://t.me/+AbCdEfG 100</code>\n"
+            "<code>/task_add telegram_channel -1001234567890 https://t.me/+AbCdEfG 100 \"Syntra News\"</code>\n\n"
+            "Где:\n"
+            "• @channel или ID канала\n"
+            "• invite ссылка (для приватных)\n"
+            "• 100 - награда в $SYNTRA\n"
+            "• (опционально) штраф за отписку\n"
+            "• \"Название\" - для красивого отображения приватных"
+        ),
+        "telegram_chat": (
+            "💬 <b>Задание: Вступление в Telegram чат</b>\n\n"
+            "<b>Публичный чат:</b>\n"
+            "<code>/task_add telegram_chat @chat 100</code>\n\n"
+            "<b>Приватный чат:</b>\n"
+            "<code>/task_add telegram_chat -1001234567890 https://t.me/+XyZ123 100</code>\n"
+            "<code>/task_add telegram_chat -1001234567890 https://t.me/+XyZ123 100 \"VIP Chat\"</code>\n\n"
+            "Где:\n"
+            "• @chat или ID чата\n"
+            "• invite ссылка (для приватных)\n"
+            "• 100 - награда в $SYNTRA\n"
+            "• (опционально) штраф за отписку\n"
+            "• \"Название\" - для красивого отображения приватных"
+        ),
+        "twitter": (
+            "🐦 <b>Задание: Подписка на Twitter</b>\n\n"
+            "<code>/task_add twitter @username 100</code>\n\n"
+            "Где:\n"
+            "• @username - Twitter username\n"
+            "• 100 - награда в $SYNTRA\n"
+            "• (опционально) штраф за отписку\n\n"
+            "⚠️ Проверка через скриншот (вручную)"
+        ),
+    }
+
+    response = type_info.get(task_type, "❌ Неизвестный тип")
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="« Назад", callback_data="admin_tasks_create"),
+            ],
+        ]
+    )
+
+    await callback.message.edit_text(response, reply_markup=keyboard)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin_tasks_guide")
+async def admin_tasks_guide_callback(callback: CallbackQuery):
+    """
+    Show full guide for task_add command
+    """
+    guide = """📖 <b>Полный гайд по созданию заданий</b>
+
+<b>Команда:</b> <code>/task_add</code>
+
+━━━━━━━━━━━━━━━━━━━━
+
+✈️ <b>TELEGRAM КАНАЛ</b>
+
+<b>Публичный канал (с @username):</b>
+<code>/task_add telegram_channel @channel 100</code>
+<code>/task_add telegram_channel @channel 100 50</code>
+
+<b>Приватный канал (с ID и invite):</b>
+<code>/task_add telegram_channel -1001234567890 https://t.me/+AbCdEfG 100</code>
+<code>/task_add telegram_channel -1001234567890 https://t.me/+AbCdEfG 100 "Название канала"</code>
+
+💡 ID канала можно узнать:
+• Переслав сообщение из канала боту @getmyid_bot
+• Или в URL: t.me/c/<b>1234567890</b>/123
+
+━━━━━━━━━━━━━━━━━━━━
+
+💬 <b>TELEGRAM ЧАТ</b>
+
+<b>Публичный чат:</b>
+<code>/task_add telegram_chat @chat 100</code>
+
+<b>Приватный чат:</b>
+<code>/task_add telegram_chat -1001234567890 https://t.me/+XyZ123 100</code>
+<code>/task_add telegram_chat -1001234567890 https://t.me/+XyZ123 100 "VIP Chat"</code>
+
+━━━━━━━━━━━━━━━━━━━━
+
+🐦 <b>TWITTER</b>
+
+<code>/task_add twitter @username 100</code>
+<code>/task_add twitter @elonmusk 150 75</code>
+
+⚠️ Проверка через скриншот (вручную)
+Админу придёт уведомление для одобрения
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>ПАРАМЕТРЫ:</b>
+
+• <b>Тип</b>: telegram_channel | telegram_chat | twitter
+• <b>Цель</b>: @username или ID канала
+• <b>Invite</b>: ссылка t.me/+... (для приватных)
+• <b>Награда</b>: кол-во $SYNTRA за выполнение
+• <b>Штраф</b>: снимается при отписке (по умолчанию 50% награды)
+• <b>Название</b>: "в кавычках" для приватных (опционально)
+
+━━━━━━━━━━━━━━━━━━━━
+
+<b>ПРИМЕРЫ:</b>
+
+<code>/task_add telegram_channel @syntra_news 100</code>
+→ Подписка на публичный канал, +100 pts, штраф 50
+
+<code>/task_add telegram_channel -1001999888777 https://t.me/+AbC123 200 100</code>
+→ Приватный канал, +200 pts, штраф 100
+
+<code>/task_add telegram_chat -1001234 https://t.me/+xyz 100 "Syntra VIP"</code>
+→ Приватный чат с названием "Syntra VIP"
+
+<code>/task_add twitter @syntratrade 150</code>
+→ Twitter подписка, +150 pts, штраф 75"""
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="« Назад", callback_data="admin_tasks_create"),
+            ],
+        ]
+    )
+
+    await callback.message.edit_text(guide, reply_markup=keyboard)
+    await callback.answer()
 
 
 # ===========================
@@ -1734,7 +2582,7 @@ async def admin_subs_filter_callback(callback: CallbackQuery, session: AsyncSess
                 emoji = tier_emoji.get(sub.tier.value if hasattr(sub.tier, 'value') else sub.tier, "💎")
 
                 status = "✅" if sub.is_active else "❌"
-                name = user.first_name or user.username or f"ID {user.telegram_id}"
+                name = get_user_display_name(user)
 
                 response += f"{status} <b>{i}.</b> {emoji} {sub.tier.upper()}\n"
                 response += f"   👤 {name}\n"
@@ -1747,7 +2595,7 @@ async def admin_subs_filter_callback(callback: CallbackQuery, session: AsyncSess
                     else:
                         response += f" (истекла {abs(days_left)} дн. назад)\n"
 
-                response += f"   🆔 User ID: <code>{user.telegram_id}</code>\n\n"
+                response += f"   🆔 {get_user_identifier(user)}\n\n"
 
             if len(subscriptions) > 10:
                 response += f"\n<i>Показано первые 10 из {len(subscriptions)}</i>"
@@ -1968,7 +2816,7 @@ async def admin_payments_filter_callback(callback: CallbackQuery, session: Async
                 }
                 tier_icon = tier_emoji.get(payment.tier.value if hasattr(payment.tier, 'value') else payment.tier, "💎")
 
-                name = user.first_name or user.username or f"ID {user.telegram_id}"
+                name = get_user_display_name(user)
 
                 response += f"{emoji} <b>{i}.</b> ${payment.amount:.2f} • {tier_icon} {payment.tier.upper()}\n"
                 response += f"   👤 {name}\n"
@@ -2129,8 +2977,12 @@ async def admin_sub_extend_callback(
         return
 
     try:
-        # Get user
-        stmt = select(User).where(User.id == user_id)
+        # Get user with eager loading
+        stmt = (
+            select(User)
+            .options(selectinload(User.subscription))
+            .where(User.id == user_id)
+        )
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -2138,10 +2990,8 @@ async def admin_sub_extend_callback(
             await callback.answer("❌ Пользователь не найден", show_alert=True)
             return
 
-        # Get subscription separately to avoid MissingGreenlet
-        stmt_sub = select(Subscription).where(Subscription.user_id == user.id)
-        result_sub = await session.execute(stmt_sub)
-        subscription = result_sub.scalar_one_or_none()
+        # Get subscription from eager-loaded relationship
+        subscription = user.subscription
 
         if not subscription:
             await callback.answer("❌ У пользователя нет подписки", show_alert=True)
@@ -2204,8 +3054,12 @@ async def admin_sub_upgrade_callback(
         return
 
     try:
-        # Get user
-        stmt = select(User).where(User.id == user_id)
+        # Get user with eager loading
+        stmt = (
+            select(User)
+            .options(selectinload(User.subscription))
+            .where(User.id == user_id)
+        )
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -2213,10 +3067,8 @@ async def admin_sub_upgrade_callback(
             await callback.answer("❌ Пользователь не найден", show_alert=True)
             return
 
-        # Get subscription separately to avoid MissingGreenlet
-        stmt_sub = select(Subscription).where(Subscription.user_id == user.id)
-        result_sub = await session.execute(stmt_sub)
-        subscription = result_sub.scalar_one_or_none()
+        # Get subscription from eager-loaded relationship
+        subscription = user.subscription
 
         if not subscription:
             await callback.answer("❌ У пользователя нет подписки", show_alert=True)
@@ -2269,8 +3121,12 @@ async def admin_sub_downgrade_callback(
         return
 
     try:
-        # Get user
-        stmt = select(User).where(User.id == user_id)
+        # Get user with eager loading
+        stmt = (
+            select(User)
+            .options(selectinload(User.subscription))
+            .where(User.id == user_id)
+        )
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -2278,10 +3134,8 @@ async def admin_sub_downgrade_callback(
             await callback.answer("❌ Пользователь не найден", show_alert=True)
             return
 
-        # Get subscription separately to avoid MissingGreenlet
-        stmt_sub = select(Subscription).where(Subscription.user_id == user.id)
-        result_sub = await session.execute(stmt_sub)
-        subscription = result_sub.scalar_one_or_none()
+        # Get subscription from eager-loaded relationship
+        subscription = user.subscription
 
         if not subscription:
             await callback.answer("❌ У пользователя нет подписки", show_alert=True)
@@ -2332,8 +3186,8 @@ async def admin_sub_cancel_callback(
         return
 
     try:
-        # Get user
-        stmt = select(User).where(User.id == user_id)
+        # Get user with eager loading
+        stmt = select(User).options(selectinload(User.subscription)).where(User.id == user_id)
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -2383,8 +3237,8 @@ async def admin_sub_activate_callback(
         return
 
     try:
-        # Get user
-        stmt = select(User).where(User.id == user_id)
+        # Get user with eager loading
+        stmt = select(User).options(selectinload(User.subscription)).where(User.id == user_id)
         result = await session.execute(stmt)
         user = result.scalar_one_or_none()
 
@@ -2418,3 +3272,2006 @@ async def admin_sub_activate_callback(
     except Exception as e:
         logger.exception(f"Error activating subscription: {e}")
         await callback.answer("❌ Ошибка при активации подписки", show_alert=True)
+
+
+# ===========================
+# UNIT ECONOMICS HANDLERS
+# ===========================
+
+def get_unit_economics_menu() -> InlineKeyboardMarkup:
+    """Create Unit Economics submenu keyboard"""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="💎 По тарифам", callback_data="admin_ue_tiers"),
+                InlineKeyboardButton(text="🆓 Free tier", callback_data="admin_ue_free"),
+            ],
+            [
+                InlineKeyboardButton(text="🎁 Trial", callback_data="admin_ue_trial"),
+                InlineKeyboardButton(text="🤝 Рефералы", callback_data="admin_ue_referral"),
+            ],
+            [
+                InlineKeyboardButton(text="📈 Сценарии", callback_data="admin_ue_scenarios"),
+            ],
+            [
+                InlineKeyboardButton(text="« В меню", callback_data="admin_refresh"),
+            ],
+        ]
+    )
+
+
+@router.callback_query(F.data == "admin_unit_economics")
+async def admin_unit_economics_callback(callback: CallbackQuery, session: AsyncSession):
+    """
+    Main Unit Economics dashboard
+    """
+    try:
+        dashboard = await get_unit_economics_dashboard(session, days=30)
+
+        response = "📊 <b>Unit Economics Dashboard</b>\n"
+        response += f"<i>Период: последние 30 дней</i>\n\n"
+
+        response += "💰 <b>Общая картина:</b>\n"
+        response += f"├ Gross Revenue: <b>${dashboard['gross_revenue']:,.2f}</b>\n"
+        response += f"├ Payment Fees: <b>${dashboard['payment_fees']:,.2f}</b> ({dashboard['payment_fee_percent']:.1f}%)\n"
+        response += f"├ Net Revenue: <b>${dashboard['net_revenue']:,.2f}</b>\n"
+        response += f"├ API Costs: <b>${dashboard['api_costs']:,.2f}</b>\n"
+        response += f"├ RevShare: <b>${dashboard['revshare_costs']:,.2f}</b>\n"
+        response += f"├ Total Costs: <b>${dashboard['total_costs']:,.2f}</b>\n"
+        response += f"├ NET PROFIT: <b>${dashboard['net_profit']:,.2f}</b>\n"
+        response += f"└ Margin: <b>{dashboard['margin_percent']:.1f}%</b>\n\n"
+
+        response += "🎯 <b>Ключевые метрики:</b>\n"
+        response += f"├ LTV: <b>${dashboard['ltv']:,.2f}</b>\n"
+        response += f"├ CAC: <b>${dashboard['cac']:,.2f}</b>\n"
+        response += f"├ LTV/CAC: <b>{dashboard['ltv_cac_ratio']:.1f}x</b>\n"
+        response += f"├ Trial→Paid: <b>{dashboard['trial_conversion_rate']:.1f}%</b>\n"
+        response += f"└ Free→Paid: <b>{dashboard['free_conversion_rate']:.1f}%</b>\n\n"
+
+        response += "👥 <b>Пользователи:</b>\n"
+        response += f"├ Платящих: <b>{dashboard['paying_users']}</b>\n"
+        response += f"├ FREE: <b>{dashboard['free_users']}</b>\n"
+        response += f"└ На trial: <b>{dashboard['active_trials']}</b>\n\n"
+
+        # Платежи по провайдерам
+        if dashboard.get('payments_by_provider'):
+            response += "💳 <b>По провайдерам:</b>\n"
+            for provider, data in dashboard['payments_by_provider'].items():
+                response += f"├ {provider}: ${data['amount']:,.2f} ({data['count']} платежей)\n"
+
+        await callback.message.edit_text(
+            response,
+            reply_markup=get_unit_economics_menu(),
+        )
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading unit economics: {e}")
+        await callback.answer("❌ Ошибка при загрузке unit economics", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_ue_tiers")
+async def admin_ue_tiers_callback(callback: CallbackQuery, session: AsyncSession):
+    """
+    Margin by subscription tiers
+    """
+    try:
+        tiers_data = await get_tier_margin_with_fees(session, days=30)
+
+        response = "💎 <b>Unit Economics по тарифам</b>\n"
+        response += f"<i>Период: последние 30 дней</i>\n\n"
+
+        tier_emojis = {"basic": "⭐", "premium": "💎", "vip": "👑"}
+
+        for tier_name, data in tiers_data.items():
+            emoji = tier_emojis.get(tier_name, "📊")
+            response += f"{emoji} <b>{tier_name.upper()}</b>\n"
+            response += f"├ Юзеров: <b>{data.users_count}</b>\n"
+            response += f"├ Использование: <b>{data.avg_usage_percent:.1f}%</b> лимитов\n"
+            response += f"├ Gross Revenue: ${data.gross_revenue:,.2f}\n"
+            response += f"├ Payment Fees: ${data.payment_fees:,.2f} ({data.payment_fee_percent:.1f}%)\n"
+            response += f"├ Net Revenue: ${data.net_revenue:,.2f}\n"
+            response += f"├ API Costs: ${data.api_costs:,.2f}\n"
+            response += f"├ RevShare: ${data.revshare_costs:,.2f}\n"
+            response += f"├ Margin: <b>${data.margin_usd:,.2f}</b>\n"
+            response += f"└ Margin %: <b>{data.margin_percent:.1f}%</b>\n\n"
+
+        if not tiers_data:
+            response += "<i>Нет данных по платным подпискам</i>\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="« Назад", callback_data="admin_unit_economics")],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading tier margins: {e}")
+        await callback.answer("❌ Ошибка при загрузке маржи по тарифам", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_ue_free")
+async def admin_ue_free_callback(callback: CallbackQuery, session: AsyncSession):
+    """
+    Free tier economics
+    """
+    try:
+        free_data = await get_free_tier_economics(session, days=30)
+
+        response = "🆓 <b>Free Tier Экономика</b>\n"
+        response += f"<i>Период: последние 30 дней</i>\n\n"
+
+        response += "📊 <b>Пользователи:</b>\n"
+        response += f"├ Всего FREE: <b>{free_data.total_free_users}</b>\n"
+        response += f"└ Активных: <b>{free_data.active_free_users}</b>\n\n"
+
+        response += "💸 <b>Расходы:</b>\n"
+        response += f"├ Запросов: <b>{free_data.total_requests}</b>\n"
+        response += f"├ Общие затраты: <b>${free_data.total_cost:,.2f}</b>\n"
+        response += f"└ На пользователя: <b>${free_data.avg_cost_per_user:.4f}</b>\n\n"
+
+        response += "📈 <b>Конверсия:</b>\n"
+        response += f"├ → Trial: <b>{free_data.conversion_to_trial:.1f}%</b>\n"
+        response += f"└ → Paid: <b>{free_data.conversion_to_paid:.1f}%</b>\n\n"
+
+        response += "💡 <i>Free tier - это воронка для привлечения платящих</i>"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="« Назад", callback_data="admin_unit_economics")],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading free tier economics: {e}")
+        await callback.answer("❌ Ошибка при загрузке free tier экономики", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_ue_trial")
+async def admin_ue_trial_callback(callback: CallbackQuery, session: AsyncSession):
+    """
+    Trial economics
+    """
+    try:
+        trial_data = await get_trial_economics(session, days=30)
+
+        response = "🎁 <b>Trial Экономика</b>\n"
+        response += f"<i>7 дней бесплатного PREMIUM</i>\n\n"
+
+        response += "📊 <b>Статистика:</b>\n"
+        response += f"├ Активных триалов: <b>{trial_data.active_trials}</b>\n"
+        response += f"└ Завершилось: <b>{trial_data.completed_trials}</b>\n\n"
+
+        response += "💸 <b>Расходы на триалы:</b>\n"
+        response += f"├ Запросов: <b>{trial_data.trial_requests}</b>\n"
+        response += f"├ Общие затраты: <b>${trial_data.trial_cost:,.2f}</b>\n"
+        response += f"└ На юзера: <b>${trial_data.avg_trial_cost_per_user:.2f}</b>\n\n"
+
+        response += "📈 <b>Конверсия:</b>\n"
+        response += f"├ Конвертировались: <b>{trial_data.trials_converted}</b>\n"
+        response += f"├ Конверсия: <b>{trial_data.conversion_rate:.1f}%</b>\n"
+        response += f"└ Доход от конвертов: <b>${trial_data.revenue_from_converted:,.2f}</b>\n\n"
+
+        response += "💰 <b>ROI Trial программы:</b>\n"
+        if trial_data.roi > 0:
+            response += f"└ ROI: <b>+{trial_data.roi:.0f}%</b> ✅\n"
+        else:
+            response += f"└ ROI: <b>{trial_data.roi:.0f}%</b> ⚠️\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="« Назад", callback_data="admin_unit_economics")],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading trial economics: {e}")
+        await callback.answer("❌ Ошибка при загрузке trial экономики", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_ue_referral")
+async def admin_ue_referral_callback(callback: CallbackQuery, session: AsyncSession):
+    """
+    Referral economics
+    """
+    try:
+        ref_data = await get_referral_economics(session, days=30)
+
+        response = "🤝 <b>Реферальная Экономика</b>\n"
+        response += f"<i>Период: последние 30 дней</i>\n\n"
+
+        response += "📊 <b>Рефералы:</b>\n"
+        response += f"├ Всего: <b>{ref_data.total_referrals}</b>\n"
+        response += f"├ Активных: <b>{ref_data.active_referrals}</b>\n"
+        response += f"└ Pending: <b>{ref_data.pending_referrals}</b>\n\n"
+
+        response += "💸 <b>Расходы:</b>\n"
+        response += f"├ Бонусные запросы: <b>{ref_data.bonus_requests_granted}</b>\n"
+        response += f"├ Стоимость бонусов: <b>${ref_data.bonus_requests_cost:,.2f}</b>\n"
+        response += f"└ Revenue Share: <b>${ref_data.revshare_paid:,.2f}</b>\n\n"
+
+        response += "💰 <b>Доходы от рефералов:</b>\n"
+        response += f"├ Доход: <b>${ref_data.referral_revenue:,.2f}</b>\n"
+        response += f"└ Effective RevShare: <b>{ref_data.effective_revshare_rate:.1f}%</b>\n\n"
+
+        response += "📈 <b>ROI:</b>\n"
+        if ref_data.roi > 0:
+            response += f"└ ROI: <b>+{ref_data.roi:.0f}%</b> ✅"
+        else:
+            response += f"└ ROI: <b>{ref_data.roi:.0f}%</b> ⚠️"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="« Назад", callback_data="admin_unit_economics")],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading referral economics: {e}")
+        await callback.answer("❌ Ошибка при загрузке реферальной экономики", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_ue_scenarios")
+async def admin_ue_scenarios_callback(callback: CallbackQuery, session: AsyncSession):
+    """
+    Margin scenarios at different usage percentages
+    """
+    try:
+        scenarios = await get_margin_scenarios(session)
+
+        response = "📈 <b>Сценарии маржи</b>\n"
+        response += f"<i>При разном % использования лимитов</i>\n\n"
+
+        scenario_labels = {
+            "scenario_30": ("🟢", "30% (оптимистичный)"),
+            "scenario_50": ("🟡", "50% (реалистичный)"),
+            "scenario_70": ("🟠", "70% (пессимистичный)"),
+            "scenario_100": ("🔴", "100% (worst case)"),
+        }
+
+        tier_emojis = {"basic": "⭐", "premium": "💎", "vip": "👑"}
+
+        for scenario_key, (emoji, label) in scenario_labels.items():
+            data = scenarios.get(scenario_key, {})
+            if not data:
+                continue
+
+            response += f"{emoji} <b>{label}:</b>\n"
+
+            tiers = data.get("tiers", {})
+            for tier_name, tier_data in tiers.items():
+                t_emoji = tier_emojis.get(tier_name, "📊")
+                margin_pct = tier_data.get("margin_percent", 0)
+
+                # Status indicator
+                if margin_pct >= 60:
+                    status = "✅"
+                elif margin_pct >= 40:
+                    status = "⚠️"
+                elif margin_pct > 0:
+                    status = "⚠️"
+                else:
+                    status = "❌"
+
+                response += f"├ {t_emoji} {tier_name.upper()}: {margin_pct:.1f}% {status}\n"
+
+            overall = data.get("overall_margin_percent", 0)
+            response += f"└ Общая: <b>{overall:.1f}%</b>\n\n"
+
+        response += "💡 <i>Маржа зависит от % использования лимитов пользователями</i>"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="« Назад", callback_data="admin_unit_economics")],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading scenarios: {e}")
+        await callback.answer("❌ Ошибка при загрузке сценариев", show_alert=True)
+
+
+# ===========================
+# FRAUD DETECTION HANDLERS
+# ===========================
+
+
+@router.callback_query(F.data == "admin_fraud")
+async def admin_fraud_menu(callback: CallbackQuery, session: AsyncSession):
+    """Show fraud detection main menu with summary"""
+    try:
+        from src.services.fraud_detection_service import get_abuse_summary_for_admin
+
+        summary = await get_abuse_summary_for_admin(session, days=30)
+
+        response = "🚨 <b>Fraud Detection</b>\n\n"
+
+        # Status counts
+        status_counts = summary.get("status_counts", {})
+        detected = status_counts.get("detected", 0)
+        confirmed = status_counts.get("confirmed_abuse", 0)
+        false_pos = status_counts.get("false_positive", 0)
+        ignored = status_counts.get("ignored", 0)
+
+        response += "📊 <b>Статистика (30 дней):</b>\n"
+        response += f"├ 🔍 Обнаружено: <b>{detected}</b>\n"
+        response += f"├ ✅ Подтверждено: <b>{confirmed}</b>\n"
+        response += f"├ ❌ Ложные: <b>{false_pos}</b>\n"
+        response += f"└ ⏭️ Игнорируется: <b>{ignored}</b>\n\n"
+
+        # Type counts
+        type_counts = summary.get("type_counts", {})
+        ip_match = type_counts.get("ip_match", 0)
+        fp_match = type_counts.get("fingerprint_match", 0)
+        self_ref = type_counts.get("self_referral", 0)
+        multi_trial = type_counts.get("multi_trial", 0)
+
+        response += "🔗 <b>По типу:</b>\n"
+        response += f"├ 🌐 IP совпадение: <b>{ip_match}</b>\n"
+        response += f"├ 🖥️ Fingerprint: <b>{fp_match}</b>\n"
+        response += f"├ 🔄 Self-referral: <b>{self_ref}</b>\n"
+        response += f"└ 🎁 Multi-trial: <b>{multi_trial}</b>\n\n"
+
+        # Pending review
+        pending = summary.get("pending_review_count", 0)
+        if pending > 0:
+            response += f"⚠️ <b>Ожидает ревью: {pending}</b>\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔍 Связи", callback_data="admin_fraud_list_0"
+                    ),
+                    InlineKeyboardButton(
+                        text="⚠️ Ревью", callback_data="admin_fraud_pending_0"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🌐 По IP", callback_data="admin_fp_by_ip"
+                    ),
+                    InlineKeyboardButton(
+                        text="🖥️ По Fingerprint", callback_data="admin_fp_by_fp"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🎁 Multi-trial", callback_data="admin_fraud_type_multi_trial_0"
+                    ),
+                    InlineKeyboardButton(
+                        text="🔄 Self-ref", callback_data="admin_fraud_type_self_referral_0"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(text="« Назад", callback_data="admin_refresh"),
+                ],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading fraud summary: {e}")
+        await callback.answer("❌ Ошибка загрузки", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_fraud_list_"))
+async def admin_fraud_list(callback: CallbackQuery, session: AsyncSession):
+    """Show list of all linked accounts with pagination"""
+    try:
+        from src.services.fraud_detection_service import get_linked_accounts_with_users
+
+        # Parse page number
+        page = int(callback.data.split("_")[-1])
+        per_page = 5
+
+        links = await get_linked_accounts_with_users(
+            session,
+            min_confidence=0.3,
+            limit=per_page + 1,  # +1 to check if more pages
+        )
+
+        # Simple offset emulation (for demo)
+        start_idx = page * per_page
+        has_more = len(links) > per_page
+        links = links[:per_page]
+
+        if not links:
+            await callback.answer("Нет связанных аккаунтов", show_alert=True)
+            return
+
+        response = "🔗 <b>Связанные аккаунты</b>\n\n"
+
+        for link in links:
+            user_a = link.get("user_a") or {}
+            user_b = link.get("user_b") or {}
+
+            # User identifiers
+            a_name = user_a.get("email") or f"TG:{user_a.get('telegram_id')}" or f"ID:{user_a.get('id')}"
+            b_name = user_b.get("email") or f"TG:{user_b.get('telegram_id')}" or f"ID:{user_b.get('id')}"
+
+            # Status emoji
+            status = link.get("status", "detected")
+            status_emoji = {
+                "detected": "🔍",
+                "confirmed_abuse": "🚨",
+                "false_positive": "✅",
+                "ignored": "⏭️",
+            }.get(status, "❓")
+
+            # Type emoji
+            link_type = link.get("link_type", "")
+            type_emoji = {
+                "ip_match": "🌐",
+                "fingerprint_match": "🖥️",
+                "self_referral": "🔄",
+                "multi_trial": "🎁",
+            }.get(link_type, "🔗")
+
+            confidence = link.get("confidence_score", 0) * 100
+
+            response += f"{status_emoji} {type_emoji} <b>#{link.get('id')}</b> ({confidence:.0f}%)\n"
+            response += f"├ A: <code>{a_name[:20]}</code>\n"
+            response += f"├ B: <code>{b_name[:20]}</code>\n"
+
+            # Show shared data
+            shared_ips = link.get("shared_ips", [])
+            if shared_ips and len(shared_ips) > 0:
+                response += f"├ IP: <code>{shared_ips[0]}</code>\n"
+
+            response += f"└ {link_type}\n\n"
+
+        # Pagination
+        buttons = []
+        if page > 0:
+            buttons.append(
+                InlineKeyboardButton(
+                    text="« Назад", callback_data=f"admin_fraud_list_{page-1}"
+                )
+            )
+        if has_more:
+            buttons.append(
+                InlineKeyboardButton(
+                    text="Вперёд »", callback_data=f"admin_fraud_list_{page+1}"
+                )
+            )
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                buttons if buttons else [],
+                [InlineKeyboardButton(text="« Меню Fraud", callback_data="admin_fraud")],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading fraud list: {e}")
+        await callback.answer("❌ Ошибка загрузки", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_fraud_pending_"))
+async def admin_fraud_pending(callback: CallbackQuery, session: AsyncSession):
+    """Show pending fraud cases for review"""
+    try:
+        from src.services.fraud_detection_service import get_linked_accounts_with_users
+
+        links = await get_linked_accounts_with_users(
+            session,
+            status="detected",
+            min_confidence=0.5,
+            limit=10,
+        )
+
+        if not links:
+            await callback.answer("Нет кейсов на проверку! 🎉", show_alert=True)
+            return
+
+        response = "⚠️ <b>Ожидают проверки</b>\n\n"
+
+        for link in links:
+            user_a = link.get("user_a") or {}
+            user_b = link.get("user_b") or {}
+
+            a_name = user_a.get("email") or f"TG:{user_a.get('telegram_id')}"
+            b_name = user_b.get("email") or f"TG:{user_b.get('telegram_id')}"
+
+            link_type = link.get("link_type", "")
+            confidence = link.get("confidence_score", 0) * 100
+
+            type_labels = {
+                "ip_match": "🌐 IP",
+                "fingerprint_match": "🖥️ FP",
+                "self_referral": "🔄 SelfRef",
+                "multi_trial": "🎁 Trial",
+            }
+
+            response += f"<b>#{link.get('id')}</b> • {type_labels.get(link_type, link_type)} • {confidence:.0f}%\n"
+            response += f"├ {a_name[:25]}\n"
+            response += f"└ {b_name[:25]}\n\n"
+
+        response += "\n<i>Используй /fraud_review ID для ревью</i>"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="« Меню Fraud", callback_data="admin_fraud")],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading pending: {e}")
+        await callback.answer("❌ Ошибка", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_fraud_type_"))
+async def admin_fraud_by_type(callback: CallbackQuery, session: AsyncSession):
+    """Show fraud cases filtered by type"""
+    try:
+        from src.services.fraud_detection_service import get_all_linked_accounts
+        from src.database.models import LinkedAccount
+
+        # Parse type from callback (e.g., admin_fraud_type_multi_trial_0)
+        parts = callback.data.split("_")
+        fraud_type = "_".join(parts[3:-1])  # multi_trial or self_referral
+        page = int(parts[-1])
+
+        type_labels = {
+            "multi_trial": "🎁 Multi-trial Abuse",
+            "self_referral": "🔄 Self-referral",
+        }
+
+        # Get from DB directly
+        stmt = (
+            select(LinkedAccount)
+            .where(LinkedAccount.link_type == fraud_type)
+            .order_by(LinkedAccount.created_at.desc())
+            .limit(10)
+        )
+        result = await session.execute(stmt)
+        links = result.scalars().all()
+
+        if not links:
+            await callback.answer(f"Нет кейсов типа {fraud_type}", show_alert=True)
+            return
+
+        response = f"<b>{type_labels.get(fraud_type, fraud_type)}</b>\n\n"
+
+        for link in links:
+            status_emoji = {
+                "detected": "🔍",
+                "confirmed_abuse": "🚨",
+                "false_positive": "✅",
+                "ignored": "⏭️",
+            }.get(link.status, "❓")
+
+            confidence = link.confidence_score * 100
+
+            response += f"{status_emoji} <b>#{link.id}</b> • {confidence:.0f}%\n"
+            response += f"├ User A: <code>{link.user_id_a}</code>\n"
+            response += f"├ User B: <code>{link.user_id_b}</code>\n"
+            response += f"└ {link.status}\n\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="« Меню Fraud", callback_data="admin_fraud")],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading by type: {e}")
+        await callback.answer("❌ Ошибка", show_alert=True)
+
+
+@router.message(Command("fraud_review"))
+async def cmd_fraud_review(message: Message, session: AsyncSession, command: CommandObject):
+    """
+    Review a specific fraud case
+
+    Usage: /fraud_review <link_id> <action>
+    Actions: confirm, reject, ignore, ban
+    """
+    from src.services.fraud_detection_service import (
+        update_linked_account_status,
+        ban_linked_accounts,
+    )
+    from src.database.models import LinkedAccountStatus
+
+    if not command.args:
+        await message.reply(
+            "📋 <b>Fraud Review</b>\n\n"
+            "Использование:\n"
+            "<code>/fraud_review ID action</code>\n\n"
+            "Actions:\n"
+            "• <code>confirm</code> - подтвердить abuse\n"
+            "• <code>reject</code> - ложное срабатывание\n"
+            "• <code>ignore</code> - игнорировать\n"
+            "• <code>ban</code> - забанить оба аккаунта\n\n"
+            "Пример: <code>/fraud_review 42 confirm</code>"
+        )
+        return
+
+    args = command.args.split()
+    if len(args) < 2:
+        await message.reply("❌ Укажите ID и action")
+        return
+
+    try:
+        link_id = int(args[0])
+        action = args[1].lower()
+    except ValueError:
+        await message.reply("❌ ID должен быть числом")
+        return
+
+    # Get admin user
+    admin = await get_user_by_telegram_id(session, message.from_user.id)
+    if not admin:
+        await message.reply("❌ Админ не найден")
+        return
+
+    action_map = {
+        "confirm": LinkedAccountStatus.CONFIRMED_ABUSE.value,
+        "reject": LinkedAccountStatus.FALSE_POSITIVE.value,
+        "ignore": LinkedAccountStatus.IGNORED.value,
+    }
+
+    if action == "ban":
+        result = await ban_linked_accounts(session, link_id, admin.id, ban_both=True)
+        if result["success"]:
+            await message.reply(
+                f"🚨 <b>Аккаунты забанены!</b>\n\n"
+                f"Link ID: {link_id}\n"
+                f"Banned users: {result['banned_users']}"
+            )
+        else:
+            await message.reply(f"❌ Ошибка: {result.get('error')}")
+
+    elif action in action_map:
+        updated = await update_linked_account_status(
+            session,
+            link_id=link_id,
+            status=action_map[action],
+            admin_user_id=admin.id,
+        )
+        if updated:
+            await message.reply(
+                f"✅ <b>Статус обновлён!</b>\n\n"
+                f"Link ID: {link_id}\n"
+                f"New status: {action_map[action]}"
+            )
+        else:
+            await message.reply(f"❌ Link #{link_id} не найден")
+    else:
+        await message.reply(f"❌ Неизвестный action: {action}")
+
+
+# ===========================
+# FINGERPRINT GROUPING HANDLERS
+# ===========================
+
+
+@router.callback_query(F.data == "admin_fp_by_ip")
+async def admin_fingerprints_by_ip(callback: CallbackQuery, session: AsyncSession):
+    """Show fingerprints grouped by IP address - find shared IPs"""
+    try:
+        from src.database.models import DeviceFingerprint, User
+
+        # Find IPs used by multiple users
+        stmt = (
+            select(
+                DeviceFingerprint.ip_address,
+                func.count(func.distinct(DeviceFingerprint.user_id)).label("user_count"),
+                func.array_agg(func.distinct(DeviceFingerprint.user_id)).label("user_ids"),
+            )
+            .where(DeviceFingerprint.ip_address != "unknown")
+            .where(DeviceFingerprint.ip_address != "internal")
+            .group_by(DeviceFingerprint.ip_address)
+            .having(func.count(func.distinct(DeviceFingerprint.user_id)) > 1)
+            .order_by(func.count(func.distinct(DeviceFingerprint.user_id)).desc())
+            .limit(15)
+        )
+        result = await session.execute(stmt)
+        rows = result.all()
+
+        if not rows:
+            await callback.answer("Нет общих IP адресов", show_alert=True)
+            return
+
+        response = "🌐 <b>Общие IP адреса</b>\n"
+        response += "<i>IP используемые несколькими аккаунтами</i>\n\n"
+
+        for row in rows:
+            ip = row.ip_address
+            user_count = row.user_count
+            user_ids = row.user_ids[:5] if row.user_ids else []
+
+            # Get user info
+            users_info = []
+            for uid in user_ids:
+                user_stmt = select(User).where(User.id == uid)
+                user_result = await session.execute(user_stmt)
+                user = user_result.scalar_one_or_none()
+                if user:
+                    name = user.email or f"TG:{user.telegram_id}" or f"ID:{uid}"
+                    users_info.append(f"<code>{name[:15]}</code>")
+
+            response += f"🔴 <b>{ip}</b> ({user_count} юзеров)\n"
+            response += f"└ {', '.join(users_info)}\n\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="« Fraud Menu", callback_data="admin_fraud")],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading fingerprints by IP: {e}")
+        await callback.answer("❌ Ошибка загрузки", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_fp_by_fp")
+async def admin_fingerprints_by_fingerprint(callback: CallbackQuery, session: AsyncSession):
+    """Show fingerprints grouped by visitor_id - find shared browser fingerprints"""
+    try:
+        from src.database.models import DeviceFingerprint, User
+
+        # Find visitor_ids used by multiple users
+        stmt = (
+            select(
+                DeviceFingerprint.visitor_id,
+                func.count(func.distinct(DeviceFingerprint.user_id)).label("user_count"),
+                func.array_agg(func.distinct(DeviceFingerprint.user_id)).label("user_ids"),
+            )
+            .where(DeviceFingerprint.visitor_id.isnot(None))
+            .where(DeviceFingerprint.visitor_id != "")
+            .group_by(DeviceFingerprint.visitor_id)
+            .having(func.count(func.distinct(DeviceFingerprint.user_id)) > 1)
+            .order_by(func.count(func.distinct(DeviceFingerprint.user_id)).desc())
+            .limit(15)
+        )
+        result = await session.execute(stmt)
+        rows = result.all()
+
+        if not rows:
+            await callback.answer("Нет общих fingerprints", show_alert=True)
+            return
+
+        response = "🖥️ <b>Общие Fingerprints</b>\n"
+        response += "<i>Браузеры используемые несколькими аккаунтами</i>\n\n"
+
+        for row in rows:
+            visitor_id = row.visitor_id
+            user_count = row.user_count
+            user_ids = row.user_ids[:5] if row.user_ids else []
+
+            # Shorten visitor_id for display
+            short_vid = f"{visitor_id[:8]}...{visitor_id[-4:]}" if len(visitor_id) > 16 else visitor_id
+
+            # Get user info
+            users_info = []
+            for uid in user_ids:
+                user_stmt = select(User).where(User.id == uid)
+                user_result = await session.execute(user_stmt)
+                user = user_result.scalar_one_or_none()
+                if user:
+                    name = user.email or f"TG:{user.telegram_id}" or f"ID:{uid}"
+                    users_info.append(f"<code>{name[:15]}</code>")
+
+            response += f"🔴 <b>{short_vid}</b> ({user_count} юзеров)\n"
+            response += f"└ {', '.join(users_info)}\n\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="« Fraud Menu", callback_data="admin_fraud")],
+            ]
+        )
+
+        await callback.message.edit_text(response, reply_markup=keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error loading fingerprints: {e}")
+        await callback.answer("❌ Ошибка загрузки", show_alert=True)
+
+
+@router.message(Command("fp_user"))
+async def cmd_fingerprints_by_user(message: Message, session: AsyncSession, command: CommandObject):
+    """
+    Show all fingerprints for a specific user
+
+    Usage: /fp_user <user_id or telegram_id>
+    """
+    from src.database.models import DeviceFingerprint, User
+
+    if not command.args:
+        await message.reply(
+            "📋 <b>User Fingerprints</b>\n\n"
+            "Использование:\n"
+            "<code>/fp_user USER_ID</code>\n\n"
+            "Пример: <code>/fp_user 123</code>"
+        )
+        return
+
+    try:
+        user_id = int(command.args.strip())
+    except ValueError:
+        await message.reply("❌ ID должен быть числом")
+        return
+
+    # Try to find user by ID or telegram_id
+    user_stmt = select(User).where(
+        (User.id == user_id) | (User.telegram_id == user_id)
+    )
+    user_result = await session.execute(user_stmt)
+    user = user_result.scalar_one_or_none()
+
+    if not user:
+        await message.reply(f"❌ Пользователь {user_id} не найден")
+        return
+
+    # Get fingerprints
+    fp_stmt = (
+        select(DeviceFingerprint)
+        .where(DeviceFingerprint.user_id == user.id)
+        .order_by(DeviceFingerprint.created_at.desc())
+        .limit(20)
+    )
+    fp_result = await session.execute(fp_stmt)
+    fingerprints = fp_result.scalars().all()
+
+    if not fingerprints:
+        await message.reply(f"📭 Нет fingerprints для пользователя {user.id}")
+        return
+
+    user_name = user.email or f"TG:{user.telegram_id}" or f"ID:{user.id}"
+    response = f"🖥️ <b>Fingerprints пользователя</b>\n"
+    response += f"👤 {user_name}\n\n"
+
+    # Collect unique IPs and fingerprints
+    unique_ips = set()
+    unique_fps = set()
+
+    for fp in fingerprints:
+        unique_ips.add(fp.ip_address)
+        if fp.visitor_id:
+            unique_fps.add(fp.visitor_id)
+
+    response += f"📊 Всего записей: {len(fingerprints)}\n"
+    response += f"🌐 Уникальных IP: {len(unique_ips)}\n"
+    response += f"🖥️ Уникальных FP: {len(unique_fps)}\n\n"
+
+    response += "<b>Последние события:</b>\n"
+    for fp in fingerprints[:10]:
+        event = fp.event_type
+        ip = fp.ip_address
+        platform = fp.platform
+        date = fp.created_at.strftime("%d.%m %H:%M")
+
+        event_emoji = {
+            "registration": "🆕",
+            "login": "🔑",
+            "referral_use": "🔗",
+            "payment": "💳",
+        }.get(event, "📝")
+
+        response += f"{event_emoji} {date} • {platform} • <code>{ip}</code>\n"
+
+    await message.reply(response)
+
+
+# ===========================
+# TASK CREATION COMMAND
+# ===========================
+
+
+@router.message(Command("task_add"))
+async def cmd_task_add(message: Message, command: CommandObject, session: AsyncSession):
+    """
+    Create social task via command
+
+    Usage:
+    /task_add telegram_channel @channel 100 [penalty]
+    /task_add telegram_channel -1001234567890 https://t.me/+AbCdEfG 100 [penalty]
+    /task_add telegram_chat @chat 100 [penalty]
+    /task_add telegram_chat -1001234567890 https://t.me/+XyZ123 100 [penalty]
+    /task_add twitter @username 100 [penalty]
+
+    Args:
+    - type: telegram_channel, telegram_chat, twitter
+    - target: @username, chat ID, или invite link
+    - reward: награда в $SYNTRA
+    - penalty: штраф за отписку (по умолчанию 50% от reward)
+    """
+    import re
+    from config.config import ADMIN_IDS
+    from src.services.social_tasks_service import SocialTasksService
+    from src.database.models import TaskType, TaskStatus, VerificationType
+
+    # Check admin
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    if not command.args:
+        await message.reply(
+            "❌ <b>Использование:</b>\n\n"
+            "<b>Публичный канал/чат:</b>\n"
+            "<code>/task_add telegram_channel @channel 100</code>\n"
+            "<code>/task_add telegram_chat @chat 100</code>\n\n"
+            "<b>Приватный канал/чат:</b>\n"
+            "<code>/task_add telegram_channel -1001234567890 https://t.me/+AbCdEfG 100</code>\n"
+            "<code>/task_add telegram_chat -1001234567890 https://t.me/+XyZ 100</code>\n\n"
+            "<b>Twitter:</b>\n"
+            "<code>/task_add twitter @username 100</code>\n\n"
+            "Параметры:\n"
+            "• тип задания\n"
+            "• @username или ID канала\n"
+            "• (для приватных) invite ссылка\n"
+            "• награда в $SYNTRA\n"
+            "• (опционально) штраф за отписку"
+        )
+        return
+
+    args = command.args.split()
+
+    if len(args) < 3:
+        await message.reply(
+            "❌ Недостаточно аргументов!\n\n"
+            "Публичный: <code>/task_add telegram_channel @syntra_news 100</code>\n"
+            "Приватный: <code>/task_add telegram_channel -100123 https://t.me/+abc 100</code>"
+        )
+        return
+
+    task_type_str = args[0].lower()
+    target = args[1]
+
+    # Map type string to TaskType and VerificationType
+    type_mapping = {
+        "telegram_channel": (
+            TaskType.TELEGRAM_SUBSCRIBE_CHANNEL.value,
+            VerificationType.AUTO_TELEGRAM.value,
+            "✈️ Подписка на канал",
+            "📢",
+        ),
+        "telegram_chat": (
+            TaskType.TELEGRAM_SUBSCRIBE_CHAT.value,
+            VerificationType.AUTO_TELEGRAM.value,
+            "💬 Вступление в чат",
+            "💬",
+        ),
+        "twitter": (
+            TaskType.TWITTER_FOLLOW.value,
+            VerificationType.MANUAL_SCREENSHOT.value,
+            "🐦 Подписка на Twitter",
+            "🐦",
+        ),
+    }
+
+    if task_type_str not in type_mapping:
+        await message.reply(
+            "❌ Неизвестный тип задания!\n\n"
+            "Доступные типы:\n"
+            "• telegram_channel\n"
+            "• telegram_chat\n"
+            "• twitter"
+        )
+        return
+
+    task_type, verification_type, title_base, icon = type_mapping[task_type_str]
+
+    # Parse arguments based on type
+    invite_url = None
+    channel_id = None
+    target_display = None
+    custom_name = None
+
+    if task_type_str in ["telegram_channel", "telegram_chat"]:
+        # Check if target is numeric ID (private channel/chat)
+        if target.lstrip("-").isdigit():
+            channel_id = target
+            # Next arg should be invite URL
+            if len(args) < 4:
+                await message.reply(
+                    "❌ Для приватного канала/чата нужна invite ссылка!\n\n"
+                    "Пример: <code>/task_add telegram_channel -1001234567890 https://t.me/+AbCdEfG 100</code>\n"
+                    "С названием: <code>/task_add telegram_channel -1001234567890 https://t.me/+AbCdEfG 100 \"Название канала\"</code>"
+                )
+                return
+
+            invite_url = args[2]
+            # Validate invite URL
+            if not re.match(r'https?://t\.me/(\+[\w-]+|joinchat/[\w-]+)', invite_url):
+                await message.reply(
+                    "❌ Неверный формат invite ссылки!\n\n"
+                    "Ожидается: https://t.me/+AbCdEfG или https://t.me/joinchat/AbCdEfG"
+                )
+                return
+
+            try:
+                reward = int(args[3])
+            except ValueError:
+                await message.reply("❌ Награда должна быть числом!")
+                return
+
+            penalty = int(args[4]) if len(args) > 4 else reward // 2
+
+            # Check for custom name in quotes in original args
+            full_args = command.args
+            name_match = re.search(r'"([^"]+)"', full_args)
+            if name_match:
+                custom_name = name_match.group(1)
+                target_display = custom_name
+            else:
+                target_display = f"Приватный ({channel_id})"
+
+        else:
+            # Public channel/chat with username
+            target_clean = target.replace("@", "")
+            channel_id = target_clean
+            invite_url = f"https://t.me/{target_clean}"
+            target_display = f"@{target_clean}"
+
+            try:
+                reward = int(args[2])
+            except ValueError:
+                await message.reply("❌ Награда должна быть числом!")
+                return
+
+            penalty = int(args[3]) if len(args) > 3 else reward // 2
+
+    else:
+        # Twitter
+        target_clean = target.replace("@", "")
+        target_display = f"@{target_clean}"
+
+        try:
+            reward = int(args[2])
+        except ValueError:
+            await message.reply("❌ Награда должна быть числом!")
+            return
+
+        penalty = int(args[3]) if len(args) > 3 else reward // 2
+
+    # Prepare task data
+    title_ru = f"{title_base}: {target_display}"
+    title_en = f"{title_base}: {target_display}"
+
+    task_data = {
+        "title_ru": title_ru,
+        "title_en": title_en,
+        "description_ru": f"Подпишитесь и получите {reward} $SYNTRA",
+        "description_en": f"Subscribe and get {reward} $SYNTRA",
+        "icon": icon,
+        "task_type": task_type,
+        "verification_type": verification_type,
+        "reward_points": reward,
+        "unsubscribe_penalty": penalty,
+        "status": TaskStatus.ACTIVE.value,
+    }
+
+    # Set target based on type
+    if task_type_str in ["telegram_channel", "telegram_chat"]:
+        task_data["telegram_channel_id"] = channel_id
+        task_data["telegram_channel_url"] = invite_url
+    else:
+        # Twitter
+        task_data["twitter_target_username"] = target_clean
+
+    try:
+        task = await SocialTasksService.create_task(
+            session=session,
+            admin_telegram_id=message.from_user.id,
+            task_data=task_data,
+        )
+
+        response = (
+            f"✅ <b>Задание создано!</b>\n\n"
+            f"ID: <code>{task.id}</code>\n"
+            f"Тип: {icon} {task_type_str}\n"
+            f"Цель: {target_display}\n"
+        )
+
+        if invite_url and task_type_str != "twitter":
+            response += f"Ссылка: {invite_url}\n"
+
+        response += (
+            f"Награда: {reward} $SYNTRA\n"
+            f"Штраф: {penalty} $SYNTRA\n"
+            f"Статус: 🟢 Активно\n\n"
+            f"Задание сразу доступно пользователям!"
+        )
+
+        await message.reply(response)
+
+        logger.info(
+            f"Admin {message.from_user.id} created task {task.id}: "
+            f"{task_type_str} {target_display} +{reward} SYNTRA"
+        )
+
+    except Exception as e:
+        logger.exception(f"Error creating task: {e}")
+        await message.reply(f"❌ Ошибка создания задания: {e}")
+
+
+# ===========================
+# STARTAPP PARAMETER TRACKING
+# ===========================
+
+
+@router.callback_query(F.data == "admin_startapp")
+async def admin_startapp_stats(callback: CallbackQuery, session: AsyncSession):
+    """Show startapp parameter statistics"""
+    try:
+        # Get total users with startapp parameter
+        stmt_with = select(func.count(User.id)).where(User.startapp_param.isnot(None))
+        result_with = await session.execute(stmt_with)
+        total_with_startapp = result_with.scalar() or 0
+
+        # Get total users without startapp parameter
+        stmt_without = select(func.count(User.id)).where(User.startapp_param.is_(None))
+        result_without = await session.execute(stmt_without)
+        total_without_startapp = result_without.scalar() or 0
+
+        # Get breakdown by startapp parameter
+        stmt = (
+            select(
+                User.startapp_param,
+                func.count(User.id).label("user_count"),
+                func.min(User.created_at).label("first_seen"),
+                func.max(User.created_at).label("last_seen"),
+            )
+            .where(User.startapp_param.isnot(None))
+            .group_by(User.startapp_param)
+            .order_by(func.count(User.id).desc())
+            .limit(20)
+        )
+
+        result = await session.execute(stmt)
+        rows = result.all()
+
+        response = "🔗 <b>Startapp Parameter Statistics</b>\n\n"
+        response += "📊 <b>Общая статистика:</b>\n"
+        response += f"├ С параметром: <b>{total_with_startapp}</b>\n"
+        response += f"└ Без параметра: <b>{total_without_startapp}</b>\n\n"
+
+        if rows:
+            response += "📈 <b>Топ источников (до 20):</b>\n\n"
+            for i, row in enumerate(rows, 1):
+                param = row.startapp_param
+                count = row.user_count
+                first_date = row.first_seen.strftime("%d.%m.%Y") if row.first_seen else "—"
+                last_date = row.last_seen.strftime("%d.%m.%Y") if row.last_seen else "—"
+
+                response += f"{i}. <code>{param}</code>\n"
+                response += f"   👥 Пользователей: <b>{count}</b>\n"
+                response += f"   📅 Первый: {first_date} | Последний: {last_date}\n\n"
+        else:
+            response += "ℹ️ Нет данных о startapp параметрах"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_startapp"),
+                    InlineKeyboardButton(text="◀️ Назад", callback_data="admin_refresh"),
+                ]
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing startapp stats: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+# ===========================
+# CLASS STATS (CONTEXT GATES)
+# ===========================
+
+
+@router.callback_query(F.data == "admin_class_stats")
+async def admin_class_stats_menu(callback: CallbackQuery, session: AsyncSession):
+    """Show class stats main menu with summary"""
+    try:
+        from src.database.models import ScenarioClassStats
+
+        # Get counts
+        stmt_total = select(func.count(ScenarioClassStats.id))
+        result_total = await session.execute(stmt_total)
+        total_classes = result_total.scalar() or 0
+
+        stmt_enabled = select(func.count(ScenarioClassStats.id)).where(
+            ScenarioClassStats.is_enabled == True
+        )
+        result_enabled = await session.execute(stmt_enabled)
+        enabled_count = result_enabled.scalar() or 0
+
+        stmt_disabled = select(func.count(ScenarioClassStats.id)).where(
+            ScenarioClassStats.is_enabled == False
+        )
+        result_disabled = await session.execute(stmt_disabled)
+        disabled_count = result_disabled.scalar() or 0
+
+        # Get L1/L2 counts
+        stmt_l1 = select(func.count(ScenarioClassStats.id)).where(
+            ScenarioClassStats.trend_bucket == "__any__"
+        )
+        result_l1 = await session.execute(stmt_l1)
+        l1_count = result_l1.scalar() or 0
+
+        l2_count = total_classes - l1_count
+
+        # Get top performers
+        stmt_top = (
+            select(ScenarioClassStats)
+            .where(ScenarioClassStats.total_trades >= 20)
+            .order_by(ScenarioClassStats.avg_ev_r.desc())
+            .limit(5)
+        )
+        result_top = await session.execute(stmt_top)
+        top_classes = result_top.scalars().all()
+
+        # Get worst performers (disabled)
+        stmt_worst = (
+            select(ScenarioClassStats)
+            .where(ScenarioClassStats.is_enabled == False)
+            .order_by(ScenarioClassStats.avg_ev_r.asc())
+            .limit(5)
+        )
+        result_worst = await session.execute(stmt_worst)
+        worst_classes = result_worst.scalars().all()
+
+        response = "📚 <b>Scenario Class Statistics</b>\n\n"
+
+        response += "📊 <b>Общая статистика:</b>\n"
+        response += f"├ Всего классов: <b>{total_classes}</b>\n"
+        response += f"├ ✅ Enabled: <b>{enabled_count}</b>\n"
+        response += f"├ ❌ Disabled: <b>{disabled_count}</b>\n"
+        response += f"├ L1 (coarse): <b>{l1_count}</b>\n"
+        response += f"└ L2 (fine): <b>{l2_count}</b>\n\n"
+
+        if top_classes:
+            response += "🏆 <b>Top Performers (EV):</b>\n"
+            for c in top_classes:
+                wr = c.winrate * 100
+                response += f"├ {c.archetype[:15]}|{c.side[:1].upper()}|{c.timeframe}\n"
+                response += f"│  EV: <b>{c.avg_ev_r:+.2f}R</b> WR: {wr:.0f}% ({c.total_trades})\n"
+            response += "\n"
+
+        if worst_classes:
+            response += "💀 <b>Disabled Classes:</b>\n"
+            for c in worst_classes:
+                reason = (c.disable_reason or "")[:25]
+                response += f"├ {c.archetype[:15]}|{c.side[:1].upper()}|{c.timeframe}\n"
+                response += f"│  EV: <b>{c.avg_ev_r:+.2f}R</b> | {reason}\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="📈 По EV", callback_data="admin_cs_by_ev_0"
+                    ),
+                    InlineKeyboardButton(
+                        text="📊 По WR", callback_data="admin_cs_by_wr_0"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="❌ Disabled", callback_data="admin_cs_disabled_0"
+                    ),
+                    InlineKeyboardButton(
+                        text="🎯 По архетипу", callback_data="admin_cs_archetypes"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔄 Пересчитать", callback_data="admin_cs_recalculate"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(text="◀️ Назад", callback_data="admin_refresh"),
+                ],
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing class stats: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_cs_by_ev_"))
+async def admin_class_stats_by_ev(callback: CallbackQuery, session: AsyncSession):
+    """Show classes sorted by EV with pagination"""
+    try:
+        from src.database.models import ScenarioClassStats
+
+        page = int(callback.data.split("_")[-1])
+        per_page = 10
+        offset = page * per_page
+
+        stmt = (
+            select(ScenarioClassStats)
+            .where(ScenarioClassStats.total_trades >= 10)
+            .order_by(ScenarioClassStats.avg_ev_r.desc())
+            .offset(offset)
+            .limit(per_page + 1)
+        )
+        result = await session.execute(stmt)
+        classes = result.scalars().all()
+
+        has_more = len(classes) > per_page
+        classes = classes[:per_page]
+
+        response = f"📈 <b>Classes by EV</b> (стр. {page + 1})\n\n"
+
+        for c in classes:
+            status = "✅" if c.is_enabled else "❌"
+            wr = c.winrate * 100
+            level = "L1" if c.trend_bucket == "__any__" else "L2"
+            response += f"{status} <b>{c.archetype[:12]}</b>|{c.side[:1].upper()}|{c.timeframe} [{level}]\n"
+            response += f"   EV: <b>{c.avg_ev_r:+.3f}R</b> WR: {wr:.0f}% | n={c.total_trades}\n"
+
+        buttons = []
+        nav_row = []
+        if page > 0:
+            nav_row.append(
+                InlineKeyboardButton(text="◀️", callback_data=f"admin_cs_by_ev_{page - 1}")
+            )
+        if has_more:
+            nav_row.append(
+                InlineKeyboardButton(text="▶️", callback_data=f"admin_cs_by_ev_{page + 1}")
+            )
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([
+            InlineKeyboardButton(text="◀️ Назад", callback_data="admin_class_stats")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing classes by EV: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_cs_by_wr_"))
+async def admin_class_stats_by_wr(callback: CallbackQuery, session: AsyncSession):
+    """Show classes sorted by winrate with pagination"""
+    try:
+        from src.database.models import ScenarioClassStats
+
+        page = int(callback.data.split("_")[-1])
+        per_page = 10
+        offset = page * per_page
+
+        stmt = (
+            select(ScenarioClassStats)
+            .where(ScenarioClassStats.total_trades >= 10)
+            .order_by(ScenarioClassStats.winrate.desc())
+            .offset(offset)
+            .limit(per_page + 1)
+        )
+        result = await session.execute(stmt)
+        classes = result.scalars().all()
+
+        has_more = len(classes) > per_page
+        classes = classes[:per_page]
+
+        response = f"📊 <b>Classes by Winrate</b> (стр. {page + 1})\n\n"
+
+        for c in classes:
+            status = "✅" if c.is_enabled else "❌"
+            wr = c.winrate * 100
+            wr_ci = c.winrate_lower_ci * 100
+            level = "L1" if c.trend_bucket == "__any__" else "L2"
+            response += f"{status} <b>{c.archetype[:12]}</b>|{c.side[:1].upper()}|{c.timeframe} [{level}]\n"
+            response += f"   WR: <b>{wr:.0f}%</b> (CI: {wr_ci:.0f}%) | n={c.total_trades}\n"
+
+        buttons = []
+        nav_row = []
+        if page > 0:
+            nav_row.append(
+                InlineKeyboardButton(text="◀️", callback_data=f"admin_cs_by_wr_{page - 1}")
+            )
+        if has_more:
+            nav_row.append(
+                InlineKeyboardButton(text="▶️", callback_data=f"admin_cs_by_wr_{page + 1}")
+            )
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([
+            InlineKeyboardButton(text="◀️ Назад", callback_data="admin_class_stats")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing classes by WR: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_cs_disabled_"))
+async def admin_class_stats_disabled(callback: CallbackQuery, session: AsyncSession):
+    """Show disabled classes with reasons"""
+    try:
+        from src.database.models import ScenarioClassStats
+
+        page = int(callback.data.split("_")[-1])
+        per_page = 8
+        offset = page * per_page
+
+        stmt = (
+            select(ScenarioClassStats)
+            .where(ScenarioClassStats.is_enabled == False)
+            .order_by(ScenarioClassStats.avg_ev_r.asc())
+            .offset(offset)
+            .limit(per_page + 1)
+        )
+        result = await session.execute(stmt)
+        classes = result.scalars().all()
+
+        has_more = len(classes) > per_page
+        classes = classes[:per_page]
+
+        response = f"❌ <b>Disabled Classes</b> (стр. {page + 1})\n\n"
+
+        if not classes:
+            response += "✅ Нет отключённых классов!"
+        else:
+            for c in classes:
+                wr = c.winrate * 100
+                reason = c.disable_reason or "—"
+                response += f"<b>{c.archetype[:15]}</b>|{c.side[:1].upper()}|{c.timeframe}\n"
+                response += f"├ EV: {c.avg_ev_r:+.3f}R | WR: {wr:.0f}%\n"
+                response += f"├ Trades: {c.total_trades}\n"
+                response += f"└ Reason: <i>{reason[:40]}</i>\n\n"
+
+        buttons = []
+        nav_row = []
+        if page > 0:
+            nav_row.append(
+                InlineKeyboardButton(text="◀️", callback_data=f"admin_cs_disabled_{page - 1}")
+            )
+        if has_more:
+            nav_row.append(
+                InlineKeyboardButton(text="▶️", callback_data=f"admin_cs_disabled_{page + 1}")
+            )
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([
+            InlineKeyboardButton(text="◀️ Назад", callback_data="admin_class_stats")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing disabled classes: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_cs_archetypes")
+async def admin_class_stats_archetypes(callback: CallbackQuery, session: AsyncSession):
+    """Show stats grouped by archetype"""
+    try:
+        from src.database.models import ScenarioClassStats
+
+        # Aggregate by archetype
+        stmt = (
+            select(
+                ScenarioClassStats.archetype,
+                func.count(ScenarioClassStats.id).label("class_count"),
+                func.sum(ScenarioClassStats.total_trades).label("total_trades"),
+                func.avg(ScenarioClassStats.winrate).label("avg_wr"),
+                func.avg(ScenarioClassStats.avg_ev_r).label("avg_ev"),
+                func.sum(
+                    case((ScenarioClassStats.is_enabled == False, 1), else_=0)
+                ).label("disabled_count"),
+            )
+            .group_by(ScenarioClassStats.archetype)
+            .order_by(func.sum(ScenarioClassStats.total_trades).desc())
+        )
+
+        result = await session.execute(stmt)
+        rows = result.all()
+
+        response = "🎯 <b>Stats by Archetype</b>\n\n"
+
+        for row in rows:
+            wr = (row.avg_wr or 0) * 100
+            ev = row.avg_ev or 0
+            disabled = row.disabled_count or 0
+
+            status = "❌" if disabled > 0 else "✅"
+            response += f"{status} <b>{row.archetype}</b>\n"
+            response += f"├ Classes: {row.class_count} (disabled: {disabled})\n"
+            response += f"├ Trades: {row.total_trades or 0}\n"
+            response += f"└ Avg EV: {ev:+.2f}R | WR: {wr:.0f}%\n\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_class_stats")]
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing archetype stats: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_cs_recalculate")
+async def admin_class_stats_recalculate(callback: CallbackQuery, session: AsyncSession):
+    """Manually trigger class stats recalculation"""
+    try:
+        await callback.answer("⏳ Запускаю пересчёт...", show_alert=False)
+
+        from src.learning.class_stats_analyzer import class_stats_analyzer
+
+        stats = await class_stats_analyzer.recalculate_stats(
+            session,
+            include_testnet=False
+        )
+
+        response = "✅ <b>Пересчёт завершён!</b>\n\n"
+        response += f"├ Классов обновлено: <b>{stats.get('classes_updated', 0)}</b>\n"
+        response += f"├ L1 (coarse): {stats.get('l1_classes', 0)}\n"
+        response += f"├ L2 (fine): {stats.get('l2_classes', 0)}\n"
+        response += f"├ Сделок обработано: {stats.get('trades_processed', 0)}\n"
+        response += f"└ Disabled: {stats.get('disabled_count', 0)}"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_class_stats")]
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+
+    except Exception as e:
+        logger.exception(f"Error recalculating class stats: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+# ===========================
+# LEARNING SYSTEM STATS
+# ===========================
+
+
+@router.callback_query(F.data == "admin_learning")
+async def admin_learning_menu(callback: CallbackQuery, session: AsyncSession):
+    """Show learning system main menu with overview"""
+    try:
+        from src.database.models import (
+            TradeOutcome, ConfidenceBucket, ArchetypeStats
+        )
+
+        # Feedback stats
+        stmt_trades = select(func.count(TradeOutcome.id))
+        result_trades = await session.execute(stmt_trades)
+        total_trades = result_trades.scalar() or 0
+
+        stmt_wins = select(func.count(TradeOutcome.id)).where(
+            TradeOutcome.label == "win"
+        )
+        result_wins = await session.execute(stmt_wins)
+        total_wins = result_wins.scalar() or 0
+
+        overall_wr = (total_wins / total_trades * 100) if total_trades > 0 else 0
+
+        # Avg PnL
+        stmt_pnl = select(func.avg(TradeOutcome.pnl_r)).where(
+            TradeOutcome.pnl_r.isnot(None)
+        )
+        result_pnl = await session.execute(stmt_pnl)
+        avg_pnl = result_pnl.scalar() or 0
+
+        # Confidence buckets stats
+        stmt_buckets = select(func.count(ConfidenceBucket.id))
+        result_buckets = await session.execute(stmt_buckets)
+        bucket_count = result_buckets.scalar() or 0
+
+        stmt_bucket_samples = select(func.sum(ConfidenceBucket.sample_size))
+        result_samples = await session.execute(stmt_bucket_samples)
+        bucket_samples = result_samples.scalar() or 0
+
+        # Archetype stats
+        stmt_archetypes = select(func.count(ArchetypeStats.id))
+        result_archetypes = await session.execute(stmt_archetypes)
+        archetype_count = result_archetypes.scalar() or 0
+
+        response = "🧠 <b>Learning System</b>\n\n"
+
+        response += "📊 <b>Feedback Data:</b>\n"
+        response += f"├ Всего сделок: <b>{total_trades}</b>\n"
+        response += f"├ Winrate: <b>{overall_wr:.1f}%</b>\n"
+        response += f"└ Avg PnL: <b>{avg_pnl:+.3f}R</b>\n\n"
+
+        response += "🎯 <b>Calibration:</b>\n"
+        response += f"├ Confidence buckets: <b>{bucket_count}</b>\n"
+        response += f"└ Samples: <b>{bucket_samples}</b>\n\n"
+
+        response += "📈 <b>Archetype Stats:</b>\n"
+        response += f"└ Groups: <b>{archetype_count}</b>\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🎯 Confidence", callback_data="admin_learn_confidence"
+                    ),
+                    InlineKeyboardButton(
+                        text="📈 Archetypes", callback_data="admin_learn_archetypes_0"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="📊 EV Distribution", callback_data="admin_learn_ev_dist"
+                    ),
+                    InlineKeyboardButton(
+                        text="📋 Recent Trades", callback_data="admin_learn_recent_0"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔄 Recalculate All", callback_data="admin_learn_recalc"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(text="◀️ Назад", callback_data="admin_refresh"),
+                ],
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing learning menu: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_learn_confidence")
+async def admin_learning_confidence(callback: CallbackQuery, session: AsyncSession):
+    """Show confidence calibration buckets"""
+    try:
+        from src.database.models import ConfidenceBucket
+
+        stmt = (
+            select(ConfidenceBucket)
+            .order_by(ConfidenceBucket.confidence_min)
+        )
+        result = await session.execute(stmt)
+        buckets = result.scalars().all()
+
+        response = "🎯 <b>Confidence Calibration</b>\n\n"
+
+        if not buckets:
+            response += "⚠️ Нет данных калибровки.\n"
+            response += "Запустите пересчёт после накопления сделок."
+        else:
+            response += "Bucket │ Sample │ AI Conf │ Real WR │ Offset\n"
+            response += "───────┼────────┼─────────┼─────────┼───────\n"
+
+            for b in buckets:
+                bucket_mid = (b.confidence_min + b.confidence_max) / 2
+                real_wr = b.actual_winrate_smoothed * 100
+                offset_pct = b.calibration_offset * 100
+
+                # Visual indicator
+                if b.calibration_offset > 0.05:
+                    indicator = "📈"  # AI underconfident
+                elif b.calibration_offset < -0.05:
+                    indicator = "📉"  # AI overconfident
+                else:
+                    indicator = "✅"  # Well calibrated
+
+                response += (
+                    f"{indicator} {b.bucket_name:6} │ "
+                    f"{b.sample_size:6} │ "
+                    f"{bucket_mid*100:5.0f}% │ "
+                    f"{real_wr:5.1f}% │ "
+                    f"{offset_pct:+5.1f}%\n"
+                )
+
+            response += "\n<i>📈 = AI недооценивает, 📉 = переоценивает</i>"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_learning")]
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing confidence: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_learn_archetypes_"))
+async def admin_learning_archetypes(callback: CallbackQuery, session: AsyncSession):
+    """Show archetype statistics with probabilities"""
+    try:
+        from src.database.models import ArchetypeStats
+
+        page = int(callback.data.split("_")[-1])
+        per_page = 8
+        offset = page * per_page
+
+        # Get unique archetypes with aggregated stats
+        stmt = (
+            select(ArchetypeStats)
+            .where(ArchetypeStats.total_trades >= 10)
+            .order_by(ArchetypeStats.total_trades.desc())
+            .offset(offset)
+            .limit(per_page + 1)
+        )
+        result = await session.execute(stmt)
+        stats = result.scalars().all()
+
+        has_more = len(stats) > per_page
+        stats = stats[:per_page]
+
+        response = f"📈 <b>Archetype Stats</b> (стр. {page + 1})\n\n"
+
+        if not stats:
+            response += "⚠️ Нет данных по архетипам.\n"
+        else:
+            for s in stats:
+                wr = s.winrate * 100
+                side_str = s.side[0].upper() if s.side else "?"
+
+                # Calculate probabilities
+                total = s.total_trades
+                p_sl = s.exit_sl_count / total * 100 if total > 0 else 0
+                p_tp1 = s.exit_tp1_count / total * 100 if total > 0 else 0
+                p_tp2 = s.exit_tp2_count / total * 100 if total > 0 else 0
+                p_tp3 = s.exit_tp3_count / total * 100 if total > 0 else 0
+
+                response += f"<b>{s.archetype[:15]}</b> ({side_str})\n"
+                response += f"├ Trades: {total} | WR: {wr:.0f}% | PF: {s.profit_factor:.2f}\n"
+                response += f"├ P(SL): {p_sl:.0f}% P(TP1): {p_tp1:.0f}%\n"
+                response += f"├ P(TP2): {p_tp2:.0f}% P(TP3): {p_tp3:.0f}%\n"
+                response += f"└ MAE: {s.avg_mae_r:.2f}R MFE: {s.avg_mfe_r:.2f}R\n\n"
+
+        buttons = []
+        nav_row = []
+        if page > 0:
+            nav_row.append(
+                InlineKeyboardButton(text="◀️", callback_data=f"admin_learn_archetypes_{page - 1}")
+            )
+        if has_more:
+            nav_row.append(
+                InlineKeyboardButton(text="▶️", callback_data=f"admin_learn_archetypes_{page + 1}")
+            )
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([
+            InlineKeyboardButton(text="◀️ Назад", callback_data="admin_learning")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing archetypes: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_learn_ev_dist")
+async def admin_learning_ev_distribution(callback: CallbackQuery, session: AsyncSession):
+    """Show EV distribution from historical trades"""
+    try:
+        from src.database.models import TradeOutcome
+        import numpy as np
+
+        # Get PnL distribution
+        stmt = (
+            select(TradeOutcome.pnl_r)
+            .where(TradeOutcome.pnl_r.isnot(None))
+            .order_by(TradeOutcome.closed_at.desc())
+            .limit(500)
+        )
+        result = await session.execute(stmt)
+        pnl_values = [r[0] for r in result.all()]
+
+        response = "📊 <b>EV Distribution</b>\n\n"
+
+        if len(pnl_values) < 10:
+            response += "⚠️ Недостаточно данных (нужно >= 10 сделок)"
+        else:
+            pnl_arr = np.array(pnl_values)
+
+            mean_pnl = np.mean(pnl_arr)
+            median_pnl = np.median(pnl_arr)
+            std_pnl = np.std(pnl_arr)
+            p10 = np.percentile(pnl_arr, 10)
+            p25 = np.percentile(pnl_arr, 25)
+            p75 = np.percentile(pnl_arr, 75)
+            p90 = np.percentile(pnl_arr, 90)
+
+            # Histogram buckets
+            bins = [-3, -2, -1, -0.5, 0, 0.5, 1, 2, 3, 5, 10]
+            hist, _ = np.histogram(pnl_arr, bins=bins)
+
+            response += f"📈 <b>Статистика ({len(pnl_values)} trades):</b>\n"
+            response += f"├ Mean EV: <b>{mean_pnl:+.3f}R</b>\n"
+            response += f"├ Median: {median_pnl:+.3f}R\n"
+            response += f"├ Std Dev: {std_pnl:.3f}R\n"
+            response += f"├ P10: {p10:+.2f}R | P90: {p90:+.2f}R\n"
+            response += f"└ P25: {p25:+.2f}R | P75: {p75:+.2f}R\n\n"
+
+            response += "📊 <b>Distribution:</b>\n"
+            max_count = max(hist) if max(hist) > 0 else 1
+
+            for i, count in enumerate(hist):
+                if i < len(bins) - 1:
+                    label = f"{bins[i]:+.1f} to {bins[i+1]:+.1f}"
+                    bar_len = int(count / max_count * 10)
+                    bar = "█" * bar_len + "░" * (10 - bar_len)
+                    response += f"{label:12} {bar} {count}\n"
+
+            # Win/Loss ratio
+            wins = sum(1 for p in pnl_arr if p > 0)
+            losses = sum(1 for p in pnl_arr if p < 0)
+            wr = wins / len(pnl_arr) * 100
+
+            response += f"\n✅ Wins: {wins} | ❌ Losses: {losses} | WR: {wr:.1f}%"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_learning")]
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing EV distribution: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_learn_recent_"))
+async def admin_learning_recent_trades(callback: CallbackQuery, session: AsyncSession):
+    """Show recent trades for learning"""
+    try:
+        from src.database.models import TradeOutcome
+
+        page = int(callback.data.split("_")[-1])
+        per_page = 10
+        offset = page * per_page
+
+        stmt = (
+            select(TradeOutcome)
+            .where(TradeOutcome.closed_at.isnot(None))
+            .order_by(TradeOutcome.closed_at.desc())
+            .offset(offset)
+            .limit(per_page + 1)
+        )
+        result = await session.execute(stmt)
+        trades = result.scalars().all()
+
+        has_more = len(trades) > per_page
+        trades = trades[:per_page]
+
+        response = f"📋 <b>Recent Trades</b> (стр. {page + 1})\n\n"
+
+        if not trades:
+            response += "⚠️ Нет закрытых сделок"
+        else:
+            for t in trades:
+                # Outcome emoji
+                if t.label == "win":
+                    emoji = "✅"
+                elif t.label == "loss":
+                    emoji = "❌"
+                else:
+                    emoji = "⚪"
+
+                pnl = t.pnl_r or 0
+                arch = (t.primary_archetype or "?")[:12]
+                side = (t.side or "?")[0].upper()
+
+                closed = t.closed_at.strftime("%d.%m %H:%M") if t.closed_at else "?"
+
+                response += f"{emoji} <b>{t.symbol}</b> {side} | {arch}\n"
+                response += f"   PnL: <b>{pnl:+.2f}R</b> | {closed}\n"
+
+        buttons = []
+        nav_row = []
+        if page > 0:
+            nav_row.append(
+                InlineKeyboardButton(text="◀️", callback_data=f"admin_learn_recent_{page - 1}")
+            )
+        if has_more:
+            nav_row.append(
+                InlineKeyboardButton(text="▶️", callback_data=f"admin_learn_recent_{page + 1}")
+            )
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([
+            InlineKeyboardButton(text="◀️ Назад", callback_data="admin_learning")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing recent trades: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_learn_recalc")
+async def admin_learning_recalculate(callback: CallbackQuery, session: AsyncSession):
+    """Manually trigger full learning recalculation"""
+    try:
+        await callback.answer("⏳ Запускаю пересчёт всех систем...", show_alert=False)
+
+        from src.learning.scheduler import learning_scheduler
+
+        # Trigger all recalculations
+        await learning_scheduler.trigger_recalculation(include_testnet=False)
+
+        response = "✅ <b>Пересчёт завершён!</b>\n\n"
+        response += "Обновлено:\n"
+        response += "├ Confidence Calibration\n"
+        response += "├ Archetype Statistics\n"
+        response += "└ Class Stats (Context Gates)"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_learning")]
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+
+    except Exception as e:
+        logger.exception(f"Error recalculating learning: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)

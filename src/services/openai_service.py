@@ -4,9 +4,8 @@ OpenAI API Service with streaming support and Vision capabilities
 """
 import base64
 import json
-import logging
+import logging  # Needed for tenacity before_sleep_log level constants
 from typing import AsyncGenerator, Optional, List, Tuple, Dict, Any
-from datetime import datetime
 
 import tiktoken
 from openai import (
@@ -26,7 +25,14 @@ from tenacity import (
     before_sleep_log,
 )
 
-from config.config import OPENAI_API_KEY, ModelConfig, Pricing
+from config.config import (
+    OPENAI_API_KEY,
+    DEEPSEEK_API_KEY,
+    DEEPSEEK_BASE_URL,
+    ModelConfig,
+    Pricing,
+)
+from config.limits import get_token_limits
 from config.prompt_selector import (
     get_system_prompt,
     get_few_shot_examples,
@@ -34,12 +40,19 @@ from config.prompt_selector import (
     get_enhanced_vision_prompt,
     get_coin_detection_prompt,
 )
-from src.database.crud import add_chat_message, get_chat_history, track_cost
-from src.utils.vision_tokens import calculate_image_tokens, estimate_vision_cost
+from src.database.crud import (
+    add_chat_message,
+    get_chat_history,
+    track_cost,
+    add_chat_message_to_chat,
+    get_chat_messages,
+)
+from src.database.models import SubscriptionTier
+from src.utils.vision_tokens import calculate_image_tokens
 from src.services.crypto_tools import CRYPTO_TOOLS, execute_tool
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class OpenAIService:
@@ -55,9 +68,46 @@ class OpenAIService:
     """
 
     def __init__(self):
-        """Initialize OpenAI client"""
-        self.client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+        """
+        Initialize BOTH OpenAI and DeepSeek clients
+
+        Client selection is now DYNAMIC based on user's subscription tier:
+        - FREE/BASIC → DeepSeek (cheapest)
+        - PREMIUM/VIP → OpenAI GPT-4o for complex queries
+
+        This replaces the old global AI_PROVIDER setting.
+        """
+        # Initialize OpenAI client
+        logger.info("🔧 Initializing OpenAI client (for GPT-4o, GPT-4o-mini, Vision)")
+        self.openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+        # Initialize DeepSeek client (OpenAI-compatible API)
+        logger.info("🔧 Initializing DeepSeek client (for deepseek-chat)")
+        self.deepseek_client = AsyncOpenAI(
+            api_key=DEEPSEEK_API_KEY,
+            base_url=DEEPSEEK_BASE_URL,
+        )
+
+        # Vision always uses OpenAI
+        self.vision_client = self.openai_client
+
+        # Tokenizer (same for all models)
         self.encoding = tiktoken.encoding_for_model("gpt-4o")
+
+    def _get_client_for_model(self, model: str) -> AsyncOpenAI:
+        """
+        Get appropriate client for the specified model
+
+        Args:
+            model: Model name (e.g., "gpt-4o", "deepseek-chat")
+
+        Returns:
+            AsyncOpenAI client (either OpenAI or DeepSeek)
+        """
+        if "deepseek" in model.lower():
+            return self.deepseek_client
+        else:
+            return self.openai_client
 
     def count_tokens(self, text: str) -> int:
         """
@@ -71,21 +121,56 @@ class OpenAIService:
         """
         return len(self.encoding.encode(text))
 
-    def select_model(self, user_message: str, history_tokens: int = 0) -> str:
+    def select_model(self, user_message: str, history_tokens: int = 0, user_tier: str = "free") -> str:
         """
-        Smart model selection based on message complexity and keywords
+        Smart model selection based on TIER, message complexity and keywords
+
+        🚨 CRITICAL: FREE and BASIC users ALWAYS get cheap models (no GPT-4o)!
+        Only PREMIUM+ can get GPT-4o for complex queries.
 
         Args:
             user_message: User's message
             history_tokens: Tokens in chat history
+            user_tier: User's subscription tier (free, basic, premium, vip)
 
         Returns:
-            Model name (gpt-4o or gpt-4o-mini)
+            Model name based on AI_PROVIDER and tier:
+            - OpenAI: "gpt-4o" or "gpt-4o-mini"
+            - DeepSeek: "deepseek-chat" (same for both cases, no mini version)
         """
+        from config.limits import get_model_config
+
+        # Get model config for user's tier
+        try:
+            tier_enum = SubscriptionTier(user_tier)
+        except ValueError:
+            logger.warning(f"Invalid tier '{user_tier}', defaulting to FREE")
+            tier_enum = SubscriptionTier.FREE
+
+        model_config = get_model_config(tier_enum)
+
+        # FREE and BASIC: ALWAYS use cheap primary model (gpt-4o-mini or deepseek)
+        if user_tier in ["free", "basic"]:
+            model = model_config["primary_model"]
+            logger.info(
+                f"Tier {user_tier.upper()}: Using primary model {model} (no routing)"
+            )
+            return model
+
+        # PREMIUM and VIP: Smart routing (can use expensive model for complex tasks)
+        if not model_config.get("use_advanced_routing", False):
+            # If advanced routing disabled, use primary model
+            model = model_config["primary_model"]
+            logger.info(
+                f"Tier {user_tier.upper()}: Using primary model {model} (routing disabled)"
+            )
+            return model
+
+        # Advanced routing enabled: check complexity
         message_tokens = self.count_tokens(user_message)
         total_tokens = message_tokens + history_tokens
 
-        # Keywords indicating complex analysis requiring GPT-4o
+        # Keywords indicating complex analysis requiring main model
         complex_keywords = [
             "анализ",
             "стратегия",
@@ -113,17 +198,20 @@ class OpenAIService:
             keyword in message_lower for keyword in complex_keywords
         )
 
-        # Use GPT-4o if:
-        # 1. Message has complex keywords, OR
-        # 2. Total tokens exceed threshold
+        # Use reasoning model (expensive) if complex OR high token count
         if has_complex_keywords or total_tokens > ModelConfig.MODEL_ROUTING_THRESHOLD:
+            model = model_config["reasoning_model"]  # gpt-4o for PREMIUM+
             logger.info(
-                f"Using GPT-4O (tokens: {total_tokens}, complex: {has_complex_keywords})"
+                f"Tier {user_tier.upper()}: Using reasoning model {model} "
+                f"(tokens: {total_tokens}, complex: {has_complex_keywords})"
             )
-            return ModelConfig.GPT_4O
+            return model
         else:
-            logger.info(f"Using GPT-4O-MINI (tokens: {total_tokens})")
-            return ModelConfig.GPT_4O_MINI
+            model = model_config["primary_model"]  # gpt-4o-mini
+            logger.info(
+                f"Tier {user_tier.upper()}: Using primary model {model} (tokens: {total_tokens})"
+            )
+            return model
 
     async def get_context_messages(
         self,
@@ -131,10 +219,11 @@ class OpenAIService:
         user_id: int,
         current_message: str,
         user_language: str = "ru",
-        max_history: int = 5,
+        user_tier: str = "free",
+        chat_id: Optional[int] = None,
     ) -> List[ChatCompletionMessageParam]:
         """
-        Build context messages from chat history
+        Build context messages from chat history (tier-aware)
 
         OpenAI Cached Prompts Optimization:
         - System prompt is placed FIRST (required for caching)
@@ -146,35 +235,72 @@ class OpenAIService:
         Message Structure:
         [system_prompt] + [few_shot_examples] + [history] + [user_message]
 
+        Tier-based History:
+        - FREE: 0 messages (no memory)
+        - BASIC: 5 messages
+        - PREMIUM: 10 messages
+        - VIP: 50 messages
+
         Args:
             session: Database session
             user_id: User's database ID (NOT Telegram ID)
             current_message: Current user message
             user_language: User's language ('ru' or 'en')
-            max_history: Maximum number of history messages to include
+            user_tier: User's subscription tier (free, basic, premium, vip)
+            chat_id: Optional chat ID for multiple chats support
 
         Returns:
             List of messages for OpenAI API
         """
+        from config.limits import get_chat_history_limit
+
+        # Get tier enum
+        try:
+            tier_enum = SubscriptionTier(user_tier)
+        except ValueError:
+            logger.warning(f"Invalid tier '{user_tier}', defaulting to FREE")
+            tier_enum = SubscriptionTier.FREE
+
+        # Get history limit for tier (0 for FREE = no memory)
+        max_history = get_chat_history_limit(tier_enum)
+
+        logger.info(
+            f"User {user_id} tier={user_tier}: chat_history_limit={max_history} messages, chat_id={chat_id}"
+        )
+
         # System prompt MUST be first for automatic caching
         # Auto-detect sarcasm mode from current message
         messages: List[ChatCompletionMessageParam] = [
             {
                 "role": "system",
-                "content": get_system_prompt(user_language, user_message=current_message),
+                "content": get_system_prompt(
+                    user_language, user_message=current_message, tier=tier_enum
+                ),
             }
         ]
 
         # Add few-shot examples for tone training (AFTER system, BEFORE history)
-        few_shot = get_few_shot_examples(user_language, user_message=current_message)
+        few_shot = get_few_shot_examples(
+            user_language, user_message=current_message, tier=tier_enum
+        )
         messages.extend(few_shot)
 
-        # Get recent chat history
-        history = await get_chat_history(session, user_id, limit=max_history)
+        # Get recent chat history (only if tier allows it)
+        if max_history > 0:
+            # If chat_id provided, use new chat system
+            if chat_id:
+                history = await get_chat_messages(session, chat_id, limit=max_history)
+                logger.debug(f"Loaded {len(history)} messages from chat {chat_id}")
+            else:
+                # Fallback to old system for backward compatibility
+                history = await get_chat_history(session, user_id, limit=max_history)
+                logger.debug(f"Loaded {len(history)} messages from old chat_history")
 
-        # Add history messages (oldest first)
-        for msg in reversed(history):
-            messages.append({"role": msg.role, "content": msg.content})
+            # Add history messages (oldest first)
+            for msg in reversed(history):
+                messages.append({"role": msg.role, "content": msg.content})
+        else:
+            logger.info(f"User {user_id} on FREE tier - no chat history loaded")
 
         # Add current message
         messages.append({"role": "user", "content": current_message})
@@ -187,8 +313,10 @@ class OpenAIService:
         user_id: int,
         user_message: str,
         user_language: str = "ru",
+        user_tier: str = "free",
         model: Optional[str] = None,
         use_tools: bool = True,
+        chat_id: Optional[int] = None,
     ) -> AsyncGenerator[str, None]:
         """
         Stream chat completion from OpenAI with Function Calling support
@@ -198,30 +326,62 @@ class OpenAIService:
             user_id: User's database ID (NOT Telegram ID)
             user_message: User's message
             user_language: User's language ('ru' or 'en')
+            user_tier: User's subscription tier (free, basic, premium, vip)
             model: Model to use (auto-selected if None)
             use_tools: Enable Function Calling (crypto tools)
+            chat_id: Optional chat ID for multiple chats support
 
         Yields:
             Text chunks from OpenAI
         """
         try:
-            # Build context messages
+            # Build context messages (tier-aware)
             messages = await self.get_context_messages(
-                session, user_id, user_message, user_language
+                session, user_id, user_message, user_language, user_tier, chat_id
             )
 
             # Calculate history tokens
             history_text = "\n".join([m["content"] for m in messages[:-1]])
             history_tokens = self.count_tokens(history_text)
 
-            # Select model if not provided
+            # Select model if not provided (tier-aware routing)
             if model is None:
-                model = self.select_model(user_message, history_tokens)
+                model = self.select_model(user_message, history_tokens, user_tier)
 
-            # Save user message to history
-            await add_chat_message(
-                session, user_id=user_id, role="user", content=user_message
+            # Get token limits for user's tier
+            try:
+                tier_enum = SubscriptionTier(user_tier)
+            except ValueError:
+                logger.warning(f"Invalid tier '{user_tier}', defaulting to FREE")
+                tier_enum = SubscriptionTier.FREE
+
+            token_limits = get_token_limits(tier_enum)
+            max_output = token_limits["max_output_tokens"]
+
+            logger.info(
+                f"User {user_id} tier={user_tier}: max_output_tokens={max_output}"
             )
+
+            # Save user message to history (only for tiers with save_chat_history=True)
+            from config.limits import should_save_chat_history
+
+            if should_save_chat_history(tier_enum):
+                if chat_id:
+                    # Use new chat system
+                    await add_chat_message_to_chat(
+                        session, chat_id=chat_id, role="user", content=user_message
+                    )
+                    logger.debug(f"User message saved to chat {chat_id} for tier {user_tier}")
+                else:
+                    # Fallback to old system for backward compatibility
+                    await add_chat_message(
+                        session, user_id=user_id, role="user", content=user_message
+                    )
+                    logger.debug(f"User message saved to old history for tier {user_tier}")
+            else:
+                logger.debug(
+                    f"User message NOT saved to history for tier {user_tier} (save_chat_history=False)"
+                )
 
             # Create streaming completion with tools
             logger.info(
@@ -229,20 +389,32 @@ class OpenAIService:
             )
 
             # Build API call parameters
+            # Reasoning models (o3, o4, gpt-5.x) require max_completion_tokens instead of max_tokens
+            is_reasoning_model = any(
+                x in model.lower() for x in ["o3-", "o4-", "gpt-5", "o1-"]
+            )
+
             api_params = {
                 "model": model,
                 "messages": messages,
-                "max_tokens": ModelConfig.MAX_TOKENS_RESPONSE,
-                "temperature": ModelConfig.DEFAULT_TEMPERATURE,
                 "stream": True,
             }
+
+            if is_reasoning_model:
+                api_params["max_completion_tokens"] = max_output
+                # Reasoning models don't support temperature
+            else:
+                api_params["max_tokens"] = max_output
+                api_params["temperature"] = ModelConfig.DEFAULT_TEMPERATURE
 
             # Add tools if enabled
             if use_tools:
                 api_params["tools"] = CRYPTO_TOOLS
                 api_params["tool_choice"] = "auto"  # Let AI decide when to use tools
 
-            stream = await self.client.chat.completions.create(**api_params)
+            # Select appropriate client based on model
+            client = self._get_client_for_model(model)
+            stream = await client.chat.completions.create(**api_params)
 
             full_response = ""
             input_tokens = 0
@@ -318,11 +490,11 @@ class OpenAIService:
                         # Parse arguments
                         tool_args = json.loads(tool_args_json)
 
-                        # Execute tool
+                        # Execute tool (with tier gating!)
                         logger.info(
-                            f"Executing tool: {tool_name} with args: {tool_args}"
+                            f"Executing tool: {tool_name} with args: {tool_args}, tier: {user_tier}"
                         )
-                        tool_result = await execute_tool(tool_name, tool_args)
+                        tool_result = await execute_tool(tool_name, tool_args, user_tier)
 
                         # Add tool result to messages
                         messages.append(
@@ -359,7 +531,8 @@ class OpenAIService:
                 api_params.pop("tools", None)
                 api_params.pop("tool_choice", None)
 
-                second_stream = await self.client.chat.completions.create(**api_params)
+                # Use same client for second call
+                second_stream = await client.chat.completions.create(**api_params)
 
                 # Stream final response
                 async for chunk in second_stream:
@@ -382,20 +555,34 @@ class OpenAIService:
             # Calculate cost
             cost = self.calculate_cost(model, input_tokens, output_tokens)
 
-            # Save assistant response to history
-            await add_chat_message(
-                session, user_id=user_id, role="assistant", content=full_response
-            )
+            # Save assistant response to history (only for tiers with save_chat_history=True)
+            if should_save_chat_history(tier_enum):
+                if chat_id:
+                    # Use new chat system
+                    await add_chat_message_to_chat(
+                        session, chat_id=chat_id, role="assistant", content=full_response,
+                        tokens_used=output_tokens, model=model
+                    )
+                    logger.debug(f"Assistant response saved to chat {chat_id} for tier {user_tier}")
+                else:
+                    # Fallback to old system for backward compatibility
+                    await add_chat_message(
+                        session, user_id=user_id, role="assistant", content=full_response
+                    )
+                    logger.debug(f"Assistant response saved to old history for tier {user_tier}")
+            else:
+                logger.debug(
+                    f"Assistant response NOT saved to history for tier {user_tier} (save_chat_history=False)"
+                )
 
             # Track cost
             await track_cost(
                 session,
                 user_id=user_id,
                 service="openai",
-                model=model,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
+                tokens=input_tokens + output_tokens,
                 cost=cost,
+                model=model,
             )
 
             logger.info(
@@ -414,7 +601,7 @@ class OpenAIService:
         self, model: str, input_tokens: int, output_tokens: int
     ) -> float:
         """
-        Calculate cost for API call
+        Calculate cost for API call (supports both OpenAI and DeepSeek)
 
         Args:
             model: Model name
@@ -424,12 +611,42 @@ class OpenAIService:
         Returns:
             Cost in USD
         """
-        if model == ModelConfig.GPT_4O:
+        # DeepSeek models
+        if model in (ModelConfig.DEEPSEEK_CHAT, ModelConfig.DEEPSEEK_REASONER):
+            # Use cache miss pricing (conservative estimate)
+            # In reality, DeepSeek caches prompts automatically, reducing cost to $0.028/1M
+            input_cost = (input_tokens / 1_000_000) * Pricing.DEEPSEEK_INPUT
+            output_cost = (output_tokens / 1_000_000) * Pricing.DEEPSEEK_OUTPUT
+
+        # OpenAI GPT-5.1 (2025 flagship)
+        elif model == ModelConfig.GPT_5_1:
+            input_cost = (input_tokens / 1_000_000) * Pricing.GPT_5_1_INPUT
+            output_cost = (output_tokens / 1_000_000) * Pricing.GPT_5_1_OUTPUT
+
+        # OpenAI GPT-5-mini
+        elif model == ModelConfig.GPT_5_MINI:
+            input_cost = (input_tokens / 1_000_000) * Pricing.GPT_5_MINI_INPUT
+            output_cost = (output_tokens / 1_000_000) * Pricing.GPT_5_MINI_OUTPUT
+
+        # OpenAI GPT-4o
+        elif model == ModelConfig.GPT_4O:
             input_cost = (input_tokens / 1_000_000) * Pricing.GPT_4O_INPUT
             output_cost = (output_tokens / 1_000_000) * Pricing.GPT_4O_OUTPUT
+
+        # OpenAI GPT-4o-mini
         elif model == ModelConfig.GPT_4O_MINI:
             input_cost = (input_tokens / 1_000_000) * Pricing.GPT_4O_MINI_INPUT
             output_cost = (output_tokens / 1_000_000) * Pricing.GPT_4O_MINI_OUTPUT
+
+        # OpenAI Reasoning models (o4-mini, o3-mini)
+        elif model == ModelConfig.O4_MINI:
+            input_cost = (input_tokens / 1_000_000) * Pricing.O4_MINI_INPUT
+            output_cost = (output_tokens / 1_000_000) * Pricing.O4_MINI_OUTPUT
+
+        elif model == ModelConfig.O3_MINI:
+            input_cost = (input_tokens / 1_000_000) * Pricing.O3_MINI_INPUT
+            output_cost = (output_tokens / 1_000_000) * Pricing.O3_MINI_OUTPUT
+
         else:
             logger.warning(f"Unknown model for cost calculation: {model}")
             input_cost = 0
@@ -467,7 +684,9 @@ class OpenAIService:
             Response text
         """
         try:
-            response = await self.client.chat.completions.create(
+            # Select appropriate client based on model
+            client = self._get_client_for_model(model)
+            response = await client.chat.completions.create(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=temperature,
@@ -478,6 +697,73 @@ class OpenAIService:
         except Exception as e:
             logger.exception(f"Error in simple completion: {e}")
             return ""
+
+    async def structured_completion(
+        self,
+        prompt: str,
+        json_schema: Dict,
+        model: str = ModelConfig.GPT_4O,
+        temperature: float | None = None,  # None = don't send (for reasoning models)
+    ) -> Dict:
+        """
+        🎯 Structured completion с ГАРАНТИРОВАННЫМ валидным JSON
+
+        Использует OpenAI Structured Outputs для гарантии:
+        - Валидный JSON (не сломается при парсинге)
+        - Все required поля присутствуют
+        - Правильные типы данных
+        - Enum values соблюдены
+
+        Args:
+            prompt: Prompt text
+            json_schema: JSON Schema для response format
+            model: Model to use (только gpt-4o / gpt-4o-mini поддерживают structured outputs)
+            temperature: Temperature setting
+
+        Returns:
+            Parsed JSON dict (ГАРАНТИРОВАННО валидный!)
+
+        Example:
+            schema = {
+                "name": "trading_scenarios",
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "scenarios": {"type": "array", "items": {...}},
+                        "market_summary": {"type": "string"}
+                    },
+                    "required": ["scenarios", "market_summary"]
+                },
+                "strict": True
+            }
+            result = await openai_service.structured_completion(prompt, schema)
+        """
+        try:
+            # Только OpenAI поддерживает structured outputs (не DeepSeek)
+            # Build params - temperature optional (reasoning models don't support it)
+            params = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": json_schema
+                }
+            }
+            if temperature is not None:
+                params["temperature"] = temperature
+
+            response = await self.openai_client.chat.completions.create(**params)
+
+            # Парсим JSON из ответа
+            content = response.choices[0].message.content
+            if not content:
+                raise ValueError("Empty response from OpenAI")
+
+            return json.loads(content)
+
+        except Exception as e:
+            logger.exception(f"Error in structured completion: {e}")
+            raise
 
     def encode_image(self, image_bytes: bytes) -> str:
         """
@@ -516,7 +802,7 @@ class OpenAIService:
         try:
             base64_image = self.encode_image(image_bytes)
 
-            response = await self.client.chat.completions.create(
+            response = await self.vision_client.chat.completions.create(
                 model=ModelConfig.GPT_4O_MINI,  # Use mini for quick detection
                 messages=[
                     {
@@ -635,7 +921,7 @@ class OpenAIService:
             ]
 
             # Create streaming completion
-            stream = await self.client.chat.completions.create(
+            stream = await self.vision_client.chat.completions.create(
                 model=ModelConfig.GPT_4O,  # Vision requires GPT-4o
                 messages=messages,
                 max_tokens=ModelConfig.MAX_TOKENS_VISION,
@@ -672,10 +958,9 @@ class OpenAIService:
                 session,
                 user_id=user_id,
                 service="openai_vision",
-                model=ModelConfig.GPT_4O,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
+                tokens=input_tokens + output_tokens,
                 cost=cost,
+                model=ModelConfig.GPT_4O,
             )
 
             logger.info(
@@ -785,7 +1070,7 @@ class OpenAIService:
             ]
 
             # Call OpenAI Vision API
-            response = await self.client.chat.completions.create(
+            response = await self.vision_client.chat.completions.create(
                 model=ModelConfig.GPT_4O,  # Vision requires GPT-4o
                 messages=messages,
                 max_tokens=ModelConfig.MAX_TOKENS_VISION,
@@ -815,10 +1100,9 @@ class OpenAIService:
                 session,
                 user_id=user_id,
                 service="openai_vision",
-                model=ModelConfig.GPT_4O,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
+                tokens=input_tokens + output_tokens,
                 cost=cost,
+                model=ModelConfig.GPT_4O,
             )
 
             # Prepare stats
@@ -852,6 +1136,8 @@ class OpenAIService:
         """
         Calculate cost for Vision API call
 
+        Vision always uses OpenAI GPT-4o, regardless of AI_PROVIDER setting.
+
         Args:
             input_tokens: Input tokens (includes image tokens)
             output_tokens: Output tokens
@@ -863,3 +1149,87 @@ class OpenAIService:
         output_cost = (output_tokens / 1_000_000) * Pricing.GPT_4O_VISION_OUTPUT
 
         return input_cost + output_cost
+
+    async def generate_chat_title(
+        self, user_message: str, assistant_response: str, user_language: str = "ru"
+    ) -> str:
+        """
+        Generate short chat title (3-5 words) from first message exchange
+
+        Uses GPT-4o-mini for fast and cheap title generation.
+
+        Args:
+            user_message: User's first message
+            assistant_response: AI's first response
+            user_language: User's language ('ru' or 'en')
+
+        Returns:
+            Short title (3-5 words) summarizing the chat topic
+        """
+        try:
+            # Build prompt for title generation
+            if user_language == "ru":
+                prompt = f"""Создай краткое название чата (3-5 слов) на основе этого диалога:
+
+Пользователь: {user_message[:200]}
+Ассистент: {assistant_response[:200]}
+
+Требования:
+- Только название, без кавычек и точки
+- 3-5 слов максимум
+- На русском языке
+- Отражает тему разговора
+- Без эмодзи
+
+Примеры хороших названий:
+- Анализ Bitcoin
+- Сравнение ETH и SOL
+- Прогноз криптовалют
+- Технический анализ BTC
+
+Название:"""
+            else:
+                prompt = f"""Create a short chat title (3-5 words) based on this dialogue:
+
+User: {user_message[:200]}
+Assistant: {assistant_response[:200]}
+
+Requirements:
+- Title only, no quotes or period
+- 3-5 words maximum
+- In English
+- Reflects the conversation topic
+- No emojis
+
+Examples of good titles:
+- Bitcoin Analysis
+- ETH vs SOL Comparison
+- Crypto Forecast
+- BTC Technical Analysis
+
+Title:"""
+
+            # Generate title using GPT-4o-mini (cheap and fast)
+            title = await self.simple_completion(
+                prompt=prompt,
+                model=ModelConfig.GPT_4O_MINI,
+                temperature=0.7,
+            )
+
+            # Clean up title (remove quotes, extra spaces, etc.)
+            title = title.strip().strip('"').strip("'").strip()
+
+            # Limit length
+            if len(title) > 60:
+                title = title[:60].rsplit(" ", 1)[0] + "..."
+
+            # Fallback if generation failed
+            if not title or len(title) < 3:
+                title = "New Chat" if user_language == "en" else "Новый чат"
+
+            logger.info(f"Generated chat title: '{title}'")
+            return title
+
+        except Exception as e:
+            logger.error(f"Failed to generate chat title: {e}")
+            return "New Chat" if user_language == "en" else "Новый чат"

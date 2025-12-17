@@ -1,14 +1,28 @@
 /**
  * Header Component
- * Верхний header с логотипом и балансом
+ * Адаптивный header: full-width на desktop, centered на mobile
  * Поддерживает кастомные заголовки и кнопку назад
+ * Mobile (web): Hamburger menu слева для открытия sidebar
  */
 
 'use client';
 
 import { useRouter } from 'next/navigation';
 import { useUserStore } from '@/shared/store/userStore';
-import LanguageSwitcher from '@/components/LanguageSwitcher';
+import { usePlatform } from '@/lib/platform';
+import LanguageSwitcher from '@/components/layout/LanguageSwitcher';
+import PointsBalance from '@/components/points/PointsBalance';
+import { useSidebar } from './DesktopLayout';
+import { vibrate } from '@/shared/telegram/vibration';
+
+// Safe wrapper для useSidebar (может быть не в контексте DesktopLayout)
+function useSidebarSafe() {
+  try {
+    return useSidebar();
+  } catch {
+    return null;
+  }
+}
 
 interface HeaderProps {
   title?: string;
@@ -25,8 +39,13 @@ export default function Header({
 }: HeaderProps = {}) {
   const user = useUserStore((state) => state.user);
   const router = useRouter();
+  const { platformType } = usePlatform();
+
+  const isDesktop = platformType === 'web';
+  const sidebar = useSidebarSafe();
 
   const handleBack = () => {
+    vibrate('light');
     if (onBack) {
       onBack();
     } else {
@@ -35,22 +54,50 @@ export default function Header({
   };
 
   return (
-    <header className="glassmorphism-header px-4 py-3">
-      <div className="flex items-center justify-between max-w-[520px] mx-auto">
+    <header className="border-b border-white/5 bg-black/80 backdrop-blur-lg px-4 py-1.5 lg:px-6">
+      <div
+        className={`
+        flex items-center justify-between
+        ${isDesktop ? 'max-w-full' : 'max-w-[520px] mx-auto'}
+      `}
+      >
         {/* Left Section */}
         <div className="flex items-center gap-3">
-          {/* Back Button (если showBack=true) */}
-          {showBack && (
+          {/* Hamburger Menu Button (Mobile Web Only) */}
+          {isDesktop && sidebar && (
             <button
-              onClick={handleBack}
-              className="w-9 h-9 rounded-full bg-gray-800/50 hover:bg-gray-700/50 flex items-center justify-center transition-colors active:scale-95"
+              onClick={() => { vibrate('light'); sidebar.toggleSidebar(); }}
+              className="lg:hidden p-2 -ml-2 rounded-lg hover:bg-white/5 transition-colors"
+              aria-label="Toggle sidebar"
             >
               <svg
                 width="20"
                 height="20"
                 viewBox="0 0 24 24"
                 fill="none"
-                stroke="white"
+                stroke="currentColor"
+                strokeWidth="2"
+                className="text-gray-400"
+              >
+                <line x1="3" y1="6" x2="21" y2="6"></line>
+                <line x1="3" y1="12" x2="21" y2="12"></line>
+                <line x1="3" y1="18" x2="21" y2="18"></line>
+              </svg>
+            </button>
+          )}
+
+          {/* Back Button (если showBack=true) */}
+          {showBack && (
+            <button
+              onClick={handleBack}
+              className="text-gray-400 hover:text-white transition-colors"
+            >
+              <svg
+                width="20"
+                height="20"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
                 strokeWidth="2"
               >
                 <path d="M19 12H5M12 19l-7-7 7-7" />
@@ -58,35 +105,25 @@ export default function Header({
             </button>
           )}
 
-          {/* Title или Logo */}
-          {title ? (
-            <h1 className="text-white font-bold text-lg">{title}</h1>
-          ) : (
-            <>
-              <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center">
-                <span className="text-white text-lg font-bold">S</span>
-              </div>
-              <div>
-                <h1 className="text-white font-bold text-lg">Syntra</h1>
-                <p className="text-gray-400 text-xs">AI Trade Consultant</p>
-              </div>
-            </>
+          {/* Syntra AI Title - показываем на мобилке web */}
+          {isDesktop && (
+            <span className="text-white font-semibold text-base lg:hidden">Syntra AI</span>
+          )}
+
+          {/* Original Title - показываем на desktop или если не web */}
+          {(!isDesktop || title) && (
+            <span className="text-white font-semibold text-sm hidden lg:block">{title || 'Syntra AI'}</span>
           )}
         </div>
 
-        {/* Right Section: Language Switcher and Balance */}
-        <div className="flex items-center gap-2">
+        {/* Right Section: Points Balance and Language Switcher */}
+        <div className="flex items-center gap-2.5">
           {/* Language Switcher */}
           <LanguageSwitcher />
 
-          {/* Balance (если пользователь авторизован и showBalance=true) */}
-          {user && showBalance && user.balance !== undefined && (
-            <div className="glassmorphism rounded-full px-3 py-1.5">
-              <p className="text-xs text-gray-400">Balance</p>
-              <p className="text-sm font-bold text-white">
-                ${user.balance.toFixed(2)}
-              </p>
-            </div>
+          {/* $SYNTRA Points Balance */}
+          {user && showBalance && (
+            <PointsBalance />
           )}
         </div>
       </div>

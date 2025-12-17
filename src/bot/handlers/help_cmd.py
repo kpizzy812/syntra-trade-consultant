@@ -2,16 +2,20 @@
 /help command handler
 """
 
-import logging
-
 from aiogram import Router
 from aiogram.filters import Command
 from aiogram.types import Message
+from aiogram.enums import ParseMode
+from loguru import logger
 
 from src.utils.i18n import i18n
+from config.config import (
+    TERMS_OF_SERVICE_URL_RU,
+    TERMS_OF_SERVICE_URL_EN,
+    PRIVACY_POLICY_URL_RU,
+    PRIVACY_POLICY_URL_EN,
+)
 
-
-logger = logging.getLogger(__name__)
 router = Router(name="help")
 
 
@@ -24,6 +28,10 @@ async def cmd_help(message: Message, user_language: str = "ru"):
         message: Incoming message
         user_language: User language (provided by LanguageMiddleware)
     """
+    # Get URLs based on language
+    terms_url = TERMS_OF_SERVICE_URL_RU if user_language == "ru" else TERMS_OF_SERVICE_URL_EN
+    privacy_url = PRIVACY_POLICY_URL_RU if user_language == "ru" else PRIVACY_POLICY_URL_EN
+
     # Build help text from translations
     help_text = f"""{i18n.get('help.title', user_language)}
 
@@ -50,8 +58,9 @@ async def cmd_help(message: Message, user_language: str = "ru"):
 {i18n.get('help.limits_text', user_language)}
 
 {i18n.get('help.footer', user_language)}
+{i18n.get('help.legal_documents', user_language, terms_url=terms_url, privacy_url=privacy_url)}
 """
 
-    await message.answer(help_text)
+    await message.answer(help_text, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
 
     logger.info(f"Help shown to user {message.from_user.id}")

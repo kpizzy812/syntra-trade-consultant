@@ -14,7 +14,7 @@ Free tier includes:
 Requires API key (free registration at coinmarketcap.com/api)
 """
 import time
-import logging
+import logging  # Needed for tenacity before_sleep_log
 from typing import Optional, Dict, Any, List
 
 import aiohttp

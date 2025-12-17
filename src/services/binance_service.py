@@ -7,11 +7,10 @@ Uses Binance public API (no authentication required).
 
 Optional: With API keys, provides liquidation data and advanced features.
 """
-import logging
-import os
 import hmac
 import hashlib
 import time
+import logging  # Needed for tenacity before_sleep_log level constants
 from typing import Optional, Dict, Any
 from urllib.parse import urlencode
 import aiohttp
@@ -25,8 +24,10 @@ from tenacity import (
     before_sleep_log,
 )
 
-
-logger = logging.getLogger(__name__)
+from loguru import logger
+from config.config import BINANCE_API_KEY, BINANCE_API_SECRET
+from config.cache_config import CacheTTL
+from src.cache import get_redis_manager, CacheKeyBuilder
 
 
 class BinanceService:
@@ -87,17 +88,26 @@ class BinanceService:
     }
 
     def __init__(self):
-        """Initialize Binance service"""
+        """Initialize Binance service with Redis caching"""
         # Optional API credentials for authenticated endpoints (liquidations, etc.)
-        self.api_key = os.getenv("BINANCE_API_KEY", "")
-        self.api_secret = os.getenv("BINANCE_API_SECRET", "")
+        self.api_key = BINANCE_API_KEY
+        self.api_secret = BINANCE_API_SECRET
+
+        # Redis cache manager
+        self.redis = get_redis_manager()
 
         # Check if credentials are available
         self.has_credentials = bool(self.api_key and self.api_secret)
         if self.has_credentials:
-            logger.info("Binance API credentials loaded (authenticated mode)")
+            logger.info(
+                f"Binance API credentials loaded (authenticated mode), "
+                f"Redis cache: {'enabled' if self.redis.is_available() else 'disabled'}"
+            )
         else:
-            logger.info("Binance API running in public mode (no credentials)")
+            logger.info(
+                f"Binance API running in public mode (no credentials), "
+                f"Redis cache: {'enabled' if self.redis.is_available() else 'disabled'}"
+            )
 
     def get_symbol(self, coin_id: str) -> Optional[str]:
         """
@@ -135,6 +145,18 @@ class BinanceService:
         ).hexdigest()
         return signature
 
+    def _get_klines_ttl(self, interval: str) -> int:
+        """Get appropriate TTL for klines based on interval"""
+        interval_ttl_map = {
+            "1m": CacheTTL.BINANCE_KLINES_1M,
+            "5m": CacheTTL.BINANCE_KLINES_5M,
+            "15m": CacheTTL.BINANCE_KLINES_15M,
+            "1h": CacheTTL.BINANCE_KLINES_1H,
+            "4h": CacheTTL.BINANCE_KLINES_4H,
+            "1d": CacheTTL.BINANCE_KLINES_1D,
+        }
+        return interval_ttl_map.get(interval, CacheTTL.BINANCE_KLINES_1H)
+
     @retry(
         retry=retry_if_exception_type((aiohttp.ClientError, TimeoutError)),
         stop=stop_after_attempt(3),
@@ -146,9 +168,9 @@ class BinanceService:
         self, symbol: str, interval: str = "1h", limit: int = 100
     ) -> Optional[pd.DataFrame]:
         """
-        Get candlestick (klines) data from Binance with automatic retries
+        Get candlestick (klines) data from Binance with Redis caching and automatic retries
 
-        Retries up to 3 times with exponential backoff for network errors.
+        Кэширует исторические данные с разумным TTL (свечи не меняются ретроспективно)
 
         Args:
             symbol: Trading pair symbol (e.g., 'BTCUSDT')
@@ -160,16 +182,8 @@ class BinanceService:
 
         DataFrame columns:
             - timestamp: Unix timestamp (milliseconds)
-            - open: Opening price
-            - high: Highest price
-            - low: Lowest price
-            - close: Closing price
-            - volume: Trading volume
-            - close_time: Close timestamp
-            - quote_volume: Quote asset volume
-            - trades: Number of trades
-            - taker_buy_base: Taker buy base asset volume
-            - taker_buy_quote: Taker buy quote asset volume
+            - open, high, low, close, volume, close_time, quote_volume, trades
+            - taker_buy_base, taker_buy_quote
         """
         try:
             # Validate interval
@@ -181,6 +195,28 @@ class BinanceService:
 
             # Limit max klines
             limit = min(max(1, limit), 1000)
+
+            # Check cache first
+            cache_key = CacheKeyBuilder.build("binance", "klines", {
+                "symbol": symbol,
+                "interval": interval,
+                "limit": str(limit)
+            })
+            cached = await self.redis.get(cache_key)
+
+            if cached is not None:
+                # Redis manager returns already deserialized JSON (list)
+                # Check if it's already a list or still a JSON string
+                if isinstance(cached, str):
+                    df = pd.read_json(cached, orient='records')
+                else:
+                    # Already deserialized as list of dicts
+                    df = pd.DataFrame(cached)
+
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                df["close_time"] = pd.to_datetime(df["close_time"])
+                logger.debug(f"Redis cache HIT: {cache_key} ({len(df)} klines)")
+                return df
 
             params = {"symbol": symbol, "interval": interval, "limit": limit}
 
@@ -234,6 +270,12 @@ class BinanceService:
                         # Drop ignore column
                         df = df.drop("ignore", axis=1)
 
+                        # Cache the DataFrame (serialize to JSON)
+                        ttl = self._get_klines_ttl(interval)
+                        df_json = df.to_json(orient='records', date_format='iso')
+                        await self.redis.set(cache_key, df_json, ttl=ttl)
+                        logger.debug(f"Redis cache SET: {cache_key} (TTL={ttl}s, {len(df)} klines)")
+
                         logger.info(
                             f"Fetched {len(df)} klines for {symbol} ({interval})"
                         )
@@ -241,8 +283,12 @@ class BinanceService:
 
                     elif response.status == 400:
                         # Invalid symbol or parameters
-                        error_data = await response.json()
-                        logger.warning(f"Binance API error for {symbol}: {error_data}")
+                        try:
+                            error_data = await response.json()
+                            error_msg = error_data.get("msg", str(error_data))
+                        except Exception:
+                            error_msg = await response.text()
+                        logger.warning(f"Binance API error for {symbol}: {error_msg}")
                         return None
                     else:
                         logger.error(f"Binance API error: {response.status}")
@@ -393,9 +439,13 @@ class BinanceService:
                         return df
 
                     elif response.status == 400:
-                        error_data = await response.json()
+                        try:
+                            error_data = await response.json()
+                            error_msg = error_data.get("msg", str(error_data))
+                        except Exception:
+                            error_msg = await response.text()
                         logger.warning(
-                            f"Binance Futures API error for {symbol}: {error_data}"
+                            f"Binance Futures API error for {symbol}: {error_msg}"
                         )
                         return None
                     else:
@@ -644,7 +694,7 @@ class BinanceService:
             symbol: Trading pair (e.g., 'BTCUSDT')
             start_time: Start timestamp in milliseconds (optional)
             end_time: End timestamp in milliseconds (optional)
-            limit: Number of records (max 1000, default 100)
+            limit: Number of records (max 100, default 100)
 
         Returns:
             Dict with liquidation data and aggregated statistics or None
@@ -673,7 +723,9 @@ class BinanceService:
         Note:
         - Requires BINANCE_API_KEY and BINANCE_API_SECRET in .env
         - Only READ permission is needed
-        - This is historical data (not real-time)
+        - Time range must be within the last 7 days (API limitation)
+        - Max limit is 100 records per request
+        - Uses /fapi/v1/forceOrders endpoint
         """
         if not self.has_credentials:
             logger.warning(
@@ -690,12 +742,23 @@ class BinanceService:
             if not start_time:
                 start_time = end_time - (24 * 60 * 60 * 1000)  # 24 hours ago
 
+            # Binance API limitation: max 7 days time range
+            max_range = 7 * 24 * 60 * 60 * 1000  # 7 days in milliseconds
+            if end_time - start_time > max_range:
+                logger.warning(
+                    f"Time range too large for {symbol}. "
+                    "Binance API allows max 7 days. Adjusting start_time."
+                )
+                start_time = end_time - max_range
+
             # Prepare request parameters
             params = {
                 "symbol": symbol,
+                # 🔧 TEMP: Remove autoCloseType to test if it's blocking results
+                # "autoCloseType": "LIQUIDATION",  # This param may be deprecated/wrong
                 "startTime": start_time,
                 "endTime": end_time,
-                "limit": min(limit, 1000),  # Max 1000
+                "limit": min(limit, 100),  # Max 100 for new endpoint
                 "timestamp": int(time.time() * 1000),
             }
 
@@ -707,12 +770,17 @@ class BinanceService:
 
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{self.FUTURES_URL}/allForceOrders",
+                    f"{self.FUTURES_URL}/forceOrders",  # Updated endpoint
                     params=params,
                     headers=headers,
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
+
+                        # 🔧 DEBUG: Log what API returns
+                        logger.debug(f"Liquidation API response: {len(data) if data else 0} records")
+                        if data and len(data) > 0:
+                            logger.debug(f"First liquidation: {data[0]}")
 
                         if not data:
                             logger.info(
@@ -783,8 +851,11 @@ class BinanceService:
                         return None
 
                     elif response.status == 400:
-                        error_data = await response.json()
-                        error_msg = error_data.get("msg", "Unknown error")
+                        try:
+                            error_data = await response.json()
+                            error_msg = error_data.get("msg", "Unknown error")
+                        except Exception:
+                            error_msg = await response.text()
                         logger.error(f"Binance API error for {symbol}: {error_msg}")
                         return None
 
@@ -795,3 +866,74 @@ class BinanceService:
         except Exception as e:
             logger.exception(f"Error fetching liquidation history for {symbol}: {e}")
             return None
+
+    async def get_instrument_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get instrument info from Binance Futures for position sizing
+
+        Returns:
+            {
+                "symbol": "BTCUSDT",
+                "qty_step": "0.001",
+                "tick_size": "0.1",
+                "min_order_qty": "0.001",
+                "max_order_qty": "1000",
+                "min_notional": "5",
+                "max_leverage": 125
+            }
+        """
+        try:
+            url = f"https://fapi.binance.com/fapi/v1/exchangeInfo"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        # Find symbol in list
+                        symbols = data.get("symbols", [])
+                        symbol_info = next(
+                            (s for s in symbols if s["symbol"] == symbol),
+                            None
+                        )
+
+                        if not symbol_info:
+                            logger.warning(f"Symbol {symbol} not found in Binance Futures")
+                            return None
+
+                        # Extract filters
+                        filters = {f["filterType"]: f for f in symbol_info.get("filters", [])}
+
+                        lot_size = filters.get("LOT_SIZE", {})
+                        price_filter = filters.get("PRICE_FILTER", {})
+                        min_notional_filter = filters.get("MIN_NOTIONAL", {})
+
+                        result = {
+                            "symbol": symbol,
+                            "qty_step": lot_size.get("stepSize", "0.001"),
+                            "tick_size": price_filter.get("tickSize", "0.1"),
+                            "min_order_qty": lot_size.get("minQty", "0.001"),
+                            "max_order_qty": lot_size.get("maxQty", "1000"),
+                            "min_notional": min_notional_filter.get("notional", "5"),
+                            "max_leverage": 125  # Default, can be different per symbol
+                        }
+
+                        logger.info(
+                            f"Instrument info for {symbol}: "
+                            f"qtyStep={result['qty_step']}, "
+                            f"tickSize={result['tick_size']}"
+                        )
+
+                        return result
+
+                    else:
+                        logger.error(f"Failed to fetch instrument info: {response.status}")
+                        return None
+
+        except Exception as e:
+            logger.exception(f"Error fetching instrument info for {symbol}: {e}")
+            return None
+
+
+# Singleton instance
+binance_service = BinanceService()

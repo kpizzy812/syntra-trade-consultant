@@ -4,10 +4,9 @@ CRUD operations for Syntra Trade Consultant Bot
 Async database operations using SQLAlchemy 2.0
 """
 
-import logging
 from datetime import date, datetime, timedelta, UTC
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple
 
 from sqlalchemy import select, update, delete, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +14,8 @@ from sqlalchemy.orm import selectinload, joinedload
 
 from src.database.models import (
     User,
+    Chat,
+    ChatMessage,
     ChatHistory,
     RequestLimit,
     CostTracking,
@@ -34,9 +35,10 @@ from src.database.models import (
     ReferralTierLevel,
     BalanceTransactionType,
     Watchlist,
+    MagicLink,
 )
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 # ===========================
@@ -58,7 +60,31 @@ async def get_user_by_telegram_id(
         User model or None
     """
     stmt = select(User).where(User.telegram_id == telegram_id).options(
-        selectinload(User.subscription)
+        selectinload(User.subscription),
+        selectinload(User.referral_tier),
+        selectinload(User.referral_balance),
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def get_user_by_email(
+    session: AsyncSession, email: str
+) -> Optional[User]:
+    """
+    Get user by email (for web authentication)
+
+    Args:
+        session: Database session
+        email: User email
+
+    Returns:
+        User model or None
+    """
+    stmt = select(User).where(User.email == email).options(
+        selectinload(User.subscription),
+        selectinload(User.referral_tier),
+        selectinload(User.referral_balance),
     )
     result = await session.execute(stmt)
     return result.scalar_one_or_none()
@@ -70,11 +96,12 @@ async def create_user(
     username: Optional[str] = None,
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
+    photo_url: Optional[str] = None,
     is_admin: bool = False,
     language: str = "ru",
 ) -> User:
     """
-    Create new user
+    Create new user with 7-day Premium trial
 
     Args:
         session: Database session
@@ -82,25 +109,38 @@ async def create_user(
         username: Telegram username
         first_name: User first name
         last_name: User last name
+        photo_url: User avatar URL (from Telegram)
         is_admin: Is user an admin
         language: User language (ru or en)
 
     Returns:
-        Created User model
+        Created User model with trial subscription
     """
     user = User(
         telegram_id=telegram_id,
         username=username,
         first_name=first_name,
         last_name=last_name,
+        photo_url=photo_url,
         is_admin=is_admin,
         language=language,
     )
     session.add(user)
     await session.commit()
+    await session.refresh(user)
+
+    # Generate unique referral code for new user
+    user.referral_code = await generate_referral_code(session, user.id)
+    await session.commit()
+
+    # Create 7-day Premium trial for new user
+    await create_trial_subscription(session, user.id, trial_days=7)
     await session.refresh(user, ["subscription"])
 
-    logger.info(f"User created: {telegram_id} (@{username}) with language: {language}")
+    logger.info(
+        f"User created: {telegram_id} (@{username}) with language: {language}, "
+        f"referral_code: {user.referral_code}, 7-day PREMIUM trial activated"
+    )
     return user
 
 
@@ -110,6 +150,7 @@ async def get_or_create_user(
     username: Optional[str] = None,
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
+    photo_url: Optional[str] = None,
     language: Optional[str] = None,
     telegram_language: Optional[str] = None,
 ) -> tuple[User, bool]:
@@ -122,6 +163,7 @@ async def get_or_create_user(
         username: Telegram username
         first_name: User first name
         last_name: User last name
+        photo_url: User avatar URL (from Telegram)
         language: User language preference
         telegram_language: Telegram language code for auto-detection
 
@@ -131,8 +173,17 @@ async def get_or_create_user(
     user = await get_user_by_telegram_id(session, telegram_id)
 
     if user:
-        # Update last activity
+        # Update last activity and photo_url if changed
         user.last_activity = datetime.now(UTC)
+        if photo_url and user.photo_url != photo_url:
+            user.photo_url = photo_url
+        # Update username/first_name/last_name if changed
+        if username and user.username != username:
+            user.username = username
+        if first_name and user.first_name != first_name:
+            user.first_name = first_name
+        if last_name and user.last_name != last_name:
+            user.last_name = last_name
         await session.commit()
         return user, False
 
@@ -148,6 +199,7 @@ async def get_or_create_user(
         username=username,
         first_name=first_name,
         last_name=last_name,
+        photo_url=photo_url,
         language=language,
     )
     return user, True
@@ -236,6 +288,8 @@ async def add_chat_message(
     """
     Add message to chat history
 
+    SECURITY: Limits chat history to 100 messages per user to prevent database bloat
+
     Args:
         session: Database session
         user_id: User ID (database ID, not telegram_id)
@@ -247,6 +301,34 @@ async def add_chat_message(
     Returns:
         Created ChatHistory model
     """
+    # SECURITY: Проверяем количество сообщений пользователя
+    MAX_MESSAGES_PER_USER = 100
+
+    stmt = select(ChatHistory).where(ChatHistory.user_id == user_id)
+    result = await session.execute(stmt)
+    messages = result.scalars().all()
+
+    # Если превышен лимит, удаляем самые старые сообщения
+    if len(messages) >= MAX_MESSAGES_PER_USER:
+        # Удаляем старые сообщения (оставляем только последние 90)
+        stmt_oldest = (
+            select(ChatHistory)
+            .where(ChatHistory.user_id == user_id)
+            .order_by(ChatHistory.created_at.asc())
+            .limit(len(messages) - 90)
+        )
+        result_oldest = await session.execute(stmt_oldest)
+        messages_to_delete = result_oldest.scalars().all()
+
+        for msg in messages_to_delete:
+            await session.delete(msg)
+
+        logger.info(
+            f"Deleted {len(messages_to_delete)} old messages for user {user_id} "
+            f"(exceeded limit of {MAX_MESSAGES_PER_USER})"
+        )
+
+    # Создаем новое сообщение
     message = ChatHistory(
         user_id=user_id,
         role=role,
@@ -508,25 +590,60 @@ async def reset_request_limit(session: AsyncSession, user_id: int) -> RequestLim
 
 async def set_user_limit(
     session: AsyncSession, user_id: int, new_limit: int
-) -> RequestLimit:
+) -> User:
     """
-    Set custom request limit for user (admin function)
+    Set custom daily request limit for user (admin function)
+
+    Sets custom_daily_limit on User model which overrides tier-based limits.
+    This limit persists across days until cleared.
 
     Args:
         session: Database session
         user_id: User ID (database ID)
-        new_limit: New daily request limit
+        new_limit: New daily request limit (None to clear custom limit)
 
     Returns:
-        Updated RequestLimit model
+        Updated User model
     """
-    limit_record = await get_or_create_request_limit(session, user_id)
-    limit_record.limit = new_limit
-    await session.commit()
-    await session.refresh(limit_record)
+    stmt = select(User).where(User.id == user_id)
+    result = await session.execute(stmt)
+    user = result.scalar_one_or_none()
 
-    logger.info(f"Request limit set to {new_limit} for user {user_id}")
-    return limit_record
+    if not user:
+        raise ValueError(f"User {user_id} not found")
+
+    user.custom_daily_limit = new_limit
+    await session.commit()
+    await session.refresh(user)
+
+    logger.info(f"Custom daily limit set to {new_limit} for user {user_id}")
+    return user
+
+
+async def clear_user_custom_limit(session: AsyncSession, user_id: int) -> User:
+    """
+    Clear custom daily limit for user (revert to tier-based)
+
+    Args:
+        session: Database session
+        user_id: User ID (database ID)
+
+    Returns:
+        Updated User model
+    """
+    stmt = select(User).where(User.id == user_id)
+    result = await session.execute(stmt)
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise ValueError(f"User {user_id} not found")
+
+    user.custom_daily_limit = None
+    await session.commit()
+    await session.refresh(user)
+
+    logger.info(f"Custom daily limit cleared for user {user_id}")
+    return user
 
 
 async def get_daily_limit_info(session: AsyncSession, user_id: int) -> dict:
@@ -886,7 +1003,7 @@ async def search_users(
     session: AsyncSession, query: str, limit: int = 10
 ) -> List[User]:
     """
-    Search users by username, first_name, or telegram_id
+    Search users by username, first_name, telegram_id, or email
 
     Args:
         session: Database session
@@ -907,25 +1024,27 @@ async def search_users(
     search_pattern = f"%{query}%"
 
     if telegram_id:
-        # Search by telegram_id or username/name
+        # Search by telegram_id or username/name/email
         stmt = (
             select(User)
             .where(
                 (User.telegram_id == telegram_id)
                 | (User.username.ilike(search_pattern))
                 | (User.first_name.ilike(search_pattern))
+                | (User.email.ilike(search_pattern))
             )
             .options(joinedload(User.subscription))
             .execution_options(populate_existing=True)
             .limit(limit)
         )
     else:
-        # Search only by username/name
+        # Search by username/name/email
         stmt = (
             select(User)
             .where(
                 (User.username.ilike(search_pattern))
                 | (User.first_name.ilike(search_pattern))
+                | (User.email.ilike(search_pattern))
             )
             .options(joinedload(User.subscription))
             .execution_options(populate_existing=True)
@@ -955,12 +1074,13 @@ async def get_top_users_by_cost(
             User.telegram_id,
             User.username,
             User.first_name,
+            User.email,
             func.sum(CostTracking.cost).label("total_cost"),
             func.sum(CostTracking.tokens).label("total_tokens"),
             func.count(CostTracking.id).label("request_count"),
         )
         .join(CostTracking, User.id == CostTracking.user_id)
-        .group_by(User.id, User.telegram_id, User.username, User.first_name)
+        .group_by(User.id, User.telegram_id, User.username, User.first_name, User.email)
         .order_by(func.sum(CostTracking.cost).desc())
         .limit(limit)
     )
@@ -976,6 +1096,7 @@ async def get_top_users_by_cost(
             "telegram_id": row.telegram_id,
             "username": row.username,
             "first_name": row.first_name,
+            "email": row.email,
             "total_cost": float(row.total_cost or 0),
             "total_tokens": int(row.total_tokens or 0),
             "request_count": int(row.request_count or 0),
@@ -1123,6 +1244,48 @@ async def create_subscription(
     return subscription
 
 
+async def create_trial_subscription(
+    session: AsyncSession,
+    user_id: int,
+    trial_days: int = 7,
+) -> Subscription:
+    """
+    Create 7-day Premium trial subscription for new user
+
+    Args:
+        session: Database session
+        user_id: User ID
+        trial_days: Trial duration in days (default: 7)
+
+    Returns:
+        Created Subscription model with trial
+    """
+    now = datetime.now(UTC)
+    trial_expires = now + timedelta(days=trial_days)
+
+    subscription = Subscription(
+        user_id=user_id,
+        tier=SubscriptionTier.PREMIUM.value,  # Trial gives PREMIUM access
+        is_active=True,
+        is_trial=True,
+        trial_start=now,
+        trial_end=trial_expires,
+        expires_at=trial_expires,
+        # Notification flags will be set by cron job
+        trial_notified_24h=False,
+        trial_notified_end=False,
+    )
+    session.add(subscription)
+    await session.commit()
+    await session.refresh(subscription)
+
+    logger.info(
+        f"Created 7-day PREMIUM trial for user {user_id}, "
+        f"expires at {trial_expires.isoformat()}"
+    )
+    return subscription
+
+
 async def activate_subscription(
     session: AsyncSession,
     user_id: int,
@@ -1157,6 +1320,12 @@ async def activate_subscription(
     subscription.expires_at = expires_at
     subscription.is_active = True
     subscription.updated_at = datetime.now(UTC)
+
+    # Reset post-trial discount after purchase (one-time use)
+    if subscription.has_post_trial_discount:
+        subscription.has_post_trial_discount = False
+        subscription.discount_expires_at = None
+        logger.info(f"Post-trial discount used for user {user_id}")
 
     await session.commit()
     await session.refresh(subscription)
@@ -1443,10 +1612,13 @@ async def get_all_payments(
     Returns:
         List of Payment models
     """
-    stmt = select(Payment).order_by(Payment.created_at.desc()).limit(limit)
+    stmt = select(Payment)
 
+    # Сначала применяем фильтр, потом лимит
     if status:
         stmt = stmt.where(Payment.status == status)
+
+    stmt = stmt.order_by(Payment.created_at.desc()).limit(limit)
 
     result = await session.execute(stmt)
     return list(result.scalars().all())
@@ -1997,6 +2169,33 @@ async def create_referral(
         await session.refresh(referral)
 
         logger.info(f"Referral created: {referrer_id} → {referee_id} with code {referral_code}")
+
+        # 💎 Award points to referrer for signup
+        try:
+            from src.services.points_service import PointsService
+            from src.database.models import PointsTransactionType
+
+            points_transaction = await PointsService.earn_points(
+                session=session,
+                user_id=referrer_id,
+                transaction_type=PointsTransactionType.EARN_REFERRAL_SIGNUP,
+                description=f"Бонус за регистрацию реферала (ID: {referee_id})",
+                metadata={
+                    "referral_id": referral.id,
+                    "referee_id": referee_id,
+                    "referral_code": referral_code,
+                },
+                transaction_id=f"ref_signup:{referrer_id}:{referee_id}",
+            )
+            if points_transaction:
+                logger.info(
+                    f"💎 Awarded {points_transaction.amount} points to user {referrer_id} "
+                    f"for referral signup (balance: {points_transaction.balance_after})"
+                )
+        except Exception as points_error:
+            # Don't fail referral if points fail
+            logger.error(f"Failed to award referral signup points: {points_error}")
+
         return referral
     except IntegrityError:
         await session.rollback()
@@ -2004,20 +2203,22 @@ async def create_referral(
         return None
 
 
-async def grant_referral_rewards(
+async def grant_referee_bonus(
     session: AsyncSession,
     referral_id: int,
-) -> None:
+) -> bool:
     """
-    Grant rewards to both referrer and referee
+    Grant welcome bonus to referee (new user who registered via referral link)
 
     Rewards:
-    - Referee: +15 bonus requests
-    - Referrer: +30 bonus requests
+    - Referee: +5 bonus requests (given IMMEDIATELY upon registration)
 
     Args:
         session: Database session
         referral_id: Referral ID
+
+    Returns:
+        True if bonus was granted, False otherwise
     """
     stmt = select(Referral).where(Referral.id == referral_id)
     result = await session.execute(stmt)
@@ -2025,58 +2226,97 @@ async def grant_referral_rewards(
 
     if not referral:
         logger.error(f"Referral {referral_id} not found")
-        return
+        return False
 
-    # Grant bonus to referee (+15 requests)
+    # Grant bonus to referee (+5 requests) - only once
     if not referral.trial_granted:
         await add_bonus_requests(
             session,
             user_id=referral.referee_id,
-            amount=15,
+            amount=5,
             source=BonusSource.REFERRAL_SIGNUP.value,
             description="Бонус за регистрацию по реферальной ссылке",
         )
         referral.trial_granted = True
-        logger.info(f"Granted +15 bonus requests to referee {referral.referee_id}")
+        await session.commit()
+        logger.info(f"Granted +5 bonus requests to referee {referral.referee_id}")
+        return True
 
-    # Grant bonus to referrer (+30 requests)
+    logger.debug(f"Referee {referral.referee_id} already received bonus")
+    return False
+
+
+async def grant_referrer_bonus(
+    session: AsyncSession,
+    referral_id: int,
+) -> bool:
+    """
+    Grant bonus to referrer (user who invited) after referral becomes ACTIVE
+
+    Rewards:
+    - Referrer: +10 bonus requests (given after referral activation)
+
+    Activation criteria (checked separately):
+    - Registered > 24 hours ago
+    - Made at least 5 requests
+    - Not banned
+
+    Args:
+        session: Database session
+        referral_id: Referral ID
+
+    Returns:
+        True if bonus was granted, False otherwise
+    """
+    stmt = select(Referral).where(Referral.id == referral_id)
+    result = await session.execute(stmt)
+    referral = result.scalar_one_or_none()
+
+    if not referral:
+        logger.error(f"Referral {referral_id} not found")
+        return False
+
+    # Grant bonus to referrer (+10 requests) - only once
     if not referral.bonus_granted:
         await add_bonus_requests(
             session,
             user_id=referral.referrer_id,
-            amount=30,
+            amount=10,
             source=BonusSource.REFERRAL_SIGNUP.value,
             description="Бонус за приглашение друга",
         )
         referral.bonus_granted = True
-        logger.info(f"Granted +30 bonus requests to referrer {referral.referrer_id}")
 
-    # Update referral status
-    referral.status = ReferralStatus.ACTIVE.value
-    referral.activated_at = datetime.now(UTC)
+        # Update referral status to ACTIVE
+        referral.status = ReferralStatus.ACTIVE.value
+        referral.activated_at = datetime.now(UTC)
 
-    # Update referrer's tier
-    await update_referral_tier(session, referral.referrer_id)
+        # Update referrer's tier
+        await update_referral_tier(session, referral.referrer_id)
 
-    await session.commit()
+        await session.commit()
+        logger.info(f"Granted +10 bonus requests to referrer {referral.referrer_id}, referral activated")
+        return True
+
+    logger.debug(f"Referrer {referral.referrer_id} already received bonus for referral {referral_id}")
+    return False
 
 
-async def is_referral_active(session: AsyncSession, referee_id: int) -> bool:
+async def check_referral_activation_criteria(session: AsyncSession, referee_id: int) -> bool:
     """
-    Check if referral meets activation criteria and update status if criteria met
+    Check if referral meets activation criteria
 
     Criteria:
     - Registered > 24 hours ago
     - Made at least 5 requests
     - Not banned
-    - Has username
 
     Args:
         session: Database session
         referee_id: Referee user ID
 
     Returns:
-        True if referral is active (or was just activated)
+        True if all criteria are met, False otherwise
     """
     stmt = select(User).where(User.id == referee_id)
     result = await session.execute(stmt)
@@ -2105,26 +2345,96 @@ async def is_referral_active(session: AsyncSession, referee_id: int) -> bool:
     requests_ok = total_requests >= 5
 
     not_banned = not getattr(user, 'is_banned', False)
-    has_username = user.username is not None
 
-    # If all criteria met, update referral status in database
-    if age_ok and requests_ok and not_banned and has_username:
-        # Find referral record for this referee
-        stmt = select(Referral).where(Referral.referee_id == referee_id)
-        result = await session.execute(stmt)
-        referral = result.scalar_one_or_none()
+    # All criteria must be met (NO username requirement)
+    return age_ok and requests_ok and not_banned
 
-        if referral and referral.status == ReferralStatus.PENDING.value:
-            # Activate the referral
-            referral.status = ReferralStatus.ACTIVE.value
-            referral.activated_at = datetime.now(UTC)
-            await session.commit()
-            await session.refresh(referral)
-            logger.info(f"Referral activated: {referral.referrer_id} → {referee_id}")
 
-        return True
+async def activate_pending_referral(
+    session: AsyncSession,
+    referral_id: int,
+) -> bool:
+    """
+    Activate a pending referral and grant bonus to referrer
 
-    return False
+    This should be called after check_referral_activation_criteria returns True
+
+    Args:
+        session: Database session
+        referral_id: Referral ID
+
+    Returns:
+        True if activated successfully, False otherwise
+    """
+    stmt = select(Referral).where(Referral.id == referral_id)
+    result = await session.execute(stmt)
+    referral = result.scalar_one_or_none()
+
+    if not referral:
+        logger.error(f"Referral {referral_id} not found")
+        return False
+
+    # Only activate if status is PENDING
+    if referral.status != ReferralStatus.PENDING.value:
+        logger.debug(f"Referral {referral_id} is already {referral.status}, skipping activation")
+        return False
+
+    # Check if criteria are met
+    if not await check_referral_activation_criteria(session, referral.referee_id):
+        logger.debug(f"Referral {referral_id} does not meet activation criteria yet")
+        return False
+
+    # Grant bonus to referrer and activate
+    success = await grant_referrer_bonus(session, referral_id)
+
+    if success:
+        logger.info(f"Referral {referral_id} activated: {referral.referrer_id} → {referral.referee_id}")
+
+    return success
+
+
+async def process_pending_referrals(session: AsyncSession) -> dict:
+    """
+    Process all pending referrals and activate those that meet criteria
+
+    This function is designed to be called periodically by a scheduler
+
+    Returns:
+        Dict with stats: {
+            "checked": int,
+            "activated": int,
+            "failed": int
+        }
+    """
+    # Get all pending referrals
+    stmt = select(Referral).where(Referral.status == ReferralStatus.PENDING.value)
+    result = await session.execute(stmt)
+    pending_referrals = result.scalars().all()
+
+    stats = {
+        "checked": len(pending_referrals),
+        "activated": 0,
+        "failed": 0,
+    }
+
+    logger.info(f"Processing {stats['checked']} pending referrals")
+
+    for referral in pending_referrals:
+        try:
+            # Try to activate this referral
+            success = await activate_pending_referral(session, referral.id)
+            if success:
+                stats["activated"] += 1
+        except Exception as e:
+            logger.error(f"Failed to process referral {referral.id}: {e}")
+            stats["failed"] += 1
+
+    logger.info(
+        f"Processed pending referrals: {stats['activated']} activated, "
+        f"{stats['failed']} failed, {stats['checked']} total"
+    )
+
+    return stats
 
 
 async def update_referral_tier(
@@ -2586,7 +2896,7 @@ async def get_leaderboard(
     limit: int = 100,
 ) -> List[dict]:
     """
-    Get top referrers leaderboard
+    Get top referrers leaderboard (excludes admins)
 
     Args:
         session: Database session
@@ -2606,6 +2916,7 @@ async def get_leaderboard(
         )
         .join(User, ReferralTier.user_id == User.id)
         .where(ReferralTier.total_referrals > 0)
+        .where(User.is_admin.is_(False))  # Исключаем админов из leaderboard
         .order_by(ReferralTier.active_referrals.desc())
         .limit(limit)
     )
@@ -2632,7 +2943,7 @@ async def get_leaderboard_rank(
     user_id: int,
 ) -> Optional[int]:
     """
-    Get user's rank in leaderboard
+    Get user's rank in leaderboard (excludes admins from ranking)
 
     Args:
         session: Database session
@@ -2649,11 +2960,13 @@ async def get_leaderboard_rank(
     if not user_tier or user_tier.active_referrals == 0:
         return None
 
-    # Count users with more active referrals
+    # Count users with more active referrals (excluding admins)
     stmt = (
         select(func.count())
         .select_from(ReferralTier)
+        .join(User, ReferralTier.user_id == User.id)
         .where(ReferralTier.active_referrals > user_tier.active_referrals)
+        .where(User.is_admin.is_(False))  # Исключаем админов из подсчёта ранга
     )
     result = await session.execute(stmt)
     count_above = result.scalar() or 0
@@ -2661,20 +2974,30 @@ async def get_leaderboard_rank(
     return count_above + 1
 
 
+# PERFORMANCE: In-memory cache for revenue share calculations
+# В production лучше использовать Redis
+_revenue_share_cache: Dict[int, Tuple[datetime, dict]] = {}
+_REVENUE_SHARE_CACHE_TTL = 300  # 5 минут
+
+
 async def calculate_revenue_share(
     session: AsyncSession,
     user_id: int,
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
+    force_refresh: bool = False,
 ) -> dict:
     """
     Calculate revenue share for referrer
+
+    PERFORMANCE: Results are cached for 5 minutes to avoid heavy DB queries
 
     Args:
         session: Database session
         user_id: Referrer user ID
         start_date: Start date (default: 30 days ago)
         end_date: End date (default: now)
+        force_refresh: Force cache refresh
 
     Returns:
         Dict with revenue share data
@@ -2684,17 +3007,33 @@ async def calculate_revenue_share(
     if not end_date:
         end_date = datetime.now(UTC)
 
+    # PERFORMANCE: Проверяем кеш
+    cache_key = user_id
+    if not force_refresh and cache_key in _revenue_share_cache:
+        cached_time, cached_data = _revenue_share_cache[cache_key]
+        # Проверяем TTL (5 минут)
+        if (datetime.now(UTC) - cached_time).total_seconds() < _REVENUE_SHARE_CACHE_TTL:
+            logger.debug(f"Revenue share cache HIT for user {user_id}")
+            return cached_data
+        else:
+            # Кеш устарел, удаляем
+            del _revenue_share_cache[cache_key]
+            logger.debug(f"Revenue share cache EXPIRED for user {user_id}")
+
     # Get tier
     stmt = select(ReferralTier).where(ReferralTier.user_id == user_id)
     result = await session.execute(stmt)
     tier = result.scalar_one_or_none()
 
     if not tier or tier.revenue_share_percent == 0:
-        return {
+        result_data = {
             'revenue_share_percent': 0,
             'total_revenue': 0,
             'revenue_share_amount': 0,
         }
+        # Кешируем результат
+        _revenue_share_cache[cache_key] = (datetime.now(UTC), result_data)
+        return result_data
 
     # Get active referrals
     stmt = (
@@ -2706,11 +3045,14 @@ async def calculate_revenue_share(
     referee_ids = [row[0] for row in result.all()]
 
     if not referee_ids:
-        return {
+        result_data = {
             'revenue_share_percent': tier.revenue_share_percent,
             'total_revenue': 0,
             'revenue_share_amount': 0,
         }
+        # Кешируем результат
+        _revenue_share_cache[cache_key] = (datetime.now(UTC), result_data)
+        return result_data
 
     # Calculate total revenue from referrals
     stmt = (
@@ -2726,13 +3068,19 @@ async def calculate_revenue_share(
     # Calculate share
     share_amount = total_revenue * (tier.revenue_share_percent / 100)
 
-    return {
+    result_data = {
         'revenue_share_percent': tier.revenue_share_percent,
         'total_revenue': total_revenue,
         'revenue_share_amount': share_amount,
         'start_date': start_date,
         'end_date': end_date,
     }
+
+    # Кешируем результат
+    _revenue_share_cache[cache_key] = (datetime.now(UTC), result_data)
+    logger.debug(f"Revenue share cache MISS for user {user_id}, calculated and cached")
+
+    return result_data
 
 
 async def get_referral_tier(session: AsyncSession, user_id: int) -> Optional[ReferralTier]:
@@ -2957,3 +3305,513 @@ async def is_in_watchlist(
     )
     result = await session.execute(stmt)
     return result.scalar_one_or_none() is not None
+
+
+# ===========================
+# MAGIC LINK OPERATIONS
+# ===========================
+
+
+async def create_magic_link(
+    session: AsyncSession,
+    email: str,
+    token: str,
+    expires_at: datetime,
+    request_ip: Optional[str] = None,
+    user_id: Optional[int] = None,
+    referral_code: Optional[str] = None,
+) -> MagicLink:
+    """
+    Create new magic link token for email authentication
+
+    Args:
+        session: Database session
+        email: User email
+        token: Unique token for magic link (URL-safe random)
+        expires_at: Token expiration time (15 minutes from creation)
+        request_ip: IP address that requested magic link
+        user_id: User ID if already registered
+        referral_code: Referral code if user arrived via referral link
+
+    Returns:
+        Created MagicLink model
+    """
+    magic_link = MagicLink(
+        email=email.lower().strip(),
+        token=token,
+        expires_at=expires_at,
+        request_ip=request_ip,
+        user_id=user_id,
+        referral_code=referral_code,
+    )
+    session.add(magic_link)
+    await session.commit()
+    await session.refresh(magic_link)
+
+    logger.info(f"Magic link created for email: {email}")
+    return magic_link
+
+
+async def get_magic_link_by_token(
+    session: AsyncSession, token: str
+) -> Optional[MagicLink]:
+    """
+    Get magic link by token
+
+    Args:
+        session: Database session
+        token: Magic link token
+
+    Returns:
+        MagicLink model or None if not found
+    """
+    stmt = select(MagicLink).where(MagicLink.token == token)
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def mark_magic_link_used(
+    session: AsyncSession,
+    magic_link: MagicLink,
+    used_ip: Optional[str] = None,
+) -> MagicLink:
+    """
+    Mark magic link as used (single-use enforcement)
+
+    Args:
+        session: Database session
+        magic_link: MagicLink model
+        used_ip: IP address that used the link
+
+    Returns:
+        Updated MagicLink model
+    """
+    magic_link.is_used = True
+    magic_link.used_at = datetime.now(UTC)
+    magic_link.used_ip = used_ip
+
+    await session.commit()
+    await session.refresh(magic_link)
+
+    logger.info(f"Magic link used: {magic_link.email}")
+    return magic_link
+
+
+async def delete_expired_magic_links(session: AsyncSession) -> int:
+    """
+    Delete expired magic links (cleanup task)
+
+    Удаляет все токены, у которых истек срок действия.
+    Запускается периодически через APScheduler.
+
+    Args:
+        session: Database session
+
+    Returns:
+        Number of deleted links
+    """
+    stmt = delete(MagicLink).where(
+        MagicLink.expires_at < datetime.now(UTC)
+    )
+    result = await session.execute(stmt)
+    await session.commit()
+
+    count = result.rowcount
+    if count > 0:
+        logger.info(f"Deleted {count} expired magic links")
+    return count
+
+
+async def count_recent_magic_links(
+    session: AsyncSession,
+    email: str,
+    minutes: int = 5
+) -> int:
+    """
+    Count recent magic link requests for rate limiting
+
+    Args:
+        session: Database session
+        email: Email address to check
+        minutes: Time window in minutes (default: 5)
+
+    Returns:
+        Number of magic links created in the last N minutes
+    """
+    cutoff_time = datetime.now(UTC) - timedelta(minutes=minutes)
+
+    stmt = select(func.count(MagicLink.id)).where(
+        MagicLink.email == email.lower().strip(),
+        MagicLink.created_at > cutoff_time
+    )
+    result = await session.execute(stmt)
+    count = result.scalar()
+
+    return count or 0
+
+
+async def create_user_from_email(
+    session: AsyncSession,
+    email: str,
+    first_name: Optional[str] = None,
+    language: str = "en",
+    referral_code: Optional[str] = None,
+    skip_trial: bool = False,
+) -> User:
+    """
+    Create new user from email (web registration via magic link)
+
+    Args:
+        session: Database session
+        email: User email (already verified via magic link)
+        first_name: User first name (optional)
+        language: User language (en or ru)
+        referral_code: Referral code if joining via referral link (optional)
+        skip_trial: If True, skip trial creation (fraud detection triggered)
+
+    Returns:
+        Created User model with 7-day PREMIUM trial subscription (unless skip_trial=True)
+    """
+    user = User(
+        email=email.lower().strip(),
+        email_verified=True,  # Verified via magic link click
+        registration_platform="web",
+        first_name=first_name,
+        language=language,
+        is_admin=False,
+        pending_referral_code=referral_code,  # Save referral code for later processing
+    )
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+
+    # Generate unique referral code for new user
+    user.referral_code = await generate_referral_code(session, user.id)
+    await session.commit()
+
+    # Create 7-day Premium trial for new web user (unless blocked due to abuse)
+    if not skip_trial:
+        await create_trial_subscription(session, user.id, trial_days=7)
+        await session.refresh(user, ["subscription"])
+        log_msg = f"Web user created via magic link: {email} (language: {language}, referral_code: {user.referral_code}, 7-day PREMIUM trial)"
+    else:
+        log_msg = f"Web user created via magic link: {email} (language: {language}, referral_code: {user.referral_code}, NO TRIAL - abuse detected)"
+
+    if referral_code:
+        log_msg += f" with referral code: {referral_code}"
+    logger.info(log_msg)
+
+    return user
+
+
+async def get_or_create_user_from_email(
+    session: AsyncSession,
+    email: str,
+    first_name: Optional[str] = None,
+    language: str = "en",
+    referral_code: Optional[str] = None,
+    skip_trial: bool = False,
+) -> Tuple[User, bool]:
+    """
+    Get existing user by email or create new one
+
+    Args:
+        session: Database session
+        email: User email
+        first_name: User first name (optional, only for new users)
+        language: User language preference
+        referral_code: Referral code if joining via referral link (optional)
+        skip_trial: If True, skip trial creation for new users (fraud detection)
+
+    Returns:
+        Tuple of (User model, is_created: bool)
+    """
+    user = await get_user_by_email(session, email)
+
+    if user:
+        # Update last activity
+        user.last_activity = datetime.now(UTC)
+        await session.commit()
+        return user, False
+
+    # Create new user
+    user = await create_user_from_email(
+        session,
+        email=email,
+        first_name=first_name,
+        language=language,
+        referral_code=referral_code,  # Pass referral code to save in pending_referral_code
+        skip_trial=skip_trial,  # Skip trial if fraud detection triggered
+    )
+    return user, True
+
+
+# ===========================
+# CHAT OPERATIONS (Multiple Chats)
+# ===========================
+
+
+async def create_chat(
+    session: AsyncSession,
+    user_id: int,
+    title: str = "New Chat",
+) -> Chat:
+    """
+    Create a new chat for user
+
+    Args:
+        session: Database session
+        user_id: User ID
+        title: Chat title (default: "New Chat")
+
+    Returns:
+        Created Chat model
+    """
+    chat = Chat(
+        user_id=user_id,
+        title=title,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    session.add(chat)
+    await session.commit()
+    await session.refresh(chat)
+
+    logger.info(f"Created new chat {chat.id} for user {user_id}: '{title}'")
+    return chat
+
+
+async def get_user_chats(
+    session: AsyncSession,
+    user_id: int,
+    limit: int = 50,
+    offset: int = 0,
+) -> List[Chat]:
+    """
+    Get all chats for user (sorted by last update, newest first)
+
+    Args:
+        session: Database session
+        user_id: User ID
+        limit: Max number of chats to return
+        offset: Offset for pagination
+
+    Returns:
+        List of Chat models
+    """
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(Chat)
+        .options(selectinload(Chat.messages))  # Eager load messages to avoid lazy loading
+        .where(Chat.user_id == user_id)
+        .order_by(Chat.updated_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    result = await session.execute(stmt)
+    return list(result.scalars().all())
+
+
+async def get_chat_by_id(
+    session: AsyncSession,
+    chat_id: int,
+    user_id: int,
+) -> Optional[Chat]:
+    """
+    Get chat by ID (with user ownership check)
+
+    Args:
+        session: Database session
+        chat_id: Chat ID
+        user_id: User ID (for ownership verification)
+
+    Returns:
+        Chat model or None
+    """
+    from sqlalchemy.orm import selectinload
+
+    stmt = (
+        select(Chat)
+        .options(selectinload(Chat.messages))  # Eager load messages to avoid lazy loading
+        .where(
+            Chat.id == chat_id,
+            Chat.user_id == user_id,
+        )
+    )
+    result = await session.execute(stmt)
+    return result.scalar_one_or_none()
+
+
+async def update_chat_title(
+    session: AsyncSession,
+    chat_id: int,
+    user_id: int,
+    title: str,
+) -> Optional[Chat]:
+    """
+    Update chat title
+
+    Args:
+        session: Database session
+        chat_id: Chat ID
+        user_id: User ID (for ownership verification)
+        title: New title
+
+    Returns:
+        Updated Chat model or None if not found
+    """
+    chat = await get_chat_by_id(session, chat_id, user_id)
+    if not chat:
+        return None
+
+    chat.title = title
+    await session.commit()
+    await session.refresh(chat)
+
+    logger.info(f"Updated chat {chat_id} title to: '{title}'")
+    return chat
+
+
+async def delete_chat(
+    session: AsyncSession,
+    chat_id: int,
+    user_id: int,
+) -> bool:
+    """
+    Delete chat (cascade deletes all messages)
+
+    Args:
+        session: Database session
+        chat_id: Chat ID
+        user_id: User ID (for ownership verification)
+
+    Returns:
+        True if deleted, False if not found
+    """
+    chat = await get_chat_by_id(session, chat_id, user_id)
+    if not chat:
+        return False
+
+    await session.delete(chat)
+    await session.commit()
+
+    logger.info(f"Deleted chat {chat_id} for user {user_id}")
+    return True
+
+
+async def add_chat_message_to_chat(
+    session: AsyncSession,
+    chat_id: int,
+    role: str,
+    content: str,
+    tokens_used: Optional[int] = None,
+    model: Optional[str] = None,
+) -> ChatMessage:
+    """
+    Add message to chat
+
+    Args:
+        session: Database session
+        chat_id: Chat ID
+        role: Message role (user, assistant, system)
+        content: Message content
+        tokens_used: Optional tokens used
+        model: Optional AI model used
+
+    Returns:
+        Created ChatMessage model
+    """
+    message = ChatMessage(
+        chat_id=chat_id,
+        role=role,
+        content=content,
+        timestamp=datetime.now(UTC),
+        tokens_used=tokens_used,
+        model=model,
+    )
+    session.add(message)
+
+    # Update chat's updated_at timestamp
+    stmt = (
+        update(Chat)
+        .where(Chat.id == chat_id)
+        .values(updated_at=datetime.now(UTC))
+    )
+    await session.execute(stmt)
+
+    await session.commit()
+    await session.refresh(message)
+
+    logger.debug(f"Added {role} message to chat {chat_id} ({len(content)} chars)")
+    return message
+
+
+async def get_chat_messages(
+    session: AsyncSession,
+    chat_id: int,
+    limit: Optional[int] = None,
+) -> List[ChatMessage]:
+    """
+    Get messages from chat (sorted by timestamp, oldest first)
+
+    Args:
+        session: Database session
+        chat_id: Chat ID
+        limit: Optional max number of messages to return (most recent)
+
+    Returns:
+        List of ChatMessage models
+    """
+    stmt = (
+        select(ChatMessage)
+        .where(ChatMessage.chat_id == chat_id)
+        .order_by(ChatMessage.timestamp.asc())
+    )
+
+    if limit:
+        # Get last N messages (most recent)
+        # First get all messages ordered desc, limit, then reverse
+        stmt_desc = (
+            select(ChatMessage)
+            .where(ChatMessage.chat_id == chat_id)
+            .order_by(ChatMessage.timestamp.desc())
+            .limit(limit)
+        )
+        result = await session.execute(stmt_desc)
+        messages = list(result.scalars().all())
+        return list(reversed(messages))  # Return oldest first
+    else:
+        result = await session.execute(stmt)
+        return list(result.scalars().all())
+
+
+async def get_or_create_default_chat(
+    session: AsyncSession,
+    user_id: int,
+) -> Chat:
+    """
+    Get user's most recent chat or create new one if none exists
+
+    Args:
+        session: Database session
+        user_id: User ID
+
+    Returns:
+        Chat model (existing or newly created)
+    """
+    # Try to get most recent chat
+    stmt = (
+        select(Chat)
+        .where(Chat.user_id == user_id)
+        .order_by(Chat.updated_at.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    chat = result.scalar_one_or_none()
+
+    if chat:
+        return chat
+
+    # No chats exist, create first one
+    return await create_chat(session, user_id, title="New Chat")

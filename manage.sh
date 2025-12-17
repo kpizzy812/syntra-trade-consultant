@@ -5,8 +5,8 @@
 set -e
 
 # Настройки
-SERVER="syntra"
-PROJECT_DIR="/root/syntraai"
+SERVER="kpeezy"
+PROJECT_DIR="/var/www/syntraai"
 BACKUP_DIR="./backups"
 
 # Функция: заголовок
@@ -21,20 +21,32 @@ show_header() {
 # Функция: полный деплой
 full_deploy() {
     show_header
-    echo "🚀 Полный деплой (Синк + Билд + Перезапуск)"
+    echo "🚀 Полный деплой (Локальный билд + Синк + Перезапуск)"
     echo ""
 
-    # 1. Sync files
+    # 1. Build frontend locally
+    echo "🏗️  Building frontend locally..."
+    cd frontend
+    echo "🗑️  Clearing Next.js cache..."
+    rm -rf .next
+    npm run build
+    cd ..
+    echo "✅ Frontend built successfully"
+    echo ""
+
+    # 2. Sync files (including .next build)
     echo "📤 Syncing files to server..."
 
     rsync -avz --progress --delete \
       --exclude 'node_modules' \
       --exclude '.git' \
-      --exclude '.next' \
       --exclude '__pycache__' \
       --exclude '*.pyc' \
       --exclude '.venv' \
       --exclude 'backups' \
+      --exclude 'logs' \
+      --exclude 'cryptoai' \
+      --exclude 'frontend/.env.local' \
       ./ ${SERVER}:${PROJECT_DIR}/
 
     if [ -f ".env" ]; then
@@ -44,25 +56,30 @@ full_deploy() {
     echo "✓ Files synced"
     echo ""
 
-    # 2. Build and restart on server
-    echo "🔄 Building frontend and installing dependencies on server..."
+    # 3. Install deps and restart on server (no build needed)
+    echo "🔄 Installing dependencies and restarting on server..."
     ssh ${SERVER} << 'EOF'
 set -e  # Exit immediately if any command fails
-cd /root/syntraai
+cd /var/www/syntraai
 
 # Install Python dependencies
 source .venv/bin/activate
 pip install -r requirements.txt --quiet
 
-# Install Node.js dependencies and build frontend
+# Run database migrations
+echo "🗄️  Running database migrations..."
+alembic upgrade head
+echo "✅ Database migrations completed"
+
+# Install Node.js dependencies (no build - already uploaded)
 cd frontend
+
+# CRITICAL: Remove .env.local to prevent localhost:8003 issue
+echo "🗑️  Removing .env.local (if exists)..."
+rm -f .env.local .env.local.backup
+
 echo "📦 Installing Node.js dependencies..."
 npm install --quiet
-
-echo "🏗️  Building Next.js frontend (this may take 1-2 minutes)..."
-npm run build
-
-echo "✅ Frontend build completed successfully"
 
 # Fix permissions for .next directory (allow read access)
 chmod -R 755 .next
@@ -70,7 +87,7 @@ echo "✅ Fixed permissions for .next directory"
 
 cd ..
 
-# Restart services AFTER successful build
+# Restart services
 echo "🔄 Restarting services..."
 systemctl restart syntraai-api
 systemctl restart syntraai-frontend
@@ -80,7 +97,7 @@ systemctl restart syntraai-bot
 sleep 3
 EOF
 
-    echo "✓ Build completed and services restarted"
+    echo "✓ Dependencies installed and services restarted"
     echo ""
 
     # 3. Check status
@@ -257,7 +274,7 @@ backup_database() {
 
     # Создать дамп на сервере
     ssh ${SERVER} << EOF
-cd /root/syntraai
+cd /var/www/syntraai
 source .venv/bin/activate
 
 # Получить DATABASE_URL из .env
@@ -313,6 +330,10 @@ quick_sync() {
       --exclude '__pycache__' \
       --exclude '*.pyc' \
       --exclude '.venv' \
+      --exclude 'logs' \
+      --exclude 'cryptoai' \
+      --exclude 'backups' \
+      --exclude 'frontend/.env.local' \
       ./ ${SERVER}:${PROJECT_DIR}/
 
     if [ -f ".env" ]; then
@@ -328,6 +349,71 @@ quick_sync() {
     fi
 }
 
+# Функция: пересборка фронтенда с очисткой кэша
+rebuild_frontend() {
+    show_header
+    echo "🏗️  Пересборка фронтенда (локальный билд)"
+    echo ""
+
+    # 1. Build locally
+    echo "🏗️  Building frontend locally..."
+    cd frontend
+    echo "🗑️  Clearing Next.js cache..."
+    rm -rf .next
+    rm -rf node_modules/.cache
+    npm run build
+    cd ..
+    echo "✅ Frontend built successfully"
+    echo ""
+
+    # 2. Sync frontend (including .next)
+    echo "📤 Syncing frontend to server..."
+    rsync -avz --progress --delete \
+      --exclude 'node_modules' \
+      --exclude 'logs' \
+      --exclude '.env.local' \
+      ./frontend/ ${SERVER}:${PROJECT_DIR}/frontend/
+
+    echo "✓ Frontend synced"
+    echo ""
+
+    # 3. Install deps and restart on server
+    echo "🔄 Installing deps and restarting frontend..."
+    ssh ${SERVER} << 'EOF'
+set -e
+cd /var/www/syntraai/frontend
+
+# CRITICAL: Remove .env.local to prevent localhost:8003 issue
+echo "🗑️  Removing .env.local (if exists)..."
+rm -f .env.local .env.local.backup
+
+# Install dependencies
+echo "📦 Installing dependencies..."
+npm install --quiet
+
+# Fix permissions
+chmod -R 755 .next
+echo "✅ Permissions fixed"
+
+# Restart only frontend service
+echo "🔄 Restarting frontend service..."
+systemctl restart syntraai-frontend
+
+# Wait for service to start
+sleep 2
+
+# Check status
+echo ""
+echo "📊 Frontend service status:"
+systemctl status syntraai-frontend --no-pager -l | head -n 3
+EOF
+
+    echo ""
+    echo "✅ Frontend rebuild complete!"
+    echo "🌐 Check: https://ai.syntratrade.xyz"
+    echo ""
+}
+
 # Главное меню
 main_menu() {
     while true; do
@@ -337,18 +423,19 @@ main_menu() {
         echo "  ДЕПЛОЙ:"
         echo "    1) 🚀 Полный деплой (Билд + Синк + Перезапуск)"
         echo "    2) ⚡ Быстрый синк (только код, без билда)"
+        echo "    3) 🏗️  Пересборка фронтенда (с очисткой кэша)"
         echo ""
         echo "  СЕРВИСЫ:"
-        echo "    3) ▶️  Запустить все сервисы"
-        echo "    4) ⏹️  Остановить все сервисы"
-        echo "    5) 🔄 Перезапустить все сервисы"
-        echo "    6) 📊 Статус сервисов"
+        echo "    4) ▶️  Запустить все сервисы"
+        echo "    5) ⏹️  Остановить все сервисы"
+        echo "    6) 🔄 Перезапустить все сервисы"
+        echo "    7) 📊 Статус сервисов"
         echo ""
         echo "  МОНИТОРИНГ:"
-        echo "    7) 📝 Просмотр логов"
+        echo "    8) 📝 Просмотр логов"
         echo ""
         echo "  БЭКАП:"
-        echo "    8) 💾 Бэкап базы данных"
+        echo "    9) 💾 Бэкап базы данных"
         echo ""
         echo "    0) ❌ Выход"
         echo ""
@@ -357,12 +444,13 @@ main_menu() {
         case $choice in
             1) full_deploy; read -p "Нажмите Enter для продолжения..." ;;
             2) quick_sync; read -p "Нажмите Enter для продолжения..." ;;
-            3) start_services; read -p "Нажмите Enter для продолжения..." ;;
-            4) stop_services; read -p "Нажмите Enter для продолжения..." ;;
-            5) restart_services; read -p "Нажмите Enter для продолжения..." ;;
-            6) service_status; read -p "Нажмите Enter для продолжения..." ;;
-            7) view_logs ;;
-            8) backup_database; read -p "Нажмите Enter для продолжения..." ;;
+            3) rebuild_frontend; read -p "Нажмите Enter для продолжения..." ;;
+            4) start_services; read -p "Нажмите Enter для продолжения..." ;;
+            5) stop_services; read -p "Нажмите Enter для продолжения..." ;;
+            6) restart_services; read -p "Нажмите Enter для продолжения..." ;;
+            7) service_status; read -p "Нажмите Enter для продолжения..." ;;
+            8) view_logs ;;
+            9) backup_database; read -p "Нажмите Enter для продолжения..." ;;
             0)
                 echo "До встречи!"
                 exit 0

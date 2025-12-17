@@ -3,6 +3,15 @@
  * Based on official Telegram Mini Apps API 2025
  */
 
+/**
+ * Invoice payment status
+ * - paid: Transaction completed successfully
+ * - cancelled: User closed invoice without paying
+ * - failed: Payment attempt unsuccessful
+ * - pending: Payment still processing
+ */
+export type InvoiceStatus = 'paid' | 'cancelled' | 'failed' | 'pending';
+
 export interface TelegramWebApp {
   initData: string;
   initDataUnsafe: WebAppInitData;
@@ -29,6 +38,47 @@ export interface TelegramWebApp {
   exitFullscreen(): void;
   setHeaderColor(color: string): void;
   setBackgroundColor(color: string): void;
+
+  /**
+   * Open invoice for payment
+   * @param url Invoice URL (from createInvoiceLink)
+   * @param callback Optional callback receiving payment status: "paid" | "cancelled" | "failed" | "pending"
+   */
+  openInvoice(url: string, callback?: (status: InvoiceStatus) => void): void;
+
+  /**
+   * Open a Telegram link (t.me/...) within Telegram
+   * Use for opening bot links, channel links, etc.
+   * @param url Telegram URL (must start with https://t.me/)
+   */
+  openTelegramLink(url: string): void;
+
+  /**
+   * Open an external URL
+   * @param url External URL to open
+   * @param options Optional settings (try_instant_view)
+   */
+  openLink(url: string, options?: { try_instant_view?: boolean }): void;
+
+  /**
+   * Request permission for the bot to send messages to the user
+   * Shows a native popup asking for user consent
+   * @param callback Optional callback called when popup closes. First argument is boolean indicating if user granted access.
+   *
+   * Available since: Bot API 6.9+
+   *
+   * Example:
+   * ```ts
+   * WebApp.requestWriteAccess((granted) => {
+   *   if (granted) {
+   *     console.log('User granted write access');
+   *   } else {
+   *     console.log('User denied write access');
+   *   }
+   * });
+   * ```
+   */
+  requestWriteAccess(callback?: (granted: boolean) => void): void;
 
   // Events
   onEvent(eventType: string, callback: () => void): void;

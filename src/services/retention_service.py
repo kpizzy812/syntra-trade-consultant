@@ -7,7 +7,6 @@ Uses APScheduler to send:
 - Reminder messages to inactive users (7d, 14d)
 - Subscription status checks
 """
-import logging
 from datetime import datetime, timedelta, UTC
 from typing import Optional
 
@@ -26,18 +25,17 @@ from config.prompts import (
     get_random_catchphrase,
 )
 from config.config import REQUIRED_CHANNEL
+from config.ads_config import get_bot_ad_message, ADS_CONFIG, AI_TRADING_REFERRAL_URL
 from src.database.engine import get_session_maker
 from src.database.crud import (
-    get_user_by_telegram_id,
     get_inactive_users,
     update_user_subscription,
-    log_admin_action,
     check_request_limit,
 )
 from src.services.coingecko_service import CoinGeckoService
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class RetentionService:
@@ -129,7 +127,18 @@ class RetentionService:
             replace_existing=True,
         )
 
-        logger.info("Scheduled 4 retention jobs")
+        # Send AI Trading promo to active users (Wednesday and Saturday at 14:00 UTC)
+        if ADS_CONFIG["bot_push"]["enabled"]:
+            self.scheduler.add_job(
+                self.send_ai_trading_promo,
+                trigger=CronTrigger(day_of_week="wed,sat", hour=14, minute=0),
+                id="send_ai_trading_promo",
+                name="Send AI Trading promotional messages",
+                replace_existing=True,
+            )
+            logger.info("Scheduled 5 retention jobs (including AI Trading promo)")
+        else:
+            logger.info("Scheduled 4 retention jobs (AI Trading promo disabled)")
 
     async def check_non_subscribers(self):
         """
@@ -159,7 +168,7 @@ class RetentionService:
                 # 1 hour follow-up
                 stmt_1h = select(User).where(
                     and_(
-                        User.is_subscribed == False,
+                        ~User.is_subscribed,
                         User.created_at >= one_hour_ago - one_hour_window,
                         User.created_at <= one_hour_ago + one_hour_window,
                     )
@@ -169,6 +178,27 @@ class RetentionService:
 
                 for user in users_1h:
                     try:
+                        # Check if user is channel admin/creator
+                        from aiogram.enums import ChatMemberStatus
+
+                        try:
+                            member = await self.bot.get_chat_member(
+                                chat_id=REQUIRED_CHANNEL, user_id=user.telegram_id
+                            )
+                            # Skip admins and creators
+                            if member.status in {
+                                ChatMemberStatus.ADMINISTRATOR,
+                                ChatMemberStatus.CREATOR,
+                            }:
+                                logger.info(
+                                    f"Skipping 1h follow-up for channel "
+                                    f"admin/creator {user.telegram_id}"
+                                )
+                                continue
+                        except Exception:
+                            # If we can't check status, proceed with sending
+                            pass
+
                         message = RETENTION_1_HOUR_NO_SUB.format(
                             channel_link=f"https://t.me/{REQUIRED_CHANNEL.lstrip('@')}"
                         )
@@ -188,7 +218,7 @@ class RetentionService:
                 # 24 hour follow-up
                 stmt_24h = select(User).where(
                     and_(
-                        User.is_subscribed == False,
+                        ~User.is_subscribed,
                         User.created_at
                         >= twenty_four_hours_ago - twenty_four_hour_window,
                         User.created_at
@@ -200,6 +230,27 @@ class RetentionService:
 
                 for user in users_24h:
                     try:
+                        # Check if user is channel admin/creator
+                        from aiogram.enums import ChatMemberStatus
+
+                        try:
+                            member = await self.bot.get_chat_member(
+                                chat_id=REQUIRED_CHANNEL, user_id=user.telegram_id
+                            )
+                            # Skip admins and creators
+                            if member.status in {
+                                ChatMemberStatus.ADMINISTRATOR,
+                                ChatMemberStatus.CREATOR,
+                            }:
+                                logger.info(
+                                    f"Skipping 24h follow-up for channel "
+                                    f"admin/creator {user.telegram_id}"
+                                )
+                                continue
+                        except Exception:
+                            # If we can't check status, proceed with sending
+                            pass
+
                         message = RETENTION_24_HOURS_NO_SUB.format(
                             channel_link=f"https://t.me/{REQUIRED_CHANNEL.lstrip('@')}"
                         )
@@ -370,7 +421,7 @@ class RetentionService:
                 from src.database.models import User
                 from sqlalchemy import select
 
-                stmt = select(User).where(User.is_subscribed == True)
+                stmt = select(User).where(User.is_subscribed)
                 result = await session.execute(stmt)
                 subscribed_users = list(result.scalars().all())
 
@@ -449,7 +500,7 @@ class RetentionService:
 
                 three_days_ago = datetime.now(UTC) - timedelta(days=3)
                 stmt = select(User).where(
-                    User.last_activity >= three_days_ago, User.is_subscribed == True
+                    User.last_activity >= three_days_ago, User.is_subscribed
                 )
                 result = await session.execute(stmt)
                 active_users = list(result.scalars().all())
@@ -489,6 +540,99 @@ class RetentionService:
 
         except Exception as e:
             logger.exception(f"Error in active users motivation: {e}")
+
+    async def send_ai_trading_promo(self):
+        """
+        Send AI Trading promotional messages to eligible users
+
+        Targets:
+        - Active users (used bot in last 7 days)
+        - Not new users (registered more than 3 days ago)
+        - Haven't received promo recently (72h cooldown)
+
+        Sends native-style message with CTA button to syntratrade.xyz
+        """
+        logger.info("Running AI Trading promo campaign...")
+
+        config = ADS_CONFIG["bot_push"]
+        if not config["enabled"]:
+            logger.info("AI Trading promo is disabled in config")
+            return
+
+        try:
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
+            session_maker = get_session_maker()
+            async with session_maker() as session:
+                # Get active users (active in last 7 days, registered more than 3 days ago)
+                from src.database.models import User
+                from sqlalchemy import select, and_
+
+                now = datetime.now(UTC)
+                seven_days_ago = now - timedelta(days=7)
+                three_days_ago = now - timedelta(days=config.get("exclude_new_users_days", 3))
+
+                stmt = select(User).where(
+                    and_(
+                        User.last_activity >= seven_days_ago,
+                        User.created_at <= three_days_ago,
+                        User.is_subscribed,
+                    )
+                )
+                result = await session.execute(stmt)
+                eligible_users = list(result.scalars().all())
+
+                sent_count = 0
+                skipped_count = 0
+
+                for user in eligible_users:
+                    try:
+                        # Get user's language
+                        user_lang = user.language or "ru"
+
+                        # Get ad message for user's language
+                        ad = get_bot_ad_message(user_lang)
+
+                        # Create inline keyboard with CTA button
+                        keyboard = InlineKeyboardMarkup(
+                            inline_keyboard=[
+                                [
+                                    InlineKeyboardButton(
+                                        text=ad["button_text"],
+                                        url=ad["url"],
+                                    )
+                                ]
+                            ]
+                        )
+
+                        # Send message
+                        await self.bot.send_message(
+                            chat_id=user.telegram_id,
+                            text=ad["text"],
+                            reply_markup=keyboard,
+                            parse_mode="HTML",
+                        )
+                        sent_count += 1
+                        logger.info(f"Sent AI Trading promo to user {user.telegram_id}")
+
+                    except (TelegramForbiddenError, TelegramBadRequest) as e:
+                        skipped_count += 1
+                        logger.warning(
+                            f"Failed to send AI Trading promo to {user.telegram_id}: {e}"
+                        )
+                    except Exception as e:
+                        skipped_count += 1
+                        logger.exception(
+                            f"Error sending AI Trading promo to {user.telegram_id}: {e}"
+                        )
+
+                logger.info(
+                    f"AI Trading promo complete: {sent_count} sent, {skipped_count} skipped "
+                    f"(out of {len(eligible_users)} eligible)"
+                )
+
+        except Exception as e:
+            logger.exception(f"Error in AI Trading promo campaign: {e}")
 
 
 # Global retention service instance

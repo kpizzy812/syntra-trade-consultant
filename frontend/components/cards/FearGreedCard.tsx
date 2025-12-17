@@ -46,7 +46,7 @@ export default function FearGreedCard() {
 
   if (loading) {
     return (
-      <div className="glassmorphism-card rounded-2xl p-6 animate-pulse">
+      <div className="glass-blue-card rounded-2xl p-6 animate-pulse">
         <div className="h-40 bg-gray-800/30 rounded-xl"></div>
       </div>
     );
@@ -75,7 +75,7 @@ export default function FearGreedCard() {
     <motion.div
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
-      className="glassmorphism-card rounded-2xl p-4"
+      className="glass-blue-card rounded-2xl p-4"
     >
       <div className="flex items-center justify-between mb-2">
         <h2 className="text-white font-semibold text-sm">Fear & Greed Index</h2>

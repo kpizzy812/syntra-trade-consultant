@@ -5,7 +5,7 @@
 
 'use client';
 
-import { TonConnectUIProvider } from '@tonconnect/ui-react';
+import { TonConnectUIProvider, THEME } from '@tonconnect/ui-react';
 
 interface TonConnectProviderProps {
   children: React.ReactNode;
@@ -16,7 +16,12 @@ export default function TonConnectProvider({ children }: TonConnectProviderProps
   const manifestUrl = 'https://ai.syntratrade.xyz/tonconnect-manifest.json';
 
   return (
-    <TonConnectUIProvider manifestUrl={manifestUrl}>
+    <TonConnectUIProvider
+      manifestUrl={manifestUrl}
+      uiPreferences={{
+        theme: THEME.DARK,
+      }}
+    >
       {children}
     </TonConnectUIProvider>
   );

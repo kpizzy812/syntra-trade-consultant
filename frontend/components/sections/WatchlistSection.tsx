@@ -7,6 +7,7 @@
 
 import { motion } from 'framer-motion';
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { vibrate } from '@/shared/telegram/vibration';
 import { api } from '@/shared/api/client';
 
@@ -15,10 +16,11 @@ interface CoinData {
   name: string;
   price: string;
   change_24h: number;
-  icon?: string;
+  image?: string;
 }
 
 export default function WatchlistSection() {
+  const router = useRouter();
   const [watchlist, setWatchlist] = useState<CoinData[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -31,9 +33,9 @@ export default function WatchlistSection() {
         console.error('Failed to fetch watchlist:', error);
         // Fallback to mock data on error
         setWatchlist([
-          { symbol: 'BTC', name: 'Bitcoin', price: '$45,230', change_24h: 2.4 },
-          { symbol: 'ETH', name: 'Ethereum', price: '$2,890', change_24h: 1.8 },
-          { symbol: 'SOL', name: 'Solana', price: '$108.50', change_24h: -0.5 },
+          { symbol: 'BTC', name: 'Bitcoin', price: '$45,230', change_24h: 2.4, image: 'https://assets.coingecko.com/coins/images/1/small/bitcoin.png' },
+          { symbol: 'ETH', name: 'Ethereum', price: '$2,890', change_24h: 1.8, image: 'https://assets.coingecko.com/coins/images/279/small/ethereum.png' },
+          { symbol: 'SOL', name: 'Solana', price: '$108.50', change_24h: -0.5, image: 'https://assets.coingecko.com/coins/images/4128/small/solana.png' },
         ]);
       } finally {
         setLoading(false);
@@ -45,8 +47,7 @@ export default function WatchlistSection() {
 
   const handleCoinClick = (symbol: string) => {
     vibrate('light');
-    // TODO: Navigate to analytics page with selected symbol
-    console.log('Navigate to analytics:', symbol);
+    router.push(`/coin/${symbol.toLowerCase()}`);
   };
 
   const handleAddCoin = () => {
@@ -60,7 +61,7 @@ export default function WatchlistSection() {
       initial={{ opacity: 0, y: 20 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: 0.1 }}
-      className="glassmorphism-card rounded-2xl p-5"
+      className="glass-blue-card rounded-2xl p-5"
     >
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-white font-bold text-lg flex items-center gap-2">
@@ -92,8 +93,21 @@ export default function WatchlistSection() {
             className="flex items-center justify-between p-3 bg-gray-800/30 hover:bg-gray-800/50 rounded-xl transition-all cursor-pointer active:scale-98"
           >
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-full bg-blue-600/20 flex items-center justify-center">
-                <span className="text-blue-400 font-bold text-sm">{coin.symbol}</span>
+              <div className="w-10 h-10 rounded-full bg-gray-800/50 flex items-center justify-center overflow-hidden">
+                {coin.image ? (
+                  <img
+                    src={coin.image}
+                    alt={coin.symbol}
+                    className="w-8 h-8 rounded-full"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                    }}
+                  />
+                ) : null}
+                <span className={`text-blue-400 font-bold text-sm ${coin.image ? 'hidden' : ''}`}>
+                  {coin.symbol}
+                </span>
               </div>
               <div>
                 <p className="text-white font-medium text-sm">{coin.name}</p>
@@ -127,6 +141,7 @@ export default function WatchlistSection() {
           </div>
         )}
       </div>
+
     </motion.div>
   );
 }

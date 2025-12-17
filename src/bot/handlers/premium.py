@@ -11,7 +11,6 @@ Handles:
 - /subscription - Show current subscription
 - /cancel_subscription - Cancel auto-renewal
 """
-import logging
 from datetime import datetime, UTC
 
 from aiogram import Router, F, Bot
@@ -23,15 +22,14 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     InlineKeyboardButton,
 )
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.models import SubscriptionTier
-from src.database.crud import get_subscription, update_subscription
+from src.database.crud import get_subscription, update_subscription, get_referral_stats
 from src.services.telegram_stars_service import TelegramStarsService
+from src.services.crypto_pay_service import get_crypto_pay_service, CRYPTO_PAY_ASSETS
 from src.utils.i18n import i18n
-
-
-logger = logging.getLogger(__name__)
 
 # Create router
 router = Router(name="premium")
@@ -52,32 +50,41 @@ async def cmd_premium(message: Message, user_language: str = "ru") -> None:
     # Get tier selection keyboard
     keyboard = get_tier_selection_keyboard(user_language)
 
-    # Import pricing to show in description
+    # Import pricing and points bonus config
     from src.services.telegram_stars_service import SUBSCRIPTION_PLANS
+    from config.points_config import SUBSCRIPTION_BONUSES
 
     # Get prices from config
     basic_price = SUBSCRIPTION_PLANS[SubscriptionTier.BASIC]["1"]["usd"]
     premium_price = SUBSCRIPTION_PLANS[SubscriptionTier.PREMIUM]["1"]["usd"]
     vip_price = SUBSCRIPTION_PLANS[SubscriptionTier.VIP]["1"]["usd"]
 
-    # Build text using i18n with prices
+    # Get points bonuses (for 1 month)
+    basic_points = SUBSCRIPTION_BONUSES.get(SubscriptionTier.BASIC, {}).get(1, 100)
+    premium_points = SUBSCRIPTION_BONUSES.get(SubscriptionTier.PREMIUM, {}).get(1, 500)
+    vip_points = SUBSCRIPTION_BONUSES.get(SubscriptionTier.VIP, {}).get(1, 1500)
+
+    # Build text using i18n with prices and points bonuses
     text = (
         f"{i18n.get('premium.title', user_language)}\n\n"
         f"{i18n.get('premium.choose_plan', user_language)}\n\n"
         f"{i18n.get('premium_plans.basic.emoji', user_language)} <b>{i18n.get('premium_plans.basic.name', user_language)}</b> ({i18n.get('premium_plans.basic.limit', user_language)}) - <b>${basic_price:.2f}/мес</b>\n"
         f"{i18n.get('premium_plans.basic.feature_1', user_language)}\n"
         f"{i18n.get('premium_plans.basic.feature_2', user_language)}\n"
-        f"{i18n.get('premium_plans.basic.feature_3', user_language)}\n\n"
+        f"{i18n.get('premium_plans.basic.feature_3', user_language)}\n"
+        f"{i18n.get('premium_plans.basic.points_bonus', user_language, points=basic_points)}\n\n"
         f"{i18n.get('premium_plans.premium.emoji', user_language)} <b>{i18n.get('premium_plans.premium.name', user_language)}</b> ({i18n.get('premium_plans.premium.limit', user_language)}) - <b>${premium_price:.2f}/мес</b>\n"
         f"{i18n.get('premium_plans.premium.feature_1', user_language)}\n"
         f"{i18n.get('premium_plans.premium.feature_2', user_language)}\n"
         f"{i18n.get('premium_plans.premium.feature_3', user_language)}\n"
-        f"{i18n.get('premium_plans.premium.feature_4', user_language)}\n\n"
+        f"{i18n.get('premium_plans.premium.feature_4', user_language)}\n"
+        f"{i18n.get('premium_plans.premium.points_bonus', user_language, points=premium_points)}\n\n"
         f"{i18n.get('premium_plans.vip.emoji', user_language)} <b>{i18n.get('premium_plans.vip.name', user_language)}</b> ({i18n.get('premium_plans.vip.limit', user_language)}) - <b>${vip_price:.2f}/мес</b>\n"
         f"{i18n.get('premium_plans.vip.feature_1', user_language)}\n"
         f"{i18n.get('premium_plans.vip.feature_2', user_language)}\n"
         f"{i18n.get('premium_plans.vip.feature_3', user_language)}\n"
-        f"{i18n.get('premium_plans.vip.feature_4', user_language)}\n\n"
+        f"{i18n.get('premium_plans.vip.feature_4', user_language)}\n"
+        f"{i18n.get('premium_plans.vip.points_bonus', user_language, points=vip_points)}\n\n"
         f"{i18n.get('premium.select_below', user_language)}"
     )
 
@@ -187,6 +194,22 @@ async def process_purchase(
 
     tier = SubscriptionTier(tier_value)
 
+    # Get referral discount for user
+    referral_discount_percent = 0
+    try:
+        referral_stats = await get_referral_stats(session, user.id)
+        referral_discount_percent = referral_stats.get('discount_percent', 0)
+    except Exception as e:
+        logger.warning(f"Failed to get referral discount for user {user.id}: {e}")
+
+    # Get post-trial discount (20% off first subscription after trial ends)
+    post_trial_discount_percent = 0
+    if user.subscription and user.subscription.has_post_trial_discount:
+        post_trial_discount_percent = 20
+
+    # Combine discounts (max 50%)
+    total_discount_percent = min(50, referral_discount_percent + post_trial_discount_percent)
+
     # Create invoice
     success = await payment_service.create_subscription_invoice(
         message=callback.message,
@@ -194,6 +217,7 @@ async def process_purchase(
         tier=tier,
         duration_months=duration_months,
         user_language=user_language,
+        referral_discount_percent=total_discount_percent,  # Combined discount
     )
 
     if success:
@@ -304,6 +328,31 @@ async def process_successful_payment(
     if success:
         # Get updated subscription info
         subscription = await get_subscription(session, user.id)
+
+        # 📊 Track successful payment in PostHog
+        from src.services.posthog_service import track_payment_completed
+
+        # Parse invoice payload to get tier and duration
+        import json
+        try:
+            payload = json.loads(payment.invoice_payload)
+            tier = payload.get("tier", subscription.tier)
+            duration_months = payload.get("duration_months", 1)
+        except:
+            tier = subscription.tier
+            duration_months = 1
+
+        # Convert Stars to USD (1 Star = ~$0.015 USD)
+        amount_usd = (payment.total_amount / 100) * 0.015  # Stars to USD conversion
+
+        track_payment_completed(
+            user.id,
+            tier,
+            duration_months,
+            amount_usd,
+            "telegram_stars",
+            is_upgrade=False  # TODO: detect if upgrade from lower tier
+        )
 
         # Build success message using i18n
         tier_name = i18n.get(f"tier_names.{subscription.tier}", user_language)

@@ -3,15 +3,12 @@ Admin middleware - checks if user has admin rights
 """
 
 from typing import Callable, Dict, Any, Awaitable
-import logging
 
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message, CallbackQuery
+from loguru import logger
 
 from config.config import ADMIN_IDS
-
-
-logger = logging.getLogger(__name__)
 
 
 class AdminMiddleware(BaseMiddleware):

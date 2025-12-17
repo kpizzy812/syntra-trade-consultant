@@ -9,12 +9,12 @@
 import { useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import ChatMessage from './ChatMessage';
-import TypingIndicator from './TypingIndicator';
 
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  image?: string;  // Base64 image data
   timestamp: string;
   isStreaming?: boolean;
 }
@@ -40,73 +40,15 @@ export default function MessageList({
     }
   }, [messages, isLoading]);
 
-  // Если нет сообщений - показываем welcome screen
-  if (messages.length === 0 && !isLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center px-4">
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="text-center max-w-md"
-        >
-          {/* AI Icon */}
-          <div className="w-20 h-20 mx-auto mb-6 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
-            <svg
-              width="40"
-              height="40"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="white"
-              strokeWidth="2"
-            >
-              <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
-            </svg>
-          </div>
-
-          {/* Welcome Text */}
-          <h2 className="text-2xl font-bold text-white mb-3">
-            Syntra AI Assistant
-          </h2>
-          <p className="text-gray-400 text-sm mb-8">
-            Your personal crypto trading advisor powered by AI.
-            <br />
-            Ask me anything about crypto markets, technical analysis, or trading strategies.
-          </p>
-
-          {/* Suggested Prompts */}
-          <div className="space-y-2">
-            <p className="text-xs text-gray-500 mb-3">Try asking:</p>
-            <div className="grid gap-2">
-              {[
-                '💡 Analyze BTC price action',
-                '📊 Show me Fear & Greed insights',
-                '🔍 What are the top altcoins?',
-                '📈 Technical analysis for ETH',
-              ].map((prompt, index) => (
-                <motion.button
-                  key={prompt}
-                  initial={{ opacity: 0, x: -20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  transition={{ delay: index * 0.1 }}
-                  className="text-left px-4 py-3 bg-gray-800/30 hover:bg-gray-800/50 border border-gray-700/30 hover:border-gray-600/50 rounded-xl text-sm text-gray-300 transition-all active:scale-98"
-                >
-                  {prompt}
-                </motion.button>
-              ))}
-            </div>
-          </div>
-        </motion.div>
-      </div>
-    );
-  }
-
   return (
     <div
       ref={containerRef}
-      className="flex-1 overflow-y-auto px-4 py-4 scroll-smooth"
+      className="h-full overflow-y-auto overflow-x-hidden px-4 py-4 scroll-smooth -webkit-overflow-scrolling-touch"
       style={{
+        paddingBottom: 'calc(8rem + max(env(safe-area-inset-bottom), 0.5rem))',
         scrollBehavior: 'smooth',
         overscrollBehavior: 'contain',
+        WebkitOverflowScrolling: 'touch',
       }}
     >
       <AnimatePresence initial={false}>
@@ -121,6 +63,7 @@ export default function MessageList({
             <ChatMessage
               role={message.role}
               content={message.content}
+              image={message.image}
               timestamp={message.timestamp}
               isStreaming={message.isStreaming}
               onRegenerate={
@@ -132,17 +75,6 @@ export default function MessageList({
           </motion.div>
         ))}
       </AnimatePresence>
-
-      {/* Typing Indicator */}
-      {isLoading && (
-        <motion.div
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -10 }}
-        >
-          <TypingIndicator />
-        </motion.div>
-      )}
 
       {/* Invisible element для auto-scroll */}
       <div ref={messagesEndRef} className="h-1" />

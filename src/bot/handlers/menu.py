@@ -2,7 +2,7 @@
 Menu callback handlers - handle inline keyboard button clicks
 """
 
-import logging
+import asyncio
 from pathlib import Path
 
 from aiogram import Router, F
@@ -13,6 +13,7 @@ from aiogram.types import (
     FSInputFile,
     InputMediaPhoto,
 )
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.crud import (
@@ -21,9 +22,6 @@ from src.database.crud import (
     update_user_language,
 )
 from src.utils.i18n import i18n
-
-
-logger = logging.getLogger(__name__)
 router = Router(name="menu")
 
 
@@ -108,6 +106,17 @@ async def menu_help_callback(callback: CallbackQuery, user_language: str = "ru")
     """
     Handle 'Help' button click - show help information
     """
+    from config.config import (
+        TERMS_OF_SERVICE_URL_RU,
+        TERMS_OF_SERVICE_URL_EN,
+        PRIVACY_POLICY_URL_RU,
+        PRIVACY_POLICY_URL_EN,
+    )
+
+    # Get URLs based on language
+    terms_url = TERMS_OF_SERVICE_URL_RU if user_language == "ru" else TERMS_OF_SERVICE_URL_EN
+    privacy_url = PRIVACY_POLICY_URL_RU if user_language == "ru" else PRIVACY_POLICY_URL_EN
+
     # Build help text from translations
     help_text = f"""{i18n.get('help.title', user_language)}
 
@@ -134,6 +143,7 @@ async def menu_help_callback(callback: CallbackQuery, user_language: str = "ru")
 {i18n.get('help.limits_text', user_language)}
 
 {i18n.get('help.footer', user_language)}
+{i18n.get('help.legal_documents', user_language, terms_url=terms_url, privacy_url=privacy_url)}
 """
 
     await safe_edit_or_resend(
@@ -173,7 +183,7 @@ async def menu_profile_callback(
     )
 
     # Status display - check subscription
-    await session.refresh(user, ["subscription"])
+    await session.refresh(user, ["subscription", "referral_balance"])
     subscription = user.subscription
 
     if subscription and subscription.is_active and subscription.tier != "free":
@@ -196,7 +206,6 @@ async def menu_profile_callback(
 {i18n.get('profile.usage_title', user_language)}
 
 {i18n.get('profile.requests', user_language, current=remaining, limit=limit)}
-{i18n.get('profile.remaining', user_language, remaining=remaining)}
 
 {i18n.get('profile.status', user_language, status=status_display)}"""
 
@@ -316,8 +325,7 @@ async def set_language_callback(callback: CallbackQuery, session: AsyncSession):
 
 {i18n.get('profile.usage_title', new_language)}
 
-{i18n.get('profile.requests', new_language, current=current_count, limit=limit)}
-{i18n.get('profile.remaining', new_language, remaining=remaining)}
+{i18n.get('profile.requests', new_language, current=remaining, limit=limit)}
 
 {i18n.get('profile.status', new_language, status=status_display)}
 
@@ -352,7 +360,6 @@ async def menu_referral_callback(
     Handle 'Referral System' button click
     """
     from src.database import crud
-    from src.database.models import User
     from src.bot.handlers.referral import get_referral_menu_keyboard
 
     user = await get_user_by_telegram_id(session, callback.from_user.id)
@@ -496,9 +503,17 @@ async def check_subscription_callback(
     """
     Handle 'Check Subscription' button - verify and grant access
     """
-    from config.config import REQUIRED_CHANNEL
-    from aiogram.enums import ChatMemberStatus
+    from config.config import (
+        REQUIRED_CHANNEL,
+        TERMS_OF_SERVICE_URL_RU,
+        TERMS_OF_SERVICE_URL_EN,
+        PRIVACY_POLICY_URL_RU,
+        PRIVACY_POLICY_URL_EN,
+    )
+    from aiogram.enums import ChatMemberStatus, ParseMode
     from src.bot.handlers.start import get_main_menu
+    from src.database.models import User
+    from src.database.crud import create_referral
 
     try:
         # Get user from database for language
@@ -515,7 +530,101 @@ async def check_subscription_callback(
             ChatMemberStatus.ADMINISTRATOR,
             ChatMemberStatus.CREATOR,
         }:
-            # User is subscribed - show welcome
+            # User is subscribed - answer callback first
+            await callback.answer(i18n.get("subscription.verified_alert", lang))
+            logger.info(f"User {callback.from_user.id} subscription verified")
+
+            # Process pending referral code if exists
+            if user.pending_referral_code:
+                referral_code = user.pending_referral_code
+                logger.info(f"Processing pending referral code {referral_code} for user {user.id}")
+
+                # Find referrer by code
+                from sqlalchemy import select
+                stmt = select(User).where(User.referral_code == referral_code)
+                result = await session.execute(stmt)
+                referrer = result.scalar_one_or_none()
+
+                if referrer and referrer.id != user.id:
+                    # Create referral relationship
+                    try:
+                        referral = await create_referral(
+                            session,
+                            referrer_id=referrer.id,
+                            referee_id=user.id,
+                            referral_code=referral_code
+                        )
+                        if referral:
+                            logger.info(
+                                f"Referral created: {referrer.id} (@{referrer.username}) "
+                                f"referred {user.id} (@{user.username})"
+                            )
+
+                            # Send notification to referrer about new referral
+                            try:
+                                from src.database.crud import get_referral_stats
+
+                                # Get referrer's language
+                                referrer_lang = referrer.language or "ru"
+
+                                # Get total referrals count
+                                stats = await get_referral_stats(session, referrer.id)
+
+                                # Format user display
+                                user_display = f"@{user.username}" if user.username else user.first_name or "Anonymous"
+
+                                # Format date
+                                from datetime import datetime
+                                current_date = datetime.now().strftime("%d.%m.%Y %H:%M")
+
+                                # Build notification text
+                                notification_text = (
+                                    f"{i18n.get('referral_notifications.new_referral_title', referrer_lang)}\n\n"
+                                    f"{i18n.get('referral_notifications.new_referral_text', referrer_lang, user_display=user_display, date=current_date, total=stats['total_referrals'])}"
+                                )
+
+                                # Send notification to referrer
+                                await callback.bot.send_message(
+                                    chat_id=referrer.telegram_id,
+                                    text=notification_text,
+                                    parse_mode="HTML"
+                                )
+
+                                logger.info(f"Notification sent to referrer {referrer.id} about new referral {user.id}")
+                            except Exception as notif_error:
+                                logger.error(f"Failed to send referral notification: {notif_error}")
+                    except Exception as e:
+                        logger.error(f"Failed to create referral: {e}")
+
+                # Clear pending referral code
+                user.pending_referral_code = None
+                await session.commit()
+                logger.info(f"Cleared pending referral code for user {user.id}")
+
+            # Check if privacy policy was already shown
+            if not user.privacy_policy_shown:
+                # Show privacy policy message ONCE with both URLs
+                terms_url = TERMS_OF_SERVICE_URL_RU if lang == "ru" else TERMS_OF_SERVICE_URL_EN
+                privacy_url = PRIVACY_POLICY_URL_RU if lang == "ru" else PRIVACY_POLICY_URL_EN
+                privacy_message = i18n.get(
+                    "privacy.policy_message", lang, terms_url=terms_url, privacy_url=privacy_url
+                )
+
+                # Send privacy policy as separate message
+                await callback.message.answer(
+                    privacy_message,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True
+                )
+
+                # Update user to mark privacy policy as shown
+                user.privacy_policy_shown = True
+                await session.commit()
+
+                # Wait 3 seconds before showing main menu
+                await asyncio.sleep(3)
+
+            # Show main menu
             greeting = i18n.get(
                 "subscription.verified", lang, name=callback.from_user.first_name
             )
@@ -523,8 +632,6 @@ async def check_subscription_callback(
             await safe_edit_or_resend(
                 callback, greeting, reply_markup=get_main_menu(lang), with_photo=True
             )
-            await callback.answer(i18n.get("subscription.verified_alert", lang))
-            logger.info(f"User {callback.from_user.id} subscription verified")
         else:
             await callback.answer(
                 i18n.get("subscription.not_found", lang), show_alert=True

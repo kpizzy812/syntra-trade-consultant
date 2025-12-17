@@ -2,13 +2,13 @@
 """
 Handlers for cryptocurrency commands (/price, /analyze, /market)
 """
-import logging
 from typing import Optional
 
 from aiogram import Router, F
 from aiogram.types import Message
 from aiogram.filters import Command, CommandObject
 from aiogram.utils.chat_action import ChatActionSender
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from config.config import ModelConfig
@@ -16,10 +16,9 @@ from config.prompt_selector import get_price_analysis_prompt
 from src.services.openai_service import OpenAIService
 from src.services.coingecko_service import CoinGeckoService
 from src.services.cryptopanic_service import CryptoPanicService
+from src.services.points_service import PointsService
+from src.database.models import PointsTransactionType
 from src.utils.coin_parser import normalize_coin_name, extract_coin_from_text
-
-
-logger = logging.getLogger(__name__)
 
 router = Router(name="crypto")
 
@@ -250,13 +249,22 @@ async def cmd_analyze(
         full_response = ""
         buffer = ""
 
+        # Get user from DB to check tier
+        from src.database.crud import get_user_by_telegram_id
+
+        user = await get_user_by_telegram_id(session, user_id)
+        user_tier = "free"
+        if user and hasattr(user, 'subscription') and user.subscription:
+            user_tier = user.subscription.tier
+
         async with ChatActionSender.typing(bot=message.bot, chat_id=message.chat.id):
             async for chunk in openai_service.stream_completion(
                 session=session,
-                user_id=user_id,
+                user_id=user.id if user else user_id,
                 user_message=analysis_prompt,
                 user_language=user_language,
-                model=ModelConfig.GPT_4O,  # Use GPT-4O for detailed analysis
+                user_tier=user_tier,  # 🚨 Pass tier for model routing
+                model=None,  # Let tier-aware routing decide (was hardcoded GPT-4O!)
             ):
                 if chunk:
                     full_response += chunk
@@ -278,6 +286,32 @@ async def cmd_analyze(
                 pass
 
         logger.info(f"Analysis sent for {coin_id} to user {user_id}")
+
+        # 💎 Award points for successful chart/analysis request
+        try:
+            points_transaction = await PointsService.earn_points(
+                session=session,
+                user_id=user.id,
+                transaction_type=PointsTransactionType.EARN_CHART_REQUEST,
+                description=f"Технический анализ: {coin_name} ({symbol})",
+                metadata={
+                    "coin_id": coin_id,
+                    "coin_name": coin_name,
+                    "symbol": symbol,
+                    "price": price,
+                    "command": "analyze",
+                    "language": user_language,
+                },
+                transaction_id=f"chart_req:{user.id}:{message.message_id}",
+            )
+            if points_transaction:
+                logger.info(
+                    f"💎 Awarded {points_transaction.amount} points to user {user.id} "
+                    f"for chart/analysis request (balance: {points_transaction.balance_after})"
+                )
+        except Exception as points_error:
+            # Don't fail the request if points fail
+            logger.error(f"Failed to award points: {points_error}")
 
     except Exception as e:
         logger.exception(f"Error in analyze command for user {user_id}: {e}")

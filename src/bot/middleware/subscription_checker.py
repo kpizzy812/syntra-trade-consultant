@@ -3,19 +3,16 @@ Subscription checker middleware - checks subscription expiry and downgrades if n
 """
 
 from typing import Callable, Dict, Any, Awaitable
-import logging
 from datetime import datetime, UTC
 
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message
+from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.crud import deactivate_subscription, get_subscription
 from src.database.models import SubscriptionTier
 from src.utils.i18n import i18n
-
-
-logger = logging.getLogger(__name__)
 
 
 class SubscriptionCheckerMiddleware(BaseMiddleware):

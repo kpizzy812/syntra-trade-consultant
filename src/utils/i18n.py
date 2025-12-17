@@ -3,11 +3,10 @@ Internationalization (i18n) utilities for bot localization
 """
 
 import json
-import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class I18n:

@@ -6,7 +6,7 @@ Loads configuration from environment variables using python-dotenv
 
 import os
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
 
 # Load .env file (override=True ensures .env has priority over shell environment)
@@ -16,6 +16,7 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 # Telegram Bot Configuration
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
+BOT_USERNAME: str = os.getenv("BOT_USERNAME", "SyntraAI_bot")
 REQUIRED_CHANNEL: str = os.getenv("REQUIRED_CHANNEL", "")
 ADMIN_IDS: List[int] = [
     int(admin_id.strip())
@@ -23,13 +24,46 @@ ADMIN_IDS: List[int] = [
     if admin_id.strip()
 ]
 
+# Official Channel ID for auto-repost feature
+# Can be username (@channel_name) or numeric ID (-1001234567890)
+OFFICIAL_CHANNEL_ID: Optional[int] = None
+_channel_id = os.getenv("OFFICIAL_CHANNEL_ID", "")
+if _channel_id:
+    try:
+        OFFICIAL_CHANNEL_ID = int(_channel_id)
+    except ValueError:
+        pass  # Keep as None if not a valid number
+
+# Legal Documents URLs (Telegraph articles)
+# Terms of Service
+TERMS_OF_SERVICE_URL_RU: str = os.getenv(
+    "TERMS_OF_SERVICE_URL_RU", "https://telegra.ph/Pravila-ispolzovaniya-Syntra-AI-RU"
+)
+TERMS_OF_SERVICE_URL_EN: str = os.getenv(
+    "TERMS_OF_SERVICE_URL_EN", "https://telegra.ph/Terms-of-Service-Syntra-AI-EN"
+)
+
+# Privacy Policy
+PRIVACY_POLICY_URL_RU: str = os.getenv(
+    "PRIVACY_POLICY_URL_RU", "https://telegra.ph/Politika-konfidencialnosti-Syntra-AI-RU"
+)
+PRIVACY_POLICY_URL_EN: str = os.getenv(
+    "PRIVACY_POLICY_URL_EN", "https://telegra.ph/Privacy-Policy-Syntra-AI-EN"
+)
+
 # Database Configuration
 DATABASE_URL: str = os.getenv(
     "DATABASE_URL", "postgresql+asyncpg://syntra:password@localhost:5432/syntra_bot"
 )
 
-# OpenAI API (includes Vision)
+# AI API Keys (both providers initialized, selection is dynamic based on user tier)
+# OpenAI API (GPT-4o, GPT-4o-mini, Vision)
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+
+# DeepSeek API
+DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
 
 # CoinGecko API
 COINGECKO_API_KEY: str = os.getenv("COINGECKO_API_KEY", "")
@@ -40,10 +74,18 @@ COINMARKETCAP_API_KEY: str = os.getenv("COINMARKETCAP_API_KEY", "")
 # CryptoPanic API
 CRYPTOPANIC_TOKEN: str = os.getenv("CRYPTOPANIC_TOKEN", "")
 
+# Binance API
+BINANCE_API_KEY: str = os.getenv("BINANCE_API_KEY", "")
+BINANCE_API_SECRET: str = os.getenv("BINANCE_API_SECRET", "")
+
+# Trading Bot API Key (for protecting futures endpoints)
+TRADING_BOT_API_KEY: str = os.getenv("TRADING_BOT_API_KEY", "")
+
 # Bot Configuration
 REQUEST_LIMIT_PER_DAY: int = int(os.getenv("REQUEST_LIMIT_PER_DAY", "5"))
 CACHE_TTL_COINGECKO: int = int(os.getenv("CACHE_TTL_COINGECKO", "60"))
-CACHE_TTL_CRYPTOPANIC: int = int(os.getenv("CACHE_TTL_CRYPTOPANIC", "300"))
+# CryptoPanic: ОЧЕНЬ жесткие лимиты (~3 запроса/день), кеш на 8 часов
+CACHE_TTL_CRYPTOPANIC: int = int(os.getenv("CACHE_TTL_CRYPTOPANIC", "28800"))
 
 # Subscription Check
 # In development: set to 'true' to skip subscription checks when bot is not channel admin
@@ -58,6 +100,9 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 # Mini App URL
 WEBAPP_URL: str = os.getenv("WEBAPP_URL", "http://localhost:3000")
+
+# API Base URL (for serving static files like screenshots)
+API_BASE_URL: str = os.getenv("API_BASE_URL", "http://localhost:8000")
 
 # Optional: Redis
 REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -111,9 +156,19 @@ def validate_config() -> bool:
 class ModelConfig:
     """Configuration for AI models"""
 
-    # OpenAI models
-    GPT_4O = "gpt-4o"
-    GPT_4O_MINI = "gpt-4o-mini"
+    # OpenAI models (Standard tier pricing)
+    GPT_5_1 = "gpt-5.1"              # Latest flagship model (2025)
+    GPT_5_MINI = "gpt-5-mini"        # Economical GPT-5 variant
+    GPT_4O = "gpt-4o"                # Previous flagship
+    GPT_4O_MINI = "gpt-4o-mini"      # Economical GPT-4o
+
+    # OpenAI Reasoning models
+    O4_MINI = "o4-mini"              # UltraThink: Reasoning model
+    O3_MINI = "o3-mini"              # Alternative reasoning model
+
+    # DeepSeek models
+    DEEPSEEK_CHAT = "deepseek-chat"          # Main model (fast, cheap)
+    DEEPSEEK_REASONER = "deepseek-reasoner"  # Thinking Mode (reasoning)
 
     # Token thresholds for model routing
     # If total tokens in prompt > threshold, use GPT-4O, else use GPT-4O-MINI
@@ -135,6 +190,10 @@ class ModelConfig:
     VISION_DETAIL_LEVEL = "high"  # 'low', 'high', or 'auto'
     VISION_MAX_FILE_SIZE = 20 * 1024 * 1024  # 20 MB
 
+    # ⚠️ DEPRECATED: Use config/limits.py and config/model_router.py instead
+    # Model selection is now tier-based, not global
+    # These methods are kept for backward compatibility only
+
 
 # API Rate Limits
 class RateLimits:
@@ -152,19 +211,63 @@ class RateLimits:
     OPENAI_TPM = 500_000  # tokens per minute
 
 
+# Resend Email Service (for Magic Link authentication)
+RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
+RESEND_FROM_EMAIL: str = os.getenv("RESEND_FROM_EMAIL", "noreply@syntratrade.xyz")
+RESEND_FROM_NAME: str = os.getenv("RESEND_FROM_NAME", "Syntra AI")
+
+# NextAuth JWT Secret (must match frontend)
+NEXTAUTH_SECRET: str = os.getenv("NEXTAUTH_SECRET", "your-nextauth-secret-here")
+
+
 # Pricing (for cost tracking)
 class Pricing:
-    """Pricing for API calls (per 1M tokens)"""
+    """Pricing for API calls (per 1M tokens) - Standard Tier, updated Nov 2025"""
 
-    # OpenAI Text models (updated Jan 2025)
-    GPT_4O_INPUT = 2.50  # $ per 1M tokens (updated from 3.0)
+    # GPT-5 models (2025 flagship)
+    GPT_5_1_INPUT = 1.25  # $ per 1M tokens
+    GPT_5_1_INPUT_CACHED = 0.125  # $ per 1M tokens (90% cheaper!)
+    GPT_5_1_OUTPUT = 10.0  # $ per 1M tokens
+
+    GPT_5_MINI_INPUT = 0.25  # $ per 1M tokens
+    GPT_5_MINI_INPUT_CACHED = 0.025  # $ per 1M tokens
+    GPT_5_MINI_OUTPUT = 2.0  # $ per 1M tokens
+
+    # GPT-4o models (legacy, but still good)
+    GPT_4O_INPUT = 2.50  # $ per 1M tokens
+    GPT_4O_INPUT_CACHED = 1.25  # $ per 1M tokens
     GPT_4O_OUTPUT = 10.0  # $ per 1M tokens
+
     GPT_4O_MINI_INPUT = 0.15  # $ per 1M tokens
+    GPT_4O_MINI_INPUT_CACHED = 0.075  # $ per 1M tokens
     GPT_4O_MINI_OUTPUT = 0.60  # $ per 1M tokens
 
-    # OpenAI Vision (same as GPT-4O, but includes image tokens)
-    GPT_4O_VISION_INPUT = 2.50  # $ per 1M tokens (updated from 3.0)
+    # Reasoning models (UltraThink)
+    O4_MINI_INPUT = 1.10  # $ per 1M tokens
+    O4_MINI_INPUT_CACHED = 0.275  # $ per 1M tokens
+    O4_MINI_OUTPUT = 4.40  # $ per 1M tokens
+
+    O3_MINI_INPUT = 1.10  # $ per 1M tokens
+    O3_MINI_INPUT_CACHED = 0.55  # $ per 1M tokens
+    O3_MINI_OUTPUT = 4.40  # $ per 1M tokens
+
+    # OpenAI Vision (same as GPT-4o/GPT-5.1)
+    GPT_4O_VISION_INPUT = 2.50  # $ per 1M tokens
     GPT_4O_VISION_OUTPUT = 10.0  # $ per 1M tokens
+
+    # DeepSeek models (super cheap!)
+    # Both deepseek-chat and deepseek-reasoner use same pricing
+    DEEPSEEK_INPUT = 0.28  # $ per 1M tokens (cache miss)
+    DEEPSEEK_INPUT_CACHED = 0.028  # $ per 1M tokens (cache hit) - 10x cheaper!
+    DEEPSEEK_OUTPUT = 0.42  # $ per 1M tokens
+
+    # Cost comparison (input/output):
+    # DeepSeek ($0.28/$0.42) - CHEAPEST ⭐
+    # GPT-4o-mini ($0.15/$0.60)
+    # GPT-5-mini ($0.25/$2.00)
+    # o4-mini ($1.10/$4.40) - UltraThink reasoning
+    # GPT-5.1 ($1.25/$10.00) - Latest flagship
+    # GPT-4o ($2.50/$10.00)
 
 
 if __name__ == "__main__":

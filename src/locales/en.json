@@ -27,7 +27,8 @@
     "disclaimer": "<i>⚠️ I'm not a financial advisor. All my responses are informational, not recommendations.</i>",
     "limits_title": "<b>Limits:</b>",
     "limits_text": "Free: 5 requests per day\nFor unlimited access: /premium (coming soon)",
-    "footer": "Just send a message or chart, and I'll help! 🚀"
+    "footer": "Just send a message or chart, and I'll help! 🚀",
+    "legal_documents": "\n\n📄 <b>Legal Documents:</b>\n• <a href=\"{terms_url}\">Terms of Service</a>\n• <a href=\"{privacy_url}\">Privacy Policy</a>"
   },
   "profile": {
     "title": "<b>👤 Your Profile</b>",
@@ -66,10 +67,10 @@
     "not_invited": "\nYou registered independently",
     "how_it_works": "🔄 How it works:",
     "you_get_title": "🎁 You get:",
-    "you_get_bonus": "• +15 bonus requests when your friend registers",
+    "you_get_bonus": "• +10 bonus requests when your friend becomes active",
     "you_get_premium": "• Bonuses for active referrals (up to 30% discount)",
     "friend_gets_title": "🎁 Your friend gets:",
-    "friend_gets_bonus": "• +15 bonus requests upon registration",
+    "friend_gets_bonus": "• +5 bonus requests upon registration",
     "stats_title": "📊 Your statistics:",
     "stats_invited": "Invited: {count}",
     "stats_bonus": "Bonus requests: +{bonus}",
@@ -84,12 +85,18 @@
     "revenue_share": "Revenue share",
     "leaderboard_rank": "Leaderboard position",
     "share_button": "📤 Share link",
-    "share_text": "🚀 Join Syntra - crypto consultant with attitude!\n\n✨ Register with my link and get +15 bonus requests!\n\nJoin:",
+    "share_text": "🚀 Join Syntra - your crypto consultant with attitude!\n\n✨ Sign up and get +5 bonus requests!",
     "stats_button": "📊 Statistics",
     "tiers_button": "🏆 Tiers",
     "leaderboard_button": "🏅 Top referrers",
     "balance_button": "💰 Balance",
     "no_tier": "You don't have a tier yet"
+  },
+  "referral_notifications": {
+    "new_referral_title": "🎉 <b>New Referral!</b>",
+    "new_referral_text": "A new user registered using your referral link!\n\n👤 <b>User:</b> {user_display}\n📅 <b>Date:</b> {date}\n\n🎁 When they become active (24h + 5 requests), you'll receive bonuses!\n\nTotal referrals: <b>{total}</b>",
+    "referral_purchase_title": "💰 <b>Your Referral Bought Premium!</b>",
+    "referral_purchase_text": "One of your referrals purchased a subscription!\n\n👤 <b>User:</b> {user_display}\n💎 <b>Plan:</b> {tier}\n⏱ <b>Duration:</b> {duration}\n\n💵 <b>Your Share:</b> +${revenue_share}\n📊 <b>Percentage:</b> {revenue_percent}%\n\n💰 <b>Balance:</b> ${balance}\n\n🎉 Congratulations! Keep inviting friends for more earnings!"
   },
   "balance": {
     "title": "💰 <b>Your Balance</b>",
@@ -214,28 +221,31 @@
     "basic": {
       "name": "BASIC",
       "emoji": "🥉",
-      "limit": "20 requests/day",
-      "feature_1": "• All bot features",
-      "feature_2": "• 20 requests per day",
-      "feature_3": "• Priority support"
+      "limit": "15 text + 5 charts + 3 vision/day",
+      "feature_1": "• 🧠 AI Thinking Mode",
+      "feature_2": "• All technical indicators",
+      "feature_3": "• Candlestick patterns + Funding rates",
+      "points_bonus": "💎 +{points} $SYNTRA Points"
     },
     "premium": {
       "name": "PREMIUM",
       "emoji": "🥈",
-      "limit": "100 requests/day",
-      "feature_1": "• All BASIC features",
-      "feature_2": "• 100 requests per day",
-      "feature_3": "• Early access to new features",
-      "feature_4": "• Personalized recommendations"
+      "limit": "20 text + 7 charts + 7 vision/day",
+      "feature_1": "• 🔥 Advanced AI models (2025)",
+      "feature_2": "• On-chain metrics + Liquidations",
+      "feature_3": "• Market cycle analysis",
+      "feature_4": "• 🎁 7-day free trial",
+      "points_bonus": "💎 +{points} $SYNTRA Points"
     },
     "vip": {
       "name": "VIP",
       "emoji": "🥇",
-      "limit": "unlimited",
-      "feature_1": "• All PREMIUM features",
-      "feature_2": "• Unlimited requests",
-      "feature_3": "• Priority processing",
-      "feature_4": "• VIP support 24/7"
+      "limit": "50 text + 15 charts + 15 vision/day",
+      "feature_1": "• Professional-grade AI analysis",
+      "feature_2": "• Multi-step reasoning engine",
+      "feature_3": "• All features unlocked",
+      "feature_4": "• VIP support 24/7",
+      "points_bonus": "💎 +{points} $SYNTRA Points"
     }
   },
   "premium_selection": {
@@ -301,25 +311,79 @@
   },
   "subscription": {
     "required": "⚠️ <b>To use the bot, you need to subscribe to our channel:</b>\n\n{channel}\n\nAfter subscribing, click the button below to verify.",
+    "subscribe_button": "Subscribe to channel",
     "check_button": "✅ I subscribed",
     "verified": "✅ <b>Great! You're subscribed.</b>\n\nHey, {name}!\n\nChoose a section from the menu below or just send me your question.",
     "verified_alert": "Subscription verified! ✅",
     "not_found": "❌ Subscription not found. Please subscribe to the channel and try again.",
     "error": "Error verifying subscription. Please try again later."
   },
+  "privacy": {
+    "policy_message": "⚖️ By using Syntra AI, you automatically agree to:\n\n• <a href=\"{terms_url}\">Terms of Service</a>\n• <a href=\"{privacy_url}\">Privacy Policy</a>\n\nBy continuing to use the bot, you confirm your agreement with our terms."
+  },
   "limits": {
-    "title": "Your Request Limits",
+    "title": "Your Limits",
+    "your_plan": "Plan",
     "usage": "Usage",
     "used": "Used: <b>{count} of {limit}</b>",
     "remaining": "Remaining: <b>{count}</b> request(s)",
+    "remaining_short": "Remaining",
+    "text_requests": "AI Analysis",
+    "vision_requests": "Screenshot Analysis",
     "reset": "Limit Reset",
     "reset_time": "In <b>{hours}</b> h (00:00 UTC)",
-    "status_available": "💡 You still have available requests. Use them wisely!",
-    "status_depleted": "⚠️ You've reached your daily limit.\n\nLimits will reset at 00:00 UTC.\nFor unlimited access: /premium (coming soon)"
+    "status_available": "💡 You have available requests!",
+    "status_depleted": "⚠️ Limit reached. Resets at 00:00 UTC."
+  },
+  "limit_types": {
+    "text": "text requests",
+    "chart": "chart requests",
+    "vision": "screenshot analysis requests"
+  },
+  "trial": {
+    "welcome_new_user": "🎉 <b>Welcome to Syntra!</b>\n\nYou have <b>7 DAYS PREMIUM FREE</b>! 🚀\n\n<b>What's available in PREMIUM:</b>\n📊 Full technical analysis\n📈 On-chain metrics\n💰 Precise trading signals\n📷 30 requests/day\n\n<i>Trial automatically activated. Use it to the max!</i>",
+    "ending_24h": "⏰ <b>Your PREMIUM trial ends in 24 hours!</b>\n\nIn one day, access to advanced features will be limited.\n\n💡 <b>Special offer:</b>\n🔥 -20% ON FIRST MONTH (valid 48 hours after trial)\n\nContinue with a discount!",
+    "ended_with_discount": "😔 <b>Your PREMIUM trial has ended</b>\n\nYou now have the FREE version (1 request/day).\n\n<b>But you have an exclusive offer:</b>\n🔥 <b>-20% ON FIRST MONTH</b>\n\nOffer valid for {hours_remaining} hours!\n\nPREMIUM $24.99 → <b>$19.99</b> (first month)",
+    "discount_expiring": "🔥 <b>-20% discount expires in {hours_remaining} hours!</b>\n\nLast chance to get PREMIUM with a discount:\n$24.99 → <b>$19.99</b> (first month)\n\nDon't miss out!",
+    "upgrade_button": "⭐ Try PREMIUM",
+    "activate_discount_button": "🔥 Activate -20% discount"
+  },
+  "tiers": {
+    "free": {
+      "name": "FREE",
+      "description": "Basic analysis",
+      "limits": "1 text, 1 chart/day",
+      "features": "• Basic TA (RSI, MACD)\n• News\n• Fear & Greed index"
+    },
+    "basic": {
+      "name": "BASIC",
+      "price": "$9.99/month",
+      "description": "Extended analysis",
+      "limits": "15 text, 5 charts, 3 vision/day",
+      "features": "• AI Thinking Mode\n• All technical indicators\n• Candlestick patterns"
+    },
+    "premium": {
+      "name": "PREMIUM",
+      "price": "$24.99/month",
+      "description": "Full functionality",
+      "limits": "20 text, 7 charts, 7 vision/day",
+      "features": "• Advanced AI models (2025)\n• On-chain metrics\n• Market cycle analysis",
+      "trial": "🎉 7 days free"
+    },
+    "vip": {
+      "name": "VIP",
+      "price": "$49.99/month",
+      "description": "Maximum capabilities",
+      "limits": "50 text, 15 charts, 15 vision/day",
+      "features": "• Professional-grade AI\n• Multi-step reasoning\n• All features unlocked"
+    }
   },
   "errors": {
     "general": "An error occurred. Please try again later.",
     "rate_limit": "⚠️ You've reached your daily request limit ({limit}).\n\nTry again tomorrow or get Premium subscription for unlimited access.",
+    "rate_limit_typed": "⚠️ You've reached your daily limit for {type} ({limit}).\n\nTry again tomorrow or get Premium subscription.",
+    "rate_limit_with_cta": "Request limit reached ({limit}/day). Try again in {hours}h or subscribe for more requests!",
+    "rate_limit_bot": "⚠️ <b>Limit Reached</b>\n\nYou've used all {limit} requests for today.\n\n⏰ Limit resets in {hours}h.\n\n💡 <b>Or get Premium</b> — more requests and advanced features!",
     "no_value": "Not specified",
     "user_not_found": "Error: user not found in database."
   },
@@ -359,5 +423,38 @@
       "memo": "📋 <b>Memo:</b> <code>{memo}</code>",
       "active_until": "📅 Subscription active until: {date}"
     }
+  },
+  "ads": {
+    "ai_trading": {
+      "banner_title": "Syntra AI Trading",
+      "banner_subtitle": "Automated trading without emotions",
+      "banner_cta": "Try Now",
+      "push_title": "Syntra AI Trading",
+      "push_cta": "Try AI Trading"
+    },
+    "native_hints": {
+      "automation": "Tired of manual trading? Check out syntratrade.xyz",
+      "emotions": "Algorithms don't know fear or greed. That's their power.",
+      "passive": "While you sleep — your portfolio works.",
+      "time": "No time to watch the market? AI does it for you."
+    }
+  },
+  "points": {
+    "not_found": "❌ Points balance not found. Please try again later.",
+    "balance_title": "💎 $SYNTRA Points",
+    "level": "{icon} Level {level}: {name}",
+    "balance": "🎯 Balance: {balance:,} points",
+    "multiplier": "📈 Multiplier: {multiplier}x",
+    "stats_title": "📊 Statistics:",
+    "lifetime_earned": "Total earned: {earned:,}",
+    "lifetime_spent": "Total spent: {spent:,}",
+    "streak_current": "{emoji} Streak: {days} days in a row",
+    "streak_best": "🏆 Best streak: {days} days",
+    "progress_title": "Progress to next level:",
+    "progress_remaining": "Remaining: {points:,} points",
+    "max_level": "🎉 You've reached the maximum level!",
+    "earn_tip": "💡 Earn points for requests, purchases and referrals!",
+    "how_to_earn": "📊 How to earn $SYNTRA points",
+    "earn_methods": "💎 <b>How to earn $SYNTRA points:</b>\n\n📝 <b>For requests:</b>\n• Text request: +10 points\n• Vision analysis: +20 points\n• Technical analysis: +15 points\n\n🔥 <b>Daily login:</b>\n• 1 day: +50 points\n• 7 days streak: +500 points\n• 30 days streak: +3000 points\n\n💰 <b>Subscriptions:</b>\n• BASIC (1 month): +500 points\n• PREMIUM (1 month): +1500 points\n• VIP (1 month): +3000 points\n\n👥 <b>Referrals:</b>\n• Referral signup: +500 points\n• Referral purchase: +1000 points\n\n📈 <b>Multipliers:</b>\n• Level (1-6): from 1.0x to 2.0x\n• Subscription: FREE 1.0x, PREMIUM 1.5x, VIP 2.0x\n\n💡 <i>Level up and upgrade subscription for maximum earning!</i>"
   }
 }

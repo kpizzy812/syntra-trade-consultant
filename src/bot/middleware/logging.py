@@ -3,14 +3,14 @@ Logging middleware - logs all incoming updates
 """
 
 from typing import Callable, Dict, Any, Awaitable
-import logging
+
 import time
 
 from aiogram import BaseMiddleware
 from aiogram.types import TelegramObject, Message, CallbackQuery
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class LoggingMiddleware(BaseMiddleware):

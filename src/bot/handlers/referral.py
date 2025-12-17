@@ -9,8 +9,6 @@ Handles:
 - Leaderboard
 - Balance withdrawal and spending
 """
-import logging
-from datetime import datetime, UTC
 
 from aiogram import Router, F
 from aiogram.filters import Command
@@ -25,9 +23,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database import crud
 from src.database.models import User
 from src.utils.i18n import i18n
-
-
-logger = logging.getLogger(__name__)
 
 # Create router
 router = Router(name="referral")
@@ -83,7 +78,10 @@ async def cmd_referral(
 
     # Add referrer info
     if referrer:
-        if referrer.username:
+        # Если пригласитель - админ, не показываем реальное имя
+        if referrer.is_admin:
+            text += i18n.get('referral.invited_by_unknown', user_language, name="Syntra Team")
+        elif referrer.username:
             text += i18n.get('referral.invited_by', user_language, username=referrer.username)
         else:
             text += i18n.get('referral.invited_by_unknown', user_language, name=referrer.first_name or "Unknown")
@@ -112,7 +110,7 @@ async def cmd_referral(
         text += f"\n{i18n.get('referral.leaderboard_rank', user_language)}: #{stats['leaderboard_rank']}"
 
     # Keyboard
-    keyboard = get_referral_menu_keyboard(user_language)
+    keyboard = get_referral_menu_keyboard(user_language, ref_link)
 
     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
@@ -161,15 +159,9 @@ async def cmd_balance(
     await message.answer(text, reply_markup=keyboard, parse_mode="HTML")
 
 
-def get_referral_menu_keyboard(user_language: str = "ru") -> InlineKeyboardMarkup:
+def get_referral_menu_keyboard(user_language: str = "ru", ref_link: str = "") -> InlineKeyboardMarkup:
     """Get keyboard for referral menu"""
     buttons = [
-        [
-            InlineKeyboardButton(
-                text=i18n.get('referral.share_button', user_language),
-                switch_inline_query=i18n.get('referral.share_text', user_language),
-            )
-        ],
         [
             InlineKeyboardButton(
                 text=i18n.get('referral.stats_button', user_language),
@@ -196,7 +188,7 @@ def get_referral_menu_keyboard(user_language: str = "ru") -> InlineKeyboardMarku
         ],
         [
             InlineKeyboardButton(
-                text=i18n.get('back', user_language), callback_data="main_menu"
+                text=i18n.get('menu.back', user_language), callback_data="menu_back"
             )
         ],
     ]
@@ -245,7 +237,7 @@ def get_balance_menu_keyboard(
     buttons.append(
         [
             InlineKeyboardButton(
-                text=i18n.get('back', user_language), callback_data="ref_menu"
+                text=i18n.get('balance.back_button', user_language), callback_data="ref_menu"
             )
         ]
     )
@@ -291,7 +283,7 @@ async def show_referral_stats(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=i18n.get('back', user_language), callback_data="ref_menu"
+                    text=i18n.get('referral_stats.back_button', user_language), callback_data="ref_menu"
                 )
             ]
         ]
@@ -323,7 +315,7 @@ async def show_tier_info(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=i18n.get('back', user_language), callback_data="ref_menu"
+                    text=i18n.get('referral_tiers.back_button', user_language), callback_data="ref_menu"
                 )
             ]
         ]
@@ -371,7 +363,7 @@ async def show_leaderboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=i18n.get('back', user_language), callback_data="ref_menu"
+                    text=i18n.get('referral_leaderboard.back_button', user_language), callback_data="ref_menu"
                 )
             ]
         ]
@@ -432,7 +424,7 @@ async def request_withdrawal(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=i18n.get('back', user_language), callback_data="ref_balance"
+                    text=i18n.get('balance_withdrawal.back_button', user_language), callback_data="ref_balance"
                 )
             ]
         ]
@@ -459,7 +451,7 @@ async def use_balance_for_subscription(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=i18n.get('back', user_language), callback_data="ref_balance"
+                    text=i18n.get('balance_use.back_button', user_language), callback_data="ref_balance"
                 )
             ]
         ]
@@ -484,7 +476,7 @@ async def show_balance_history(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=i18n.get('back', user_language), callback_data="ref_balance"
+                    text=i18n.get('balance_history.back_button', user_language), callback_data="ref_balance"
                 )
             ]
         ]
@@ -550,7 +542,9 @@ async def back_to_referral_menu(
         text += f"\n{i18n.get('referral.leaderboard_rank', user_language)}: #{stats['leaderboard_rank']}"
 
     # Keyboard
-    keyboard = get_referral_menu_keyboard(user_language)
+    keyboard = get_referral_menu_keyboard(user_language, ref_link)
 
     await callback.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
     await callback.answer()
+
+

@@ -13,14 +13,13 @@ Based on:
 - Pi Cycle: MA 111 / MA 350*2 crossover
 """
 
-import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta, UTC
 import numpy as np
 import pandas as pd
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class CycleAnalysisService:

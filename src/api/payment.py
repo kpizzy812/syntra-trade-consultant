@@ -9,7 +9,6 @@ Handles:
 - Payment history
 """
 
-import logging
 from typing import Dict, Any
 from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
@@ -19,12 +18,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database.models import User, SubscriptionTier
 from src.database.engine import get_session
 from src.api.auth import get_current_user
+from src.database.crud import get_referral_stats
 from src.services.telegram_stars_service import TelegramStarsService
 from src.services.ton_payment_service import get_ton_payment_service
+from src.services.nowpayments_service import get_nowpayments_service
+from src.services.posthog_service import track_payment_started
 from aiogram import Bot
 import os
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # Create router
 router = APIRouter(prefix="/payment", tags=["payment"])
@@ -32,6 +34,7 @@ router = APIRouter(prefix="/payment", tags=["payment"])
 # Initialize payment services
 stars_service = TelegramStarsService()
 ton_service = get_ton_payment_service(is_testnet=False)  # Production mainnet
+nowpayments_service = get_nowpayments_service()
 
 
 # ===========================
@@ -52,6 +55,14 @@ class CreateTonPaymentRequest(BaseModel):
     tier: str  # "basic" | "premium" | "vip"
     duration_months: int  # 1, 3, or 12
     currency: str = "usdt"  # "ton" | "usdt"
+
+
+class CreateNOWPaymentsInvoiceRequest(BaseModel):
+    """Request to create NOWPayments invoice"""
+
+    tier: str  # "basic" | "premium" | "vip"
+    duration_months: int  # 1, 3, or 12
+    pay_currency: str | None = None  # "btc" | "eth" | "usdt" etc, или None для выбора пользователем
 
 
 class PaymentResponse(BaseModel):
@@ -75,10 +86,10 @@ async def create_stars_invoice(
     session: AsyncSession = Depends(get_session),
 ):
     """
-    Create Telegram Stars invoice for subscription purchase
+    Create Telegram Stars invoice link for Mini App payment
 
-    This endpoint creates an invoice and sends it to the user via Telegram bot.
-    The actual payment is handled by Telegram's native payment system.
+    This endpoint creates an invoice link using Bot API's createInvoiceLink method.
+    The frontend will open this link using WebApp.openInvoice() method.
 
     Args:
         request: Invoice creation request (tier, duration)
@@ -86,7 +97,7 @@ async def create_stars_invoice(
         session: Database session
 
     Returns:
-        PaymentResponse with success status and invoice details
+        PaymentResponse with invoice URL to open in Mini App
     """
     try:
         # Validate tier
@@ -106,45 +117,80 @@ async def create_stars_invoice(
             )
 
         # Get plan details
-        plan = payment_service.get_plan_details(tier, request.duration_months)
+        plan = stars_service.get_plan_details(tier, request.duration_months)
         if not plan:
             raise HTTPException(
                 status_code=400, detail="Invalid subscription plan configuration"
             )
 
-        # Initialize bot (required for sending invoice)
+        # Get referral discount for user
+        referral_discount_percent = 0
+        try:
+            referral_stats = await get_referral_stats(session, user.id)
+            referral_discount_percent = referral_stats.get('discount_percent', 0)
+        except Exception as e:
+            logger.warning(f"Failed to get referral discount for user {user.id}: {e}")
+
+        # Calculate final price with referral discount
+        original_stars = plan["stars"]
+        original_usd = plan["usd"]
+
+        if referral_discount_percent > 0:
+            final_stars = int(original_stars * (100 - referral_discount_percent) / 100)
+            final_usd = round(original_usd * (100 - referral_discount_percent) / 100, 2)
+        else:
+            final_stars = original_stars
+            final_usd = original_usd
+
+        # Initialize bot (required for creating invoice link)
         bot = Bot(token=os.getenv("BOT_TOKEN", ""))
 
         try:
-            # Get user's Telegram chat (we need to send invoice as a message)
-            # In Mini App context, we send invoice to user's private chat
-            from aiogram.types import Message
-
-            # Create a mock message object to send invoice
-            # Note: In production, you should handle this via bot's message send
-            # For now, we'll create the invoice and return details
-
-            # IMPORTANT: Telegram Stars invoices MUST be sent as bot messages
-            # We cannot create them purely via API without a message context
-            # Solution: Return invoice details to frontend, which will request bot to send invoice
-
-            logger.info(
-                f"Creating Stars invoice: user={user.id}, tier={tier.value}, "
-                f"duration={request.duration_months}m, price={plan['stars']} Stars"
+            # Create invoice link for Mini App
+            # This link can be opened using WebApp.openInvoice(url)
+            invoice_url = await stars_service.create_invoice_link(
+                bot=bot,
+                user_id=user.id,
+                tier=tier,
+                duration_months=request.duration_months,
+                user_language=user.language or "ru",
+                referral_discount_percent=referral_discount_percent,
             )
 
-            # Return invoice details for bot to send
-            # Frontend should call bot command to trigger invoice send
+            if not invoice_url:
+                raise HTTPException(
+                    status_code=500, detail="Failed to create invoice link"
+                )
+
+            logger.info(
+                f"Stars invoice link created: user={user.id}, tier={tier.value}, "
+                f"duration={request.duration_months}m, price={final_stars} Stars "
+                f"(original={original_stars}, referral_discount={referral_discount_percent}%)"
+            )
+
+            # 📊 Track payment started
+            track_payment_started(
+                user.id,
+                tier.value,
+                request.duration_months,
+                final_usd,
+                "telegram_stars"
+            )
+
+            # Return invoice URL for Mini App to open
             return PaymentResponse(
                 success=True,
-                message="Invoice request received. Sending invoice via bot...",
+                message="Invoice link created successfully",
                 data={
+                    "invoice_url": invoice_url,
                     "tier": tier.value,
                     "duration_months": request.duration_months,
-                    "price_usd": plan["usd"],
-                    "price_stars": plan["stars"],
+                    "price_usd": final_usd,
+                    "price_usd_original": original_usd,
+                    "price_stars": final_stars,
+                    "price_stars_original": original_stars,
                     "discount": plan["discount"],
-                    "telegram_user_id": user.telegram_id,
+                    "referral_discount": referral_discount_percent,
                 },
             )
 
@@ -154,9 +200,9 @@ async def create_stars_invoice(
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception(f"Error creating Stars invoice: {e}")
+        logger.exception(f"Error creating Stars invoice link: {e}")
         return PaymentResponse(
-            success=False, message="Failed to create invoice", error=str(e)
+            success=False, message="Failed to create invoice link", error=str(e)
         )
 
 
@@ -215,7 +261,42 @@ async def create_ton_payment(
                 status_code=400, detail="Invalid subscription plan configuration"
             )
 
-        amount_usd = Decimal(str(plan["usd"]))
+        # Get referral discount for user
+        referral_discount_percent = 0
+        try:
+            referral_stats = await get_referral_stats(session, user.id)
+            referral_discount_percent = referral_stats.get('discount_percent', 0)
+        except Exception as e:
+            logger.warning(f"Failed to get referral discount for user {user.id}: {e}")
+
+        # Calculate final price with referral discount
+        original_usd = Decimal(str(plan["usd"]))
+        if referral_discount_percent > 0:
+            amount_usd = original_usd * (100 - referral_discount_percent) / 100
+        else:
+            amount_usd = original_usd
+
+        # SECURITY: Validate payment amount
+        # Проверка минимальной суммы ($0.50)
+        if amount_usd < Decimal("0.50"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Payment amount too low: ${amount_usd}. Minimum is $0.50"
+            )
+
+        # Проверка максимальной суммы ($10,000 для защиты от ошибок)
+        if amount_usd > Decimal("10000.00"):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Payment amount too high: ${amount_usd}. Maximum is $10,000"
+            )
+
+        # Проверка что сумма положительная
+        if amount_usd <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid payment amount: ${amount_usd}. Must be positive"
+            )
 
         # Create TON payment request
         payment_data = await ton_service.create_ton_payment_request(
@@ -228,7 +309,8 @@ async def create_ton_payment(
 
         logger.info(
             f"TON payment request created: user={user.id}, tier={tier.value}, "
-            f"duration={request.duration_months}m, currency={request.currency}"
+            f"duration={request.duration_months}m, currency={request.currency}, "
+            f"amount=${amount_usd} (original=${original_usd}, referral_discount={referral_discount_percent}%)"
         )
 
         return PaymentResponse(
@@ -239,12 +321,14 @@ async def create_ton_payment(
                 "deposit_address": payment_data["deposit_address"],
                 "memo": payment_data["memo"],
                 "amount_usd": float(payment_data["amount_usd"]),
+                "amount_usd_original": float(original_usd),
                 "amount_ton": payment_data["amount_ton"],
                 "amount_usdt": payment_data["amount_usdt"],
                 "currency": request.currency,
                 "expires_at": payment_data["expires_at"].isoformat(),
                 "tier": tier.value,
                 "duration_months": request.duration_months,
+                "referral_discount": referral_discount_percent,
             },
         )
 
@@ -296,7 +380,7 @@ async def get_payment_status(
 
         # Get subscription if payment completed
         subscription_info = None
-        if payment.status.value == "completed":
+        if payment.status == "completed":
             result = await session.execute(
                 select(Subscription).where(Subscription.user_id == user.id)
             )
@@ -304,7 +388,7 @@ async def get_payment_status(
 
             if subscription:
                 subscription_info = {
-                    "tier": subscription.tier.value,
+                    "tier": subscription.tier,
                     "is_active": subscription.is_active,
                     "expires_at": subscription.expires_at.isoformat(),
                     "auto_renew": subscription.auto_renew,
@@ -314,10 +398,10 @@ async def get_payment_status(
             "success": True,
             "payment": {
                 "id": payment.id,
-                "status": payment.status.value,
+                "status": payment.status,
                 "amount": float(payment.amount),
                 "currency": payment.currency,
-                "provider": payment.provider.value,
+                "provider": payment.provider,
                 "tier": payment.tier,
                 "duration_months": payment.duration_months,
                 "created_at": payment.created_at.isoformat(),
@@ -336,57 +420,8 @@ async def get_payment_status(
         raise HTTPException(status_code=500, detail="Failed to get payment status")
 
 
-@router.get("/verify/{payment_id}")
-async def verify_payment(
-    payment_id: str,
-    user: User = Depends(get_current_user),
-    session: AsyncSession = Depends(get_session),
-):
-    """
-    Verify payment status
-
-    Args:
-        payment_id: Payment provider ID
-        user: Current authenticated user
-        session: Database session
-
-    Returns:
-        Payment status and details
-    """
-    try:
-        from src.database.crud import get_payment_by_provider_id
-
-        # Get payment from database
-        payment = await get_payment_by_provider_id(session, payment_id)
-
-        if not payment:
-            raise HTTPException(status_code=404, detail="Payment not found")
-
-        # Verify payment belongs to user
-        if payment.user_id != user.id:
-            raise HTTPException(status_code=403, detail="Access denied")
-
-        return {
-            "success": True,
-            "payment": {
-                "id": payment.id,
-                "status": payment.status.value,
-                "amount": payment.amount,
-                "currency": payment.currency,
-                "tier": payment.tier,
-                "duration_months": payment.duration_months,
-                "created_at": payment.created_at.isoformat(),
-                "completed_at": payment.completed_at.isoformat()
-                if payment.completed_at
-                else None,
-            },
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Error verifying payment: {e}")
-        raise HTTPException(status_code=500, detail="Payment verification failed")
+# Removed: /verify endpoint (duplicate of /status)
+# Use /status/{payment_id} instead for unified payment status checking
 
 
 @router.get("/history")
@@ -417,10 +452,10 @@ async def get_payment_history(
             "payments": [
                 {
                     "id": payment.id,
-                    "status": payment.status.value,
+                    "status": payment.status,
                     "amount": payment.amount,
                     "currency": payment.currency,
-                    "provider": payment.provider.value,
+                    "provider": payment.provider,
                     "tier": payment.tier,
                     "duration_months": payment.duration_months,
                     "created_at": payment.created_at.isoformat(),
@@ -435,3 +470,120 @@ async def get_payment_history(
     except Exception as e:
         logger.exception(f"Error getting payment history: {e}")
         raise HTTPException(status_code=500, detail="Failed to get payment history")
+
+
+@router.post("/nowpayments/create-invoice", response_model=PaymentResponse)
+async def create_nowpayments_invoice(
+    request: CreateNOWPaymentsInvoiceRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Create NOWPayments invoice for subscription purchase
+
+    User can choose from 300+ cryptocurrencies on the payment page.
+    Alternatively, pay_currency can be specified to pre-select currency.
+
+    Args:
+        request: Invoice creation request (tier, duration, pay_currency)
+        user: Current authenticated user
+        session: Database session
+
+    Returns:
+        PaymentResponse with invoice URL to open in browser
+    """
+    try:
+        # Validate tier
+        try:
+            tier = SubscriptionTier(request.tier)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid tier: {request.tier}. Must be one of: basic, premium, vip",
+            )
+
+        # Validate duration
+        if request.duration_months not in [1, 3, 12]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid duration: {request.duration_months}. Must be 1, 3, or 12",
+            )
+
+        # Get plan details (используем те же цены что и для Telegram Stars)
+        plan = stars_service.get_plan_details(tier, request.duration_months)
+        if not plan:
+            raise HTTPException(
+                status_code=400, detail="Invalid subscription plan configuration"
+            )
+
+        # Get referral discount for user
+        referral_discount_percent = 0
+        try:
+            referral_stats = await get_referral_stats(session, user.id)
+            referral_discount_percent = referral_stats.get('discount_percent', 0)
+        except Exception as e:
+            logger.warning(f"Failed to get referral discount for user {user.id}: {e}")
+
+        # Calculate final price with referral discount
+        original_usd = Decimal(str(plan["usd"]))
+        if referral_discount_percent > 0:
+            amount_usd = original_usd * (100 - referral_discount_percent) / 100
+        else:
+            amount_usd = original_usd
+
+        # Create invoice
+        invoice = await nowpayments_service.create_invoice(
+            session=session,
+            user_id=user.id,
+            tier=tier,
+            duration_months=request.duration_months,
+            amount_usd=amount_usd,
+            pay_currency=request.pay_currency,
+        )
+
+        if not invoice:
+            raise HTTPException(
+                status_code=500, detail="Failed to create invoice"
+            )
+
+        logger.info(
+            f"NOWPayments invoice created: user={user.id}, tier={tier.value}, "
+            f"duration={request.duration_months}m, amount=${amount_usd}, "
+            f"invoice_id={invoice['invoice_id']}"
+        )
+
+        # Track payment started
+        track_payment_started(
+            user.id,
+            tier.value,
+            request.duration_months,
+            float(amount_usd),
+            "nowpayments"
+        )
+
+        return PaymentResponse(
+            success=True,
+            message="Invoice created successfully",
+            data={
+                "invoice_id": invoice["invoice_id"],
+                "invoice_url": invoice["invoice_url"],
+                "payment_id": invoice["db_payment_id"],  # For polling status
+                "amount_usd": float(amount_usd),
+                "amount_usd_original": float(original_usd),
+                "tier": tier.value,
+                "duration_months": request.duration_months,
+                "pay_currency": invoice.get("pay_currency"),
+                "discount": plan["discount"],
+                "referral_discount": referral_discount_percent,
+            },
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error creating NOWPayments invoice: {e}")
+        return PaymentResponse(
+            success=False,
+            message="Failed to create invoice",
+            error=str(e)
+        )

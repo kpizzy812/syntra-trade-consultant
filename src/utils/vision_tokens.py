@@ -143,11 +143,11 @@ def get_optimal_detail_level(image_bytes: bytes) -> str:
 
 if __name__ == "__main__":
     # Test examples
-    print("Vision Token Calculator Examples:\n")
+    logger.debug("Vision Token Calculator Examples:\n")
 
     # Example 1: Small image (low detail)
-    print("512x512 image (low detail):")
-    print(f"  Tokens: {calculate_image_tokens(b'', 'low')}")
+    logger.debug("512x512 image (low detail):")
+    logger.debug(f"  Tokens: {calculate_image_tokens(b'', 'low')}")
 
     # Example 2: Common chart sizes
     test_sizes = [
@@ -160,6 +160,6 @@ if __name__ == "__main__":
     for width, height, desc in test_sizes:
         tokens = _calculate_high_detail_tokens(width, height)
         cost = (tokens + 100 + 200) / 1_000_000 * (3.0 + 10.0 * 200 / (tokens + 100))
-        print(f"\n{desc} ({width}x{height}):")
-        print(f"  Tokens: {tokens}")
-        print(f"  Est. cost per analysis: ${cost:.4f}")
+        logger.debug(f"\n{desc} ({width}x{height}):")
+        logger.debug(f"  Tokens: {tokens}")
+        logger.debug(f"  Est. cost per analysis: ${cost:.4f}")

@@ -4,9 +4,9 @@ Database engine configuration for Syntra Trade Consultant Bot
 Async SQLAlchemy 2.0 setup with connection pooling
 """
 
-import logging
 from typing import AsyncGenerator
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncEngine,
@@ -18,7 +18,7 @@ from sqlalchemy.pool import AsyncAdaptedQueuePool
 from config.config import DATABASE_URL, ENVIRONMENT
 from src.database.models import Base
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 # Global engine and session maker
@@ -107,6 +107,9 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with session_maker() as session:
         try:
             yield session
+        except HTTPException:
+            # HTTPException is not a DB error - don't rollback, just re-raise
+            raise
         except Exception as e:
             await session.rollback()
             logger.error(f"Session error: {e}", exc_info=True)
@@ -127,7 +130,7 @@ async def init_db() -> None:
     logger.info("Creating database tables...")
 
     async with eng.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        await conn.run_sync(lambda conn: Base.metadata.create_all(conn, checkfirst=True))
 
     logger.info("Database tables created successfully")
 
@@ -194,20 +197,20 @@ if __name__ == "__main__":
     setup_logging()
 
     async def test():
-        print("Testing database connection...")
+        logger.info("Testing database connection...")
 
         # Check connection
         is_connected = await check_connection()
-        print(f'Connection: {"✅ OK" if is_connected else "❌ FAILED"}')
+        logger.info(f'Connection: {"✅ OK" if is_connected else "❌ FAILED"}')
 
         # Initialize tables (use Alembic in production!)
         if is_connected:
-            print("\nCreating tables...")
+            logger.info("Creating tables...")
             await init_db()
-            print("✅ Tables created")
+            logger.info("✅ Tables created")
 
         # Cleanup
         await dispose_engine()
-        print("\n✅ Engine disposed")
+        logger.info("✅ Engine disposed")
 
     asyncio.run(test())

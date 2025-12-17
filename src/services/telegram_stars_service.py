@@ -16,7 +16,6 @@ Documentation:
 - https://docs.aiogram.dev/en/latest/api/methods/send_invoice.html
 """
 import json
-import logging
 from typing import Optional, Dict, Any
 from datetime import datetime, timedelta, UTC
 
@@ -25,7 +24,7 @@ from aiogram.types import LabeledPrice, Message, InlineKeyboardMarkup, InlineKey
 from aiogram.exceptions import TelegramBadRequest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.database.models import SubscriptionTier, PaymentProvider, PaymentStatus
+from src.database.models import SubscriptionTier, PaymentProvider, PaymentStatus, PointsTransactionType
 from src.database.crud import (
     create_payment,
     get_payment_by_provider_id,
@@ -33,9 +32,10 @@ from src.database.crud import (
     activate_subscription,
     complete_payment,
 )
+from src.services.points_service import PointsService
+from config.points_config import get_subscription_bonus
 
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 # Telegram Stars pricing configuration
@@ -136,16 +136,20 @@ class TelegramStarsService:
 
         return payload
 
-    async def create_subscription_invoice(
+    async def create_invoice_link(
         self,
-        message: Message,
+        bot: Bot,
         user_id: int,
         tier: SubscriptionTier,
         duration_months: int,
         user_language: str = "ru",
-    ) -> bool:
+        referral_discount_percent: int = 0,
+    ) -> Optional[str]:
         """
-        Create and send invoice for subscription purchase
+        Create invoice link for Mini App payment
+
+        This method creates an invoice link that can be opened in Mini App
+        using WebApp.openInvoice(url) method.
 
         IMPORTANT:
         - currency MUST be "XTR" for Telegram Stars
@@ -154,21 +158,29 @@ class TelegramStarsService:
         - amount is specified DIRECTLY in Stars (not in cents!)
 
         Args:
-            message: Telegram message to reply to
+            bot: Bot instance
             user_id: User's database ID
             tier: Subscription tier
             duration_months: Duration (1, 3, or 12 months)
             user_language: User's language code
+            referral_discount_percent: Referral tier discount (0-30%)
 
         Returns:
-            True if invoice sent successfully
+            Invoice URL or None if failed
         """
         try:
             # Get plan details
             plan = self.get_plan_details(tier, duration_months)
             if not plan:
                 logger.error(f"Invalid plan: tier={tier}, duration={duration_months}")
-                return False
+                return None
+
+            # Apply referral discount
+            original_stars = plan["stars"]
+            if referral_discount_percent > 0:
+                final_stars = int(original_stars * (100 - referral_discount_percent) / 100)
+            else:
+                final_stars = original_stars
 
             # Generate unique payload
             payload = self.generate_payment_payload(user_id, tier, duration_months)
@@ -192,17 +204,138 @@ class TelegramStarsService:
             if user_language == "ru":
                 description = (
                     f"Подписка {tier_names[tier]} на {duration_names[duration_months]}\n"
-                    f"💫 Цена: {plan['stars']} Stars"
+                    f"💫 Цена: {final_stars} Stars"
                 )
                 if plan["discount"] > 0:
-                    description += f"\n🎁 Скидка: {plan['discount']}%"
+                    description += f"\n🎁 Скидка за период: {plan['discount']}%"
+                if referral_discount_percent > 0:
+                    description += f"\n🎯 Реферальная скидка: {referral_discount_percent}%"
             else:
                 description = (
                     f"{tier_names[tier]} subscription for {duration_names[duration_months]}\n"
-                    f"💫 Price: {plan['stars']} Stars"
+                    f"💫 Price: {final_stars} Stars"
                 )
                 if plan["discount"] > 0:
-                    description += f"\n🎁 Discount: {plan['discount']}%"
+                    description += f"\n🎁 Duration discount: {plan['discount']}%"
+                if referral_discount_percent > 0:
+                    description += f"\n🎯 Referral discount: {referral_discount_percent}%"
+
+            # Create invoice link
+            # CRITICAL: For Telegram Stars:
+            # - currency MUST be "XTR"
+            # - provider_token MUST be empty string ""
+            # - prices MUST have ONLY ONE element
+            # - amount is in Stars directly (not cents!)
+            invoice_url = await bot.create_invoice_link(
+                title=title,
+                description=description,
+                prices=[
+                    LabeledPrice(
+                        label=tier_names[tier],
+                        amount=final_stars,  # Direct Stars amount with discount!
+                    )
+                ],
+                payload=payload,
+                currency="XTR",  # Telegram Stars currency code
+                provider_token="",  # MUST be empty for Stars!
+                photo_url="https://i.ibb.co/ymkfW6vP/SYNTRABOT.png",
+            )
+
+            logger.info(
+                f"Invoice link created: user={user_id}, tier={tier.value}, "
+                f"duration={duration_months}, stars={final_stars} (original={original_stars}, "
+                f"referral_discount={referral_discount_percent}%), payload={payload}"
+            )
+
+            return invoice_url
+
+        except TelegramBadRequest as e:
+            logger.error(f"Failed to create invoice link: {e}")
+            return None
+        except Exception as e:
+            logger.exception(f"Error creating invoice link: {e}")
+            return None
+
+    async def create_subscription_invoice(
+        self,
+        message: Message,
+        user_id: int,
+        tier: SubscriptionTier,
+        duration_months: int,
+        user_language: str = "ru",
+        referral_discount_percent: int = 0,
+    ) -> bool:
+        """
+        Create and send invoice for subscription purchase
+
+        IMPORTANT:
+        - currency MUST be "XTR" for Telegram Stars
+        - provider_token MUST be empty string
+        - prices MUST contain ONLY ONE LabeledPrice
+        - amount is specified DIRECTLY in Stars (not in cents!)
+
+        Args:
+            message: Telegram message to reply to
+            user_id: User's database ID
+            tier: Subscription tier
+            duration_months: Duration (1, 3, or 12 months)
+            user_language: User's language code
+            referral_discount_percent: Referral tier discount (0-30%)
+
+        Returns:
+            True if invoice sent successfully
+        """
+        try:
+            # Get plan details
+            plan = self.get_plan_details(tier, duration_months)
+            if not plan:
+                logger.error(f"Invalid plan: tier={tier}, duration={duration_months}")
+                return False
+
+            # Apply referral discount
+            original_stars = plan["stars"]
+            if referral_discount_percent > 0:
+                final_stars = int(original_stars * (100 - referral_discount_percent) / 100)
+            else:
+                final_stars = original_stars
+
+            # Generate unique payload
+            payload = self.generate_payment_payload(user_id, tier, duration_months)
+
+            # Prepare invoice data
+            tier_names = {
+                SubscriptionTier.BASIC: "BASIC" if user_language == "en" else "БАЗОВЫЙ",
+                SubscriptionTier.PREMIUM: "PREMIUM" if user_language == "en" else "ПРЕМИУМ",
+                SubscriptionTier.VIP: "VIP",
+            }
+
+            duration_names = {
+                1: "1 month" if user_language == "en" else "1 месяц",
+                3: "3 months" if user_language == "en" else "3 месяца",
+                12: "1 year" if user_language == "en" else "1 год",
+            }
+
+            title = f"Syntra {tier_names[tier]} - {duration_names[duration_months]}"
+
+            # Build description
+            if user_language == "ru":
+                description = (
+                    f"Подписка {tier_names[tier]} на {duration_names[duration_months]}\n"
+                    f"💫 Цена: {final_stars} Stars"
+                )
+                if plan["discount"] > 0:
+                    description += f"\n🎁 Скидка за период: {plan['discount']}%"
+                if referral_discount_percent > 0:
+                    description += f"\n🎯 Реферальная скидка: {referral_discount_percent}%"
+            else:
+                description = (
+                    f"{tier_names[tier]} subscription for {duration_names[duration_months]}\n"
+                    f"💫 Price: {final_stars} Stars"
+                )
+                if plan["discount"] > 0:
+                    description += f"\n🎁 Duration discount: {plan['discount']}%"
+                if referral_discount_percent > 0:
+                    description += f"\n🎯 Referral discount: {referral_discount_percent}%"
 
             # Create invoice
             # CRITICAL: For Telegram Stars:
@@ -216,7 +349,7 @@ class TelegramStarsService:
                 prices=[
                     LabeledPrice(
                         label=tier_names[tier],
-                        amount=plan["stars"],  # Direct Stars amount!
+                        amount=final_stars,  # Direct Stars amount with discount!
                     )
                 ],
                 payload=payload,
@@ -227,7 +360,8 @@ class TelegramStarsService:
 
             logger.info(
                 f"Invoice created: user={user_id}, tier={tier.value}, "
-                f"duration={duration_months}, stars={plan['stars']}, payload={payload}"
+                f"duration={duration_months}, stars={final_stars} (original={original_stars}, "
+                f"referral_discount={referral_discount_percent}%), payload={payload}"
             )
 
             return True
@@ -408,11 +542,129 @@ class TelegramStarsService:
                             f"percent={revenue_share_percent}% (config)"
                         )
 
+                        # 💎 Award points to referrer for referral purchase
+                        try:
+                            points_transaction = await PointsService.earn_points(
+                                session=session,
+                                user_id=referrer.id,
+                                transaction_type=PointsTransactionType.EARN_REFERRAL_PURCHASE,
+                                description=f"Бонус за покупку подписки рефералом (ID: {user_id})",
+                                metadata={
+                                    "referee_id": user_id,
+                                    "tier": tier.value,
+                                    "duration_months": duration_months,
+                                    "payment_id": payment_record.id,
+                                    "revenue_share_usd": revenue_share_amount,
+                                    "revenue_share_percent": revenue_share_percent,
+                                },
+                                transaction_id=f"ref_purchase:{referrer.id}:{payment_record.id}",
+                            )
+                            if points_transaction:
+                                logger.info(
+                                    f"💎 Awarded {points_transaction.amount} points to referrer {referrer.id} "
+                                    f"for referral purchase (balance: {points_transaction.balance_after})"
+                                )
+                        except Exception as points_error:
+                            # Don't fail payment if points fail
+                            logger.error(f"Failed to award referral purchase points: {points_error}")
+
+                        # Send notification to referrer about purchase
+                        try:
+                            from src.utils.i18n import i18n
+                            from src.database.crud import get_or_create_balance, get_user_by_id
+
+                            # Get referrer's language
+                            referrer_lang = referrer.language or "ru"
+
+                            # Get referee info
+                            referee = await get_user_by_id(session, user_id)
+
+                            # Format user display
+                            user_display = f"@{referee.username}" if referee.username else referee.first_name or "Anonymous"
+
+                            # Get tier name
+                            tier_name = i18n.get(f"tier_names.{tier.value}", referrer_lang)
+
+                            # Format duration
+                            if referrer_lang == "ru":
+                                if duration_months == 1:
+                                    duration_text = "1 месяц"
+                                elif duration_months == 3:
+                                    duration_text = "3 месяца"
+                                elif duration_months == 12:
+                                    duration_text = "1 год"
+                                else:
+                                    duration_text = f"{duration_months} мес."
+                            else:
+                                if duration_months == 1:
+                                    duration_text = "1 month"
+                                elif duration_months == 3:
+                                    duration_text = "3 months"
+                                elif duration_months == 12:
+                                    duration_text = "1 year"
+                                else:
+                                    duration_text = f"{duration_months} months"
+
+                            # Get updated balance
+                            balance = await get_or_create_balance(session, referrer.id)
+
+                            # Build notification text
+                            notification_text = (
+                                f"{i18n.get('referral_notifications.referral_purchase_title', referrer_lang)}\n\n"
+                                f"{i18n.get('referral_notifications.referral_purchase_text', referrer_lang, user_display=user_display, tier=tier_name, duration=duration_text, revenue_share=f'{revenue_share_amount:.2f}', revenue_percent=revenue_share_percent, balance=f'{balance.balance_usd:.2f}')}"
+                            )
+
+                            # Get bot instance from session
+                            from aiogram import Bot
+                            from config.config import BOT_TOKEN
+                            bot = Bot(token=BOT_TOKEN)
+
+                            # Send notification
+                            await bot.send_message(
+                                chat_id=referrer.telegram_id,
+                                text=notification_text,
+                                parse_mode="HTML"
+                            )
+                            await bot.session.close()
+
+                            logger.info(f"Notification sent to referrer {referrer.id} about purchase by {user_id}")
+                        except Exception as notif_error:
+                            logger.error(f"Failed to send purchase notification: {notif_error}")
+
             logger.info(
                 f"Payment processed successfully: "
                 f"user={user_id}, tier={tier.value}, duration={duration_months}m, "
                 f"amount={total_amount} Stars, charge_id={charge_id}"
             )
+
+            # 💎 Award bonus points for subscription purchase
+            try:
+                bonus_points = get_subscription_bonus(tier.value, duration_months)
+                if bonus_points > 0:
+                    points_transaction = await PointsService.earn_points(
+                        session=session,
+                        user_id=user_id,
+                        transaction_type=PointsTransactionType.EARN_SUBSCRIPTION,
+                        amount=bonus_points,
+                        description=f"Бонус за покупку подписки {tier.value.upper()} ({duration_months} мес.)",
+                        metadata={
+                            "tier": tier.value,
+                            "duration_months": duration_months,
+                            "payment_id": payment_record.id,
+                            "charge_id": charge_id,
+                            "amount_usd": plan["usd"],
+                            "amount_stars": total_amount,
+                        },
+                        transaction_id=f"sub_bonus:{user_id}:{payment_record.id}",
+                    )
+                    if points_transaction:
+                        logger.info(
+                            f"💎 Awarded {bonus_points} bonus points to user {user_id} "
+                            f"for subscription purchase (balance: {points_transaction.balance_after})"
+                        )
+            except Exception as points_error:
+                # Don't fail payment if points fail
+                logger.error(f"Failed to award subscription bonus points: {points_error}")
 
             return True
 

@@ -8,13 +8,15 @@ export type Locale = (typeof locales)[number];
 export const defaultLocale: Locale = 'en';
 
 export default getRequestConfig(async ({ requestLocale }) => {
-  // Get locale from request
+  // Locale will be provided by layout.tsx via setRequestLocale
   let locale = await requestLocale;
 
-  // Validate locale
+  // Validate and fallback
   if (!locale || !locales.includes(locale as Locale)) {
     locale = defaultLocale;
   }
+
+  console.log('🌍 i18n: Using locale:', locale);
 
   return {
     locale,

@@ -10,7 +10,6 @@ Calculates REAL margins based on actual data from database:
 
 NOT theoretical calculations, but REAL data analysis!
 """
-import logging
 from datetime import datetime, timedelta, UTC
 from typing import Dict, Optional
 from decimal import Decimal
@@ -28,7 +27,7 @@ from src.database.models import (
     ReferralBalance,
 )
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 async def get_real_costs_per_user(
@@ -358,9 +357,9 @@ async def check_margin_alerts(
 
 
 if __name__ == "__main__":
-    print("💰 Real-time Margin Calculator")
-    print("\nThis module analyzes REAL data from database:")
-    print("- Actual API costs from ChatMessage table")
-    print("- Actual revenue from Payment table")
-    print("- Actual usage patterns")
-    print("\nUse in admin panel: /admin_margin")
+    logger.info("💰 Real-time Margin Calculator")
+    logger.info("\nThis module analyzes REAL data from database:")
+    logger.info("- Actual API costs from ChatMessage table")
+    logger.info("- Actual revenue from Payment table")
+    logger.info("- Actual usage patterns")
+    logger.info("\nUse in admin panel: /admin_margin")

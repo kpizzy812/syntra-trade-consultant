@@ -61,24 +61,42 @@ export default function TelegramProvider({ children }: TelegramProviderProps) {
           console.log('✅ Viewport развернут')
         }
 
-        // ШАГ 3: Настройка цветов
-        if (WebApp.setHeaderColor) {
-          WebApp.setHeaderColor('#000000')
+        // ШАГ 3: Настройка цветов (с проверкой версии для избежания warnings)
+        const version = parseFloat(WebApp.version || '0')
+
+        if (version >= 6.1 && WebApp.setHeaderColor) {
+          try {
+            WebApp.setHeaderColor('#000000')
+          } catch (e) {
+            // Игнорируем ошибки для старых версий
+          }
         }
-        if (WebApp.setBackgroundColor) {
-          WebApp.setBackgroundColor('#000000')
+        if (version >= 6.1 && WebApp.setBackgroundColor) {
+          try {
+            WebApp.setBackgroundColor('#000000')
+          } catch (e) {
+            // Игнорируем ошибки для старых версий
+          }
         }
 
-        // ШАГ 4: Подтверждение закрытия
-        if (WebApp.enableClosingConfirmation) {
-          WebApp.enableClosingConfirmation()
-          console.log('✅ Подтверждение закрытия включено')
+        // ШАГ 4: Подтверждение закрытия (только для версий 6.2+)
+        if (version >= 6.2 && WebApp.enableClosingConfirmation) {
+          try {
+            WebApp.enableClosingConfirmation()
+            console.log('✅ Подтверждение закрытия включено')
+          } catch (e) {
+            // Игнорируем ошибки для старых версий
+          }
         }
 
-        // ШАГ 5: Отключить вертикальные свайпы
-        if (WebApp.disableVerticalSwipes) {
-          WebApp.disableVerticalSwipes()
-          console.log('✅ Вертикальные свайпы отключены')
+        // ШАГ 5: Отключить вертикальные свайпы (только для версий 7.0+)
+        if (version >= 7.0 && WebApp.disableVerticalSwipes) {
+          try {
+            WebApp.disableVerticalSwipes()
+            console.log('✅ Вертикальные свайпы отключены')
+          } catch (e) {
+            // Игнорируем ошибки для старых версий
+          }
         }
 
         console.log('📱 Telegram WebApp Info:', {

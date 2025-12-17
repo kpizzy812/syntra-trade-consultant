@@ -5,7 +5,6 @@ CryptoPanic API Service for fetching cryptocurrency news
 CryptoPanic API: https://cryptopanic.com/developers/api/
 """
 import asyncio
-import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
@@ -20,7 +19,12 @@ from tenacity import (
 from config.config import CRYPTOPANIC_TOKEN, CACHE_TTL_CRYPTOPANIC
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
+
+
+class RateLimitError(Exception):
+    """Raised when API returns 429 Too Many Requests"""
+    pass
 
 
 class CryptoPanicService:
@@ -46,6 +50,7 @@ class CryptoPanicService:
         """
         self.api_token = api_token
         self.cache: Dict[str, tuple[Any, datetime]] = {}
+        self.stale_cache: Dict[str, Any] = {}  # Fallback при 429 ошибках
         self.cache_ttl = timedelta(seconds=CACHE_TTL_CRYPTOPANIC)  # Use config TTL
 
     def _get_from_cache(self, key: str) -> Optional[Any]:
@@ -75,11 +80,14 @@ class CryptoPanicService:
             value: Data to cache
         """
         self.cache[key] = (value, datetime.now())
+        # Также сохраняем в stale_cache для fallback при 429 ошибках
+        self.stale_cache[key] = value
 
     @retry(
         retry=retry_if_exception_type((aiohttp.ClientError, asyncio.TimeoutError)),
-        wait=wait_random_exponential(min=1, max=10),
-        stop=stop_after_attempt(3),
+        wait=wait_random_exponential(min=2, max=30),
+        stop=stop_after_attempt(1),  # Только 1 попытка из-за жестких лимитов
+        reraise=True,  # Re-raise exceptions properly
     )
     async def _make_request(
         self, endpoint: str, params: Optional[Dict[str, Any]] = None
@@ -110,9 +118,19 @@ class CryptoPanicService:
                 async with session.get(
                     url, params=params, timeout=aiohttp.ClientTimeout(total=10)
                 ) as response:
+                    # Handle rate limit gracefully (no retry, no traceback)
+                    if response.status == 429:
+                        logger.warning(
+                            "⚠️ CryptoPanic rate limit (429) - using cached data"
+                        )
+                        raise RateLimitError("CryptoPanic API rate limit exceeded")
+
                     response.raise_for_status()
                     data = await response.json()
                     return data
+            except RateLimitError:
+                # Re-raise without logging traceback
+                raise
             except aiohttp.ClientError as e:
                 logger.error(f"CryptoPanic API error: {e}")
                 raise
@@ -191,8 +209,21 @@ class CryptoPanicService:
             logger.info(f"Fetched {len(processed_news)} news items from CryptoPanic")
             return processed_news
 
+        except RateLimitError:
+            # Rate limit - return stale cache without traceback
+            if cache_key in self.stale_cache:
+                logger.info("📰 Using cached news (rate limited)")
+                return self.stale_cache[cache_key]
+            logger.warning("📰 No cached news available during rate limit")
+            return []
         except Exception as e:
-            logger.exception(f"Error fetching news: {e}")
+            logger.error(f"Error fetching news: {e}")
+            # При других ошибках пытаемся вернуть stale cache
+            if cache_key in self.stale_cache:
+                logger.warning(
+                    f"⚠️ API недоступен, возвращаем stale cache для {cache_key}"
+                )
+                return self.stale_cache[cache_key]
             return []
 
     async def get_news_for_coin(
@@ -265,6 +296,13 @@ class CryptoPanicService:
             List of news items with structure:
             [{"title", "summary", "sentiment", "source", "url"}]
         """
+        # Кешируем на уровне метода для экономии запросов
+        cache_key = f"relevant_news_{btc_change_24h:.1f}_{limit}"
+        cached = self._get_from_cache(cache_key)
+        if cached:
+            logger.info("✅ Returning cached relevant market news")
+            return cached
+
         try:
             # Determine sentiment based on BTC movement
             if abs(btc_change_24h) < 0.5:
@@ -282,7 +320,9 @@ class CryptoPanicService:
             )
 
             # Get news with sentiment filter
-            news_items = await self.get_news(filter_by=sentiment_filter, limit=limit * 2)
+            news_items = await self.get_news(
+                filter_by=sentiment_filter, limit=limit * 2
+            )
 
             # Filter by time (last 24 hours) and important votes
             now = datetime.now()
@@ -303,7 +343,7 @@ class CryptoPanicService:
                         # Only include news from last 24 hours
                         if age_hours > 24:
                             continue
-                    except:
+                    except Exception:
                         # If parsing fails, skip time filter
                         pass
 
@@ -331,42 +371,25 @@ class CryptoPanicService:
                     "url": item.get("url", "")
                 })
 
-            # Fallback: if we got fewer than requested, try neutral news
-            if len(result) < limit and sentiment_filter != "rising":
-                logger.info(
-                    f"Only got {len(result)} {sentiment_label} news, fetching neutral as fallback"
-                )
-                neutral_news = await self.get_news(filter_by="rising", limit=limit)
-
-                for item in neutral_news[: limit - len(result)]:
-                    result.append({
-                        "title": item.get("title", "No title"),
-                        "summary": item.get("title", ""),
-                        "sentiment": "neutral",
-                        "source": item.get("source", "Unknown"),
-                        "url": item.get("url", "")
-                    })
+            # НЕ делаем fallback к neutral news - экономим запросы!
+            # Жесткие лимиты API (~3 запроса/день)
 
             logger.info(f"Returning {len(result)} relevant news items")
+
+            # Сохраняем в кеш
+            self._set_cache(cache_key, result)
+
             return result
 
         except Exception as e:
             logger.error(f"Error in get_relevant_market_news: {e}")
-            # Fallback to trending news
-            try:
-                trending = await self.get_trending_news(limit=limit)
-                return [
-                    {
-                        "title": item.get("title", "No title"),
-                        "summary": item.get("title", ""),
-                        "sentiment": "neutral",
-                        "source": item.get("source", "Unknown"),
-                        "url": item.get("url", "")
-                    }
-                    for item in trending
-                ]
-            except:
-                return []
+            # При ошибке возвращаем stale cache вместо fallback запроса
+            if cache_key in self.stale_cache:
+                logger.warning(
+                    "⚠️ Возвращаем stale cache для relevant_market_news"
+                )
+                return self.stale_cache[cache_key]
+            return []
 
     def format_news_for_display(
         self, news_items: List[Dict[str, Any]], max_items: int = 5
@@ -409,7 +432,7 @@ class CryptoPanicService:
                 try:
                     dt = datetime.fromisoformat(published.replace("Z", "+00:00"))
                     time_ago = self._format_time_ago(dt)
-                except:
+                except Exception:
                     time_ago = ""
             else:
                 time_ago = ""
@@ -447,10 +470,6 @@ class CryptoPanicService:
             return "только что"
 
 
-# For async import compatibility
-import asyncio
-
-
 # Example usage
 if __name__ == "__main__":
 
@@ -458,13 +477,13 @@ if __name__ == "__main__":
         service = CryptoPanicService()
 
         # Test getting Bitcoin news
-        print("Bitcoin News:")
+        logger.debug("Bitcoin News:")
         btc_news = await service.get_news_for_coin("BTC", limit=3)
-        print(service.format_news_for_display(btc_news))
+        logger.debug(service.format_news_for_display(btc_news))
 
         # Test getting trending news
-        print("\n\nTrending News:")
+        logger.debug("Trending News:")
         trending = await service.get_trending_news(limit=3)
-        print(service.format_news_for_display(trending))
+        logger.debug(service.format_news_for_display(trending))
 
     asyncio.run(test())

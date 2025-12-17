@@ -34,8 +34,16 @@ from src.services.technical_indicators import TechnicalIndicators
 from src.services.volume_analyzer import volume_analyzer
 
 # Learning system integration
-from src.learning import confidence_calibrator, sltp_optimizer
-from src.database.engine import async_session_maker
+from src.learning import confidence_calibrator, sltp_optimizer, ev_calculator
+from src.learning import (
+    class_stats_analyzer,
+    build_class_key,
+    ClassKey,
+    CONFIDENCE_MIN,
+    CONFIDENCE_MAX,
+)
+from src.learning.constants import DEFAULT_WINDOW_DAYS
+from src.database.engine import get_session_maker
 
 
 # ==============================================================================
@@ -311,7 +319,7 @@ class FuturesAnalysisService:
             # 5. SCENARIO GENERATION
             # ====================================================================
 
-            scenarios = await self._generate_scenarios(
+            scenarios, no_trade_signal = await self._generate_scenarios(
                 symbol=symbol,
                 timeframe=timeframe,
                 current_price=current_price,
@@ -357,6 +365,8 @@ class FuturesAnalysisService:
                 "scenarios": scenarios,
                 "key_levels": key_levels,
                 "data_quality": data_quality,
+                # 🆕 NO-TRADE signal (first-class citizen)
+                "no_trade": no_trade_signal,
                 "metadata": {
                     "has_liquidation_data": liquidation_data is not None,
                     "funding_available": funding_data is not None,
@@ -369,6 +379,15 @@ class FuturesAnalysisService:
                 f"Analysis complete for {symbol}: "
                 f"{len(scenarios)} scenarios, "
                 f"quality={data_quality['completeness']}%"
+            )
+
+            # 🆕 LOG: Логируем генерацию сценариев для class stats
+            await self._log_scenario_generation(
+                analysis_id=analysis_id,
+                scenarios=scenarios,
+                symbol=symbol,
+                timeframe=timeframe,
+                market_context=market_context,
             )
 
             return result
@@ -1101,7 +1120,7 @@ class FuturesAnalysisService:
         logger.info("🤖 Generating scenarios with AI (not rule-based formulas)...")
 
         try:
-            scenarios = await self._ai_generate_scenarios(
+            scenarios, no_trade_signal = await self._ai_generate_scenarios(
                 symbol=symbol,
                 timeframe=timeframe,
                 current_price=current_price,
@@ -1117,6 +1136,8 @@ class FuturesAnalysisService:
             )
 
             logger.info(f"✅ AI generated {len(scenarios)} scenarios")
+            if no_trade_signal:
+                logger.info(f"🚫 NO-TRADE signal received: {no_trade_signal.get('category')}")
 
             # 🔥 VALIDATION: Проверяем что LLM использовал NEAR уровни
             atr = indicators.get("atr", 0)
@@ -1175,7 +1196,23 @@ class FuturesAnalysisService:
                 timeframe=timeframe,
             )
 
-            return final_scenarios
+            # 📊 EV: Expected Value calculation и финальная сортировка
+            volatility = market_context.get("volatility", "normal")
+            final_scenarios = await self._apply_ev_calculation(
+                scenarios=final_scenarios,
+                timeframe=timeframe,
+                volatility_regime=volatility,
+            )
+
+            # 🆕 CLASS STATS: Context gates (kill switch / boost)
+            final_scenarios = await self._apply_class_stats(
+                scenarios=final_scenarios,
+                symbol=symbol,
+                timeframe=timeframe,
+                market_context=market_context,
+            )
+
+            return final_scenarios, no_trade_signal
 
         except Exception as e:
             logger.error(f"❌ AI scenario generation failed: {e}")
@@ -1423,6 +1460,35 @@ Each scenario MUST have an `entry_plan` with:
 5. Adapt time_valid_hours to timeframe {timeframe}
 6. Account for contradictions (e.g., bullish trend + RSI 80 + high funding = overheated)
 
+📊 **OUTCOME PROBABILITIES** (outcome_probs_raw):
+Estimate terminal outcome probabilities for EV calculation. These are TERMINAL outcomes = MAX TP level reached, NOT exit reason!
+- sl: P(price hits SL before ANY TP) — typical 0.30-0.50
+- tp1: P(reaches TP1 but NOT TP2) — typical 0.20-0.35
+- tp2: P(reaches TP2 but NOT TP3) — typical 0.10-0.25 (set 0 if only 1-2 targets)
+- tp3: P(reaches TP3) — typical 0.05-0.15 (set 0 if less than 3 targets)
+- other: P(manual exit/timeout BEFORE any TP) — typical 0.02-0.10
+
+⚠️ CRITICAL: sl + tp1 + tp2 + tp3 + other = 1.0 EXACTLY!
+Base estimates on: trend strength, entry quality, volatility, support/resistance proximity.
+
+🚫 **NO-TRADE SIGNAL** (optional but IMPORTANT):
+If market conditions are UNFAVORABLE, add `no_trade` object with:
+- should_not_trade: true
+- confidence: 0.3-1.0 (how certain you are)
+- reasons: ["ADX < 20 = chop zone", "Funding extreme + crowded", "ATR compression before news"]
+- category: "chop" | "extreme_sentiment" | "low_liquidity" | "news_risk" | "technical_conflict" | "overextended"
+- wait_for: ["ADX > 25", "Funding normalize", "Breakout from range"]
+- estimated_wait_hours: 4-168
+
+**When to recommend NO-TRADE:**
+- ADX < 20 AND no clear breakout setup = "chop"
+- Funding > 0.1% OR < -0.1% with crowded positioning = "extreme_sentiment"
+- RSI > 80 OR < 20 extended for 3+ candles = "overextended"
+- Multiple conflicting signals (bullish trend + bearish divergence + extreme funding) = "technical_conflict"
+- Low ATR + tight range before known news = "news_risk"
+
+**STILL return scenarios** even with no_trade — they serve as reference. The no_trade signal WARNS the user.
+
 Return strict JSON format."""
 
         logger.debug("Sending market data to AI for scenario generation...")
@@ -1535,15 +1601,57 @@ Return strict JSON format."""
                                 "conditions": {
                                     "type": "array",
                                     "items": {"type": "string"}
+                                },
+                                # 🆕 EV: Terminal outcome probabilities (optional, LLM estimate)
+                                "outcome_probs_raw": {
+                                    "type": "object",
+                                    "description": "Terminal outcome probabilities (must sum to 1.0)",
+                                    "properties": {
+                                        "sl": {"type": "number", "minimum": 0.01, "maximum": 0.95, "description": "P(hit SL before any TP)"},
+                                        "tp1": {"type": "number", "minimum": 0.01, "maximum": 0.95, "description": "P(reach TP1 but not TP2)"},
+                                        "tp2": {"type": "number", "minimum": 0, "maximum": 0.95, "description": "P(reach TP2 but not TP3)"},
+                                        "tp3": {"type": "number", "minimum": 0, "maximum": 0.95, "description": "P(reach TP3)"},
+                                        "other": {"type": "number", "minimum": 0.01, "maximum": 0.35, "description": "P(manual/timeout before any TP)"}
+                                    },
+                                    "required": ["sl", "tp1", "tp2", "tp3", "other"],
+                                    "additionalProperties": False
                                 }
                             },
-                            "required": ["id", "name", "bias", "entry_plan", "stop_loss", "targets", "confidence", "confidence_factors", "risks", "leverage", "invalidation_price", "conditions"],
+                            "required": ["id", "name", "bias", "entry_plan", "stop_loss", "targets", "confidence", "confidence_factors", "risks", "leverage", "invalidation_price", "conditions", "outcome_probs_raw"],
                             "additionalProperties": False
                         }
                     },
                     "market_summary": {"type": "string"},
                     "primary_scenario_id": {"type": "integer"},
-                    "risk_level": {"type": "string", "enum": ["low", "medium", "high", "very_high"]}
+                    "risk_level": {"type": "string", "enum": ["low", "medium", "high", "very_high"]},
+                    # 🆕 NO-TRADE signal (first-class citizen)
+                    "no_trade": {
+                        "type": "object",
+                        "description": "NO-TRADE signal when market conditions are unfavorable",
+                        "properties": {
+                            "should_not_trade": {"type": "boolean", "description": "true = recommend NOT trading"},
+                            "confidence": {"type": "number", "minimum": 0.3, "maximum": 1.0, "description": "Confidence in no-trade recommendation"},
+                            "reasons": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "minItems": 1,
+                                "description": "Specific reasons NOT to trade"
+                            },
+                            "category": {
+                                "type": "string",
+                                "enum": ["chop", "extreme_sentiment", "low_liquidity", "news_risk", "technical_conflict", "overextended"],
+                                "description": "Primary category of no-trade signal"
+                            },
+                            "wait_for": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "What to wait for before trading resumes"
+                            },
+                            "estimated_wait_hours": {"type": "integer", "minimum": 1, "maximum": 168}
+                        },
+                        "required": ["should_not_trade", "confidence", "reasons", "category"],
+                        "additionalProperties": False
+                    }
                 },
                 "required": ["scenarios", "market_summary", "primary_scenario_id", "risk_level"],
                 "additionalProperties": False
@@ -1560,8 +1668,11 @@ Return strict JSON format."""
         )
 
         scenarios = ai_result.get("scenarios", [])
+        no_trade_raw = ai_result.get("no_trade")  # 🆕 NO-TRADE signal
 
         logger.info(f"🤖 AI Market Summary: {ai_result.get('market_summary', 'N/A')}")
+        if no_trade_raw and no_trade_raw.get("should_not_trade"):
+            logger.warning(f"🚫 NO-TRADE SIGNAL: {no_trade_raw.get('category')} - {no_trade_raw.get('reasons', [])}")
         logger.info(f"🤖 AI generated {len(scenarios)} scenarios, primary: #{ai_result.get('primary_scenario_id')}")
 
         # 🔄 Адаптируем структуру под API Pydantic модели
@@ -1738,10 +1849,10 @@ Return strict JSON format."""
             # Сортируем финальный список по confidence
             final_scenarios = sorted(final_scenarios, key=lambda x: x["confidence"], reverse=True)
 
-            return final_scenarios
+            return final_scenarios, no_trade_raw
         else:
             # Если сценариев меньше max_scenarios, возвращаем все
-            return adapted_scenarios
+            return adapted_scenarios, no_trade_raw
 
     # =========================================================================
     # 🆕 LEARNING SYSTEM INTEGRATION
@@ -1769,7 +1880,7 @@ Return strict JSON format."""
             Calibrated scenarios with learning insights
         """
         try:
-            async with async_session_maker() as session:
+            async with get_session_maker()() as session:
                 for sc in scenarios:
                     raw_confidence = sc.get("confidence", 0.5)
 
@@ -1814,6 +1925,296 @@ Return strict JSON format."""
             # Return scenarios unchanged on error
 
         return scenarios
+
+    # =========================================================================
+    # 📊 EV CALCULATION (Expected Value для каждого сценария)
+    # =========================================================================
+
+    async def _apply_ev_calculation(
+        self,
+        scenarios: List[Dict],
+        timeframe: str,
+        volatility_regime: str = "normal",
+    ) -> List[Dict]:
+        """
+        Рассчитать Expected Value для каждого сценария.
+
+        EV_R = Σ(P_TPk * payout_TPk) + P_SL * payout_SL + P_OTHER * payout_OTHER
+
+        Args:
+            scenarios: Сценарии после learning calibration
+            timeframe: Timeframe
+            volatility_regime: low/normal/high
+
+        Returns:
+            Сценарии с EV метриками, отсортированные по scenario_score
+        """
+        try:
+            async with get_session_maker()() as session:
+                for sc in scenarios:
+                    targets = sc.get("targets", [])
+                    if not targets:
+                        continue
+
+                    side = sc.get("bias", "long")
+                    archetype = sc.get("primary_archetype")
+                    confidence = sc.get("confidence", 0.5)
+
+                    # Рассчитываем EV
+                    probs, metrics = await ev_calculator.calculate_ev(
+                        session=session,
+                        targets=targets,
+                        side=side,
+                        archetype=archetype,
+                        timeframe=timeframe,
+                        volatility_regime=volatility_regime,
+                        confidence=confidence,
+                        llm_probs=sc.get("outcome_probs_raw"),  # если LLM предоставил
+                    )
+
+                    # Добавляем в сценарий
+                    sc["outcome_probs"] = {
+                        "sl": probs.sl,
+                        "tp1": probs.tp1,
+                        "tp2": probs.tp2,
+                        "tp3": probs.tp3,
+                        "other": probs.other,
+                        "source": probs.source,
+                        "sample_size": probs.sample_size,
+                        "n_targets": probs.n_targets,
+                    }
+
+                    sc["ev_metrics"] = {
+                        "ev_r": metrics.ev_r,
+                        "ev_r_gross": metrics.ev_r_gross,
+                        "fees_r": metrics.fees_r,
+                        "ev_grade": metrics.ev_grade,
+                        "scenario_score": metrics.scenario_score,
+                        "n_targets": metrics.n_targets,
+                        "flags": metrics.flags,
+                    }
+
+                # Сортировка по scenario_score (EV + confidence)
+                scenarios = sorted(
+                    scenarios,
+                    key=lambda x: x.get("ev_metrics", {}).get("scenario_score", 0),
+                    reverse=True
+                )
+
+                logger.debug(
+                    f"EV calculation applied to {len(scenarios)} scenarios, "
+                    f"top score: {scenarios[0].get('ev_metrics', {}).get('scenario_score', 0):.3f}"
+                    if scenarios else ""
+                )
+
+        except Exception as e:
+            logger.warning(f"EV calculation failed: {e}")
+            # Return scenarios unchanged on error
+
+        return scenarios
+
+    # =========================================================================
+    # 🆕 CLASS STATS (Context Gates: Kill Switch / Boost)
+    # =========================================================================
+
+    async def _apply_class_stats(
+        self,
+        scenarios: List[Dict],
+        symbol: str,
+        timeframe: str,
+        market_context: Dict,
+    ) -> List[Dict]:
+        """
+        Применить context gates из class stats системы.
+
+        1. Строит ClassKey для каждого сценария
+        2. Получает class_stats с L2 -> L1 fallback
+        3. Применяет modifiers (confidence, warnings)
+        4. Clamp confidence в пределах [0.05, 0.95]
+
+        Args:
+            scenarios: Сценарии после EV calculation
+            symbol: Trading pair
+            timeframe: Timeframe
+            market_context: Market context с factors для buckets
+
+        Returns:
+            Сценарии с class_stats метаданными и скорректированным confidence
+        """
+        try:
+            async with get_session_maker()() as session:
+                # Извлекаем factors для bucketization
+                factors = {
+                    "trend": market_context.get("trend", "sideways"),
+                    "trend_strength": market_context.get("trend_strength", 0),
+                    "volatility_regime": market_context.get("volatility", "normal"),
+                    "funding_rate": market_context.get("funding_rate"),
+                    "sentiment": market_context.get("sentiment"),
+                    "fear_greed": market_context.get("fear_greed"),
+                }
+
+                for sc in scenarios:
+                    archetype = sc.get("primary_archetype")
+                    if not archetype:
+                        continue
+
+                    side = sc.get("bias", "long").lower()
+
+                    # Строим ClassKey
+                    class_key = build_class_key(
+                        archetype=archetype,
+                        side=side,
+                        timeframe=timeframe,
+                        factors=factors,
+                        level=2,  # Сначала L2, fallback на L1
+                    )
+
+                    # Получаем stats с fallback
+                    lookup_result = await class_stats_analyzer.get_class_stats(
+                        session=session,
+                        class_key=class_key,
+                        allow_fallback=True,
+                    )
+
+                    if lookup_result.stats:
+                        stats = lookup_result.stats
+
+                        # Сохраняем raw confidence
+                        raw_confidence = sc.get("confidence", 0.5)
+                        sc["confidence_raw"] = raw_confidence
+
+                        # Применяем modifier
+                        new_confidence = raw_confidence + stats.confidence_modifier
+
+                        # Если класс disabled - штраф
+                        if not stats.is_enabled:
+                            new_confidence *= 0.5
+                            sc["class_warning"] = stats.disable_reason
+
+                        # Clamp confidence
+                        sc["confidence"] = max(
+                            CONFIDENCE_MIN,
+                            min(CONFIDENCE_MAX, new_confidence)
+                        )
+
+                        # Добавляем class_stats метаданные
+                        sc["class_stats"] = {
+                            "class_key": class_key.key_string,
+                            "class_key_hash": class_key.key_hash,
+                            "class_level": f"L{stats.class_level}",
+                            "sample_size": stats.total_trades,
+                            "sample_status": stats.get_sample_status(),
+                            "is_enabled": stats.is_enabled,
+                            "disable_reason": stats.disable_reason,
+                            "preliminary_warning": stats.preliminary_warning,
+                            "winrate": round(stats.winrate, 3),
+                            "winrate_lower_ci": round(stats.winrate_lower_ci, 3),
+                            "avg_pnl_r": round(stats.avg_pnl_r, 2),
+                            "avg_ev_r": round(stats.avg_ev_r, 2),
+                            "ev_lower_ci": round(stats.ev_lower_ci, 2),
+                            "max_drawdown_r": round(stats.max_drawdown_r, 2),
+                            "conversion_rate": round(stats.conversion_rate, 3),
+                            "confidence_modifier": stats.confidence_modifier,
+                            "window_days": stats.window_days,
+                            # Fallback metadata
+                            "fallback_used": lookup_result.fallback_used,
+                            "fallback_from": lookup_result.fallback_from,
+                            "fallback_reason": lookup_result.fallback_reason,
+                        }
+
+                        # Preliminary warning
+                        if stats.preliminary_warning:
+                            sc["class_warning"] = stats.preliminary_warning
+
+                logger.debug(
+                    f"Class stats applied to {len(scenarios)} scenarios"
+                )
+
+        except Exception as e:
+            logger.warning(f"Class stats application failed: {e}")
+            # Return scenarios unchanged on error
+
+        return scenarios
+
+    async def _log_scenario_generation(
+        self,
+        analysis_id: str,
+        scenarios: List[Dict],
+        symbol: str,
+        timeframe: str,
+        market_context: Dict,
+        user_id: int = 0,
+        is_testnet: bool = False,
+    ):
+        """
+        Залогировать генерацию сценариев для class stats conversion tracking.
+
+        Логирует каждый сценарий в scenario_generation_log с идемпотентностью
+        по (analysis_id, scenario_local_id).
+
+        Args:
+            analysis_id: UUID анализа
+            scenarios: Список сценариев
+            symbol: Trading pair
+            timeframe: Timeframe
+            market_context: Market context для buckets
+            user_id: User ID (0 = API call без auth)
+            is_testnet: Testnet flag
+        """
+        try:
+            async with get_session_maker()() as session:
+                # Извлекаем factors для bucketization
+                factors = {
+                    "trend": market_context.get("trend", "sideways"),
+                    "trend_strength": market_context.get("trend_strength", 0),
+                    "volatility_regime": market_context.get("volatility", "normal"),
+                    "funding_rate": market_context.get("funding_rate"),
+                    "sentiment": market_context.get("sentiment"),
+                    "fear_greed": market_context.get("fear_greed"),
+                }
+
+                logged_count = 0
+                for idx, sc in enumerate(scenarios, start=1):
+                    archetype = sc.get("primary_archetype")
+                    if not archetype:
+                        continue
+
+                    side = sc.get("bias", "long").lower()
+
+                    # Строим ClassKey
+                    class_key = build_class_key(
+                        archetype=archetype,
+                        side=side,
+                        timeframe=timeframe,
+                        factors=factors,
+                        level=2,
+                    )
+
+                    # Логируем (идемпотентно)
+                    is_new = await class_stats_analyzer.log_scenario_generation(
+                        session=session,
+                        analysis_id=analysis_id,
+                        scenario_local_id=idx,
+                        user_id=user_id,
+                        symbol=symbol,
+                        timeframe=timeframe,
+                        class_key=class_key,
+                        is_testnet=is_testnet,
+                    )
+
+                    if is_new:
+                        logged_count += 1
+
+                await session.commit()
+
+                if logged_count > 0:
+                    logger.debug(
+                        f"Logged {logged_count} scenario generations for analysis {analysis_id}"
+                    )
+
+        except Exception as e:
+            logger.warning(f"Scenario generation logging failed: {e}")
+            # Non-critical, don't raise
 
     # =========================================================================
     # 🔥 SCENARIO VALIDATION (маст-хэв для контроля LLM галлюцинаций)

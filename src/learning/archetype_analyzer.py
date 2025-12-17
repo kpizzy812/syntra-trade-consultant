@@ -77,11 +77,12 @@ class ArchetypeAnalyzer:
             if len(group_trades) < self.MIN_TRADES_FOR_STATS:
                 continue
 
-            archetype, symbol, timeframe, volatility = key
+            archetype, side, symbol, timeframe, volatility = key
             stats = self._calculate_group_stats(group_trades)
 
             stats_records.append({
                 "archetype": archetype,
+                "side": side,
                 "symbol": symbol,
                 "timeframe": timeframe,
                 "volatility_regime": volatility,
@@ -190,11 +191,12 @@ class ArchetypeAnalyzer:
         self,
         trades: List[TradeOutcome]
     ) -> Dict[tuple, List[TradeOutcome]]:
-        """Group trades by archetype, symbol, timeframe, volatility."""
+        """Group trades by archetype, side, symbol, timeframe, volatility."""
         groups = defaultdict(list)
 
         for trade in trades:
             archetype = trade.primary_archetype or "unknown"
+            side = trade.side.lower() if trade.side else "long"
 
             # Extract volatility from attribution_data
             volatility = None
@@ -202,26 +204,26 @@ class ArchetypeAnalyzer:
                 factors = trade.attribution_data.get("factors", {})
                 volatility = factors.get("volatility_regime")
 
-            # Create keys for different groupings
-            # 1. Global (archetype only)
-            groups[(archetype, None, None, None)].append(trade)
+            # Create keys for different groupings (side теперь в ключе!)
+            # 1. Global (archetype + side)
+            groups[(archetype, side, None, None, None)].append(trade)
 
             # 2. By symbol
-            groups[(archetype, trade.symbol, None, None)].append(trade)
+            groups[(archetype, side, trade.symbol, None, None)].append(trade)
 
             # 3. By timeframe
-            groups[(archetype, None, trade.timeframe, None)].append(trade)
+            groups[(archetype, side, None, trade.timeframe, None)].append(trade)
 
             # 4. By symbol + timeframe
-            groups[(archetype, trade.symbol, trade.timeframe, None)].append(trade)
+            groups[(archetype, side, trade.symbol, trade.timeframe, None)].append(trade)
 
             # 5. By volatility
             if volatility:
-                groups[(archetype, None, None, volatility)].append(trade)
+                groups[(archetype, side, None, None, volatility)].append(trade)
 
             # 6. Full grouping
             if volatility:
-                groups[(archetype, trade.symbol, trade.timeframe, volatility)].append(trade)
+                groups[(archetype, side, trade.symbol, trade.timeframe, volatility)].append(trade)
 
         return groups
 
@@ -245,6 +247,18 @@ class ArchetypeAnalyzer:
         gross_profit = sum(p for p in pnl_values if p > 0)
         gross_loss = abs(sum(p for p in pnl_values if p < 0))
         profit_factor = gross_profit / gross_loss if gross_loss > 0 else 0
+
+        # Terminal outcome counts (для EV)
+        exit_sl_count = sum(1 for t in trades if t.terminal_outcome == "sl")
+        exit_tp1_count = sum(1 for t in trades if t.terminal_outcome == "tp1")
+        exit_tp2_count = sum(1 for t in trades if t.terminal_outcome == "tp2")
+        exit_tp3_count = sum(1 for t in trades if t.terminal_outcome == "tp3")
+        exit_other_count = sum(1 for t in trades if t.terminal_outcome == "other")
+
+        # avg_pnl_r_other для payout_other
+        other_trades = [t for t in trades if t.terminal_outcome == "other"]
+        other_pnl_values = [t.pnl_r or 0 for t in other_trades]
+        avg_pnl_r_other = np.mean(other_pnl_values) if other_pnl_values else 0
 
         # MAE metrics
         mae_values = [t.mae_r or 0 for t in trades if t.mae_r is not None]
@@ -275,6 +289,14 @@ class ArchetypeAnalyzer:
             "winrate": winrate,
             "avg_pnl_r": avg_pnl_r,
             "profit_factor": profit_factor,
+            # Terminal outcome counts
+            "exit_sl_count": exit_sl_count,
+            "exit_tp1_count": exit_tp1_count,
+            "exit_tp2_count": exit_tp2_count,
+            "exit_tp3_count": exit_tp3_count,
+            "exit_other_count": exit_other_count,
+            "avg_pnl_r_other": avg_pnl_r_other,
+            # MAE/MFE
             "avg_mae_r": avg_mae_r,
             "avg_mfe_r": avg_mfe_r,
             "p75_mae_r": p75_mae_r,
@@ -293,10 +315,11 @@ class ArchetypeAnalyzer:
     ):
         """Upsert archetype stats records."""
         for record in stats_records:
-            # Try to find existing
+            # Try to find existing (включая side!)
             stmt = select(ArchetypeStats).where(
                 and_(
                     ArchetypeStats.archetype == record["archetype"],
+                    ArchetypeStats.side == record.get("side"),
                     ArchetypeStats.symbol == record.get("symbol"),
                     ArchetypeStats.timeframe == record.get("timeframe"),
                     ArchetypeStats.volatility_regime == record.get("volatility_regime"),

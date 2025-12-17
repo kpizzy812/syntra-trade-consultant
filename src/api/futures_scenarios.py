@@ -233,6 +233,159 @@ class LearningSuggestions(BaseModel):
     confidence: float = Field(..., description="Confidence in suggestion (0-1)")
 
 
+# =============================================================================
+# EV (EXPECTED VALUE) MODELS
+# =============================================================================
+
+
+class OutcomeProbsAPI(BaseModel):
+    """Terminal outcome probabilities for EV calculation"""
+    sl: float = Field(..., description="P(stop loss) - не дошли ни до одного TP")
+    tp1: float = Field(..., description="P(exit at TP1)")
+    tp2: Optional[float] = Field(default=None, description="P(exit at TP2) — если 2+ targets")
+    tp3: Optional[float] = Field(default=None, description="P(exit at TP3) — если 3 targets")
+    other: float = Field(..., description="P(manual/timeout/breakeven)")
+    source: str = Field(..., description="learning | llm | default")
+    sample_size: Optional[int] = Field(default=None, description="Количество сделок в выборке")
+    n_targets: int = Field(default=3, description="Количество TP уровней (1-3)")
+
+
+class EVMetricsAPI(BaseModel):
+    """Expected Value metrics for scenario scoring"""
+    ev_r: float = Field(..., description="Expected Value в R (с учётом fees)")
+    ev_r_gross: float = Field(..., description="EV до вычета fees (для дебага)")
+    fees_r: float = Field(..., description="Комиссии в R")
+    ev_grade: str = Field(..., description="A (>=0.5), B (>=0.2), C (>=0), D (<0)")
+    scenario_score: float = Field(..., description="Нормализованный скор для ранжирования")
+    n_targets: int = Field(..., description="Количество TP уровней (1-3)")
+    flags: Optional[List[str]] = Field(default=None, description="Санити-чек флаги")
+
+
+# =============================================================================
+# NO-TRADE SIGNAL (first-class citizen)
+# =============================================================================
+
+
+# =============================================================================
+# CLASS STATS (Context Gates)
+# =============================================================================
+
+
+class ClassStatsAPI(BaseModel):
+    """
+    Class Stats - статистика класса сценария для context gates.
+
+    Класс = archetype + side + timeframe + [trend + vol + funding + sentiment]
+    Используется для kill switch / boost.
+    """
+    # Идентификация
+    class_key: str = Field(
+        ...,
+        description="ARCHETYPE|SIDE|TF|TREND|VOL|FUND|SENT"
+    )
+    class_key_hash: str = Field(
+        ...,
+        description="SHA1 hash для дебага"
+    )
+    class_level: str = Field(
+        ...,
+        description="L1 (coarse) or L2 (fine)"
+    )
+
+    # Sample info
+    sample_size: int = Field(
+        ...,
+        description="Количество trades в статистике"
+    )
+    sample_status: str = Field(
+        ...,
+        description="insufficient / preliminary / reliable"
+    )
+    window_days: int = Field(
+        default=90,
+        description="Rolling window в днях"
+    )
+
+    # Fallback metadata
+    fallback_used: bool = Field(
+        default=False,
+        description="True если использован L1 fallback"
+    )
+    fallback_from: Optional[str] = Field(
+        default=None,
+        description="L2 если fallback с L2 на L1"
+    )
+    fallback_reason: Optional[str] = Field(
+        default=None,
+        description="insufficient_sample / not_found"
+    )
+
+    # Gates
+    is_enabled: bool = Field(
+        default=True,
+        description="False = kill switch активен"
+    )
+    disable_reason: Optional[str] = Field(
+        default=None,
+        description="Причина kill switch"
+    )
+    preliminary_warning: Optional[str] = Field(
+        default=None,
+        description="Warning для 20-49 trades"
+    )
+
+    # Метрики
+    winrate: float = Field(..., description="Win rate (0-1)")
+    winrate_lower_ci: float = Field(..., description="Wilson 95% CI lower bound")
+    avg_pnl_r: float = Field(..., description="Средний PnL в R")
+    avg_ev_r: float = Field(..., description="Средний EV в R")
+    ev_lower_ci: float = Field(..., description="EV 95% CI lower bound")
+    max_drawdown_r: float = Field(..., description="Max drawdown в R")
+    conversion_rate: float = Field(
+        default=0,
+        description="traded_count / generated_count"
+    )
+    confidence_modifier: float = Field(
+        default=0,
+        description="+/- к confidence"
+    )
+
+
+class NoTradeSignal(BaseModel):
+    """
+    NO-TRADE как first-class сценарий.
+
+    Рынок часто говорит "не лезь, брат, сегодня не день".
+    Это режет овертрейдинг и поднимает winrate.
+    """
+    should_not_trade: bool = Field(
+        default=True,
+        description="True = рекомендуется НЕ торговать"
+    )
+    confidence: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Уверенность в рекомендации (0-1)"
+    )
+    reasons: List[str] = Field(
+        ...,
+        description="Причины не торговать"
+    )
+    category: str = Field(
+        ...,
+        description="Категория: 'chop' | 'extreme_sentiment' | 'low_liquidity' | 'news_risk' | 'technical_conflict'"
+    )
+    wait_for: Optional[List[str]] = Field(
+        default=None,
+        description="Что ждать для возобновления торговли"
+    )
+    estimated_wait_hours: Optional[int] = Field(
+        default=None,
+        description="Примерное время ожидания (часы)"
+    )
+
+
 class TradingScenario(BaseModel):
     """Trading scenario model with execution plan"""
     id: int
@@ -297,6 +450,26 @@ class TradingScenario(BaseModel):
         description="Validation result: 'valid', 'fixed:field', 'warning'"
     )
 
+    # EV (Expected Value) metrics
+    outcome_probs: Optional[OutcomeProbsAPI] = Field(
+        default=None,
+        description="Terminal outcome probabilities for EV calculation"
+    )
+    ev_metrics: Optional[EVMetricsAPI] = Field(
+        default=None,
+        description="Expected Value metrics and scenario score"
+    )
+
+    # Class Stats (Context Gates)
+    class_stats: Optional[ClassStatsAPI] = Field(
+        default=None,
+        description="Class statistics for context gates (kill switch / boost)"
+    )
+    class_warning: Optional[str] = Field(
+        default=None,
+        description="Warning from class stats (disabled / preliminary negative)"
+    )
+
 
 class MarketContext(BaseModel):
     """Market context model"""
@@ -344,6 +517,12 @@ class FuturesScenariosResponse(BaseModel):
     key_levels: KeyLevels
     data_quality: DataQuality
     metadata: dict
+
+    # 🆕 NO-TRADE signal (first-class citizen)
+    no_trade: Optional[NoTradeSignal] = Field(
+        default=None,
+        description="Сигнал НЕ торговать (если есть - рекомендуется воздержаться)"
+    )
 
     class Config:
         schema_extra = {

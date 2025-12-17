@@ -24,22 +24,18 @@ Benefits:
 - ⚠️ Slightly higher cost (but worth it)
 """
 import json
-import logging
-from typing import AsyncGenerator, Optional, List, Dict, Any
-from datetime import datetime
+from typing import AsyncGenerator, List, Dict, Any
 
-from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from config.config import OPENAI_API_KEY, ModelConfig
+from config.config import ModelConfig
 from config.prompt_selector import get_system_prompt
-from config.prompts import get_random_catchphrase
 from src.database.crud import add_chat_message, get_chat_history, track_cost
 from src.services.openai_service import OpenAIService
 from src.services.crypto_tools import CRYPTO_TOOLS, execute_tool
 
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 class TwoStepOpenAIService(OpenAIService):
@@ -49,136 +45,128 @@ class TwoStepOpenAIService(OpenAIService):
     Optimized for maximum personality preservation
     """
 
-    # Enhanced system prompt for comprehensive data analysis (no personality, but deep analysis)
+    # Data collection prompt - ONLY JSON, no analysis
     ANALYSIS_SYSTEM_PROMPT = """
-You are a professional crypto market data analyst. Your job is to provide COMPREHENSIVE and CONTEXT-AWARE analysis.
+You are a crypto data collector. Your ONLY job: call tools, return raw data as JSON.
 
-# Your Tasks:
-1. **Gather Data**: Call relevant tools to get all available data
-2. **Analyze User Context**: Extract and analyze ALL information user provided (team, events, roadmap, concerns)
-3. **Assess Market Context**: Examine market phase, token lifecycle, and trends
-4. **Evaluate Risks**: Analyze liquidity, volume, regulatory, and project-specific risks
-5. **Identify Patterns**: Look for price action, momentum, and market sentiment
-6. **Project Scenarios**: Provide multiple scenarios with criteria for decision-making
+# CRITICAL RULES:
+1. **ALWAYS call relevant tools first** - NEVER respond without calling tools
+2. **ALWAYS return ONLY JSON** - zero text, zero comments, zero analysis
+3. **NO conclusions** - just raw data from tools
+4. **NO interpretation** - Step 2 (smarter model) will do ALL analysis
+5. **NEVER say "I need data"** - YOU must call tools to get data yourself
 
-# SPECIAL: Market Overview Requests
-When user asks about the overall market ("what's happening in crypto", "market overview", "что по рынку"):
-- CALL: get_market_overview() - returns structured data for BTC, ETH, market metrics, news
-- The tool already provides: BTC price/RSI/levels, ETH price, dominance, Fear & Greed, trend, relevant news
-- Your output should be MINIMAL - just return the raw JSON data for styling step
-- DO NOT write prose, just return: "Market data collected: [JSON summary]"
-- The styling step will create the narrative from this data
+You are a task runner. Fetch data → Format as JSON → Done.
 
-# SPECIAL: Trading Questions (specific coin analysis)
-When user asks about SPECIFIC COIN trading ("long/short ETH", "buy BTC", "до 4к дойдет", "норм тема взять"):
-- CALL: get_technical_analysis(coin_id, timeframe) - returns FULL TA with scenario_levels, EMA, ATR, liquidity zones
-- Use timeframe: "1d" for swing trading, "4h" for day trading, "1h" for scalping
-- The tool returns:
-  * technical_indicators: RSI, MACD, EMA_20, EMA_50, EMA_200, ATR, Stoch RSI
-  * scenario_levels: Pre-calculated entry/SL/TP levels with ATR-based calculations
-  * scenario_levels.key_levels.ema_levels: EMA prices with distance_pct and position
-  * scenario_levels.leverage_recommendation: Safe leverage ranges based on ATR volatility
-  * support_resistance.liquidity_zones: High-volume price zones
-  * fibonacci_levels: Fibonacci retracement levels
-  * funding_data: Futures funding rate and sentiment (if available)
-  * long_short_data: Long/short ratio and sentiment (if available)
-  * cycle_data: Rainbow Chart market phase (if available for BTC)
-- Your output should INCLUDE all this data for styling step to use
-- DO NOT just call get_crypto_price - it doesn't have TA, levels, or scenarios!
+# TOOL SELECTION:
 
-# Analysis Framework (use even with limited data):
+## Market Overview / Risk-Reward Questions
+User asks: "что по рынку", "market overview", "где больше риск ревард", "what's the best RR"
+→ CALL: get_market_overview()
+→ RETURN: exact JSON from tool (btc, eth, alts, market, news)
 
-**Technical Layer** (if available):
-- Price action and momentum
-- Support/resistance levels
-- Technical indicators (RSI, MACD, etc.)
-- Volume analysis and trends
+## Specific Coin Trading Questions
+User asks: "long/short ETH?", "BTC до 100к?", "ARB норм тема?"
+→ CALL: get_technical_analysis(coin_id, timeframe)
+  - timeframe: "1d" for swing, "4h" for day trade, "1h" for scalping
+→ RETURN: {
+  "coin_id": "...",
+  "price": ...,
+  "change_24h": ...,
+  "technical_indicators": {...},  // RSI, MACD, EMA, ATR
+  "scenario_levels": {...},       // entry/SL/TP levels
+  "support_resistance": {...},    // S/R levels, liquidity zones
+  "fibonacci_levels": {...},      // fib retracement
+  "funding_data": {...},          // funding rate, sentiment (if available)
+  "long_short_data": {...},       // L/S ratio, sentiment (if available)
+  "cycle_data": {...},            // rainbow chart (BTC only)
+  "extended_market_data": {...},  // ATH/ATL, market cap, volume
+  "candles": {...},               // multi-timeframe OHLCV data
+  "news": [...]                   // latest news (if available)
+}
 
-**Fundamental Layer** (always analyze):
-- Market cap and FDV (valuation)
-- Liquidity depth (risk of manipulation)
-- Trading volume (24h, 6h, 1h trends)
-- Token lifecycle phase: Early Launch / Growth / Mature / Declining
+## Quick Price Check
+User asks: "цена SOL", "сколько стоит BTC"
+→ CALL: get_crypto_price(coin_id)
+→ RETURN: {"coin_id": "...", "price": ..., "change_24h": ..., "market_cap": ..., "volume": ...}
 
-**User Context Analysis** (ALWAYS ANALYZE):
-- Extract ALL details user mentioned: team, founders, partnerships, upcoming events, product plans
-- Analyze project type: Creator-driven (influencer/celebrity), community-driven, VC-backed, anonymous
-- Assess roadmap items: Products, utilities, tokenomics changes (buybacks/burns/staking)
-- Evaluate hype factors: Media presence, social following, narrative strength
-- Identify regulatory/reputation risks: Legal concerns, controversial associations, compliance issues
-- Understand user's position: Entry price, current P&L, emotional state (loss/profit/neutral)
+## News Questions
+User asks: "новости BTC", "что нового про Ethereum"
+→ CALL: get_crypto_news(coin_id)
+→ RETURN: {"coin_id": "...", "news": [...]}
 
-**Risk Assessment** (CRITICAL):
-- Liquidity risk: <$100k = EXTREME (easy manipulation), $100k-$1M = HIGH, $1M-$10M = MODERATE, >$10M = LOW
-- Volume risk: Low volume (<$100k/24h) = pump&dump risk, declining volume = exit liquidity trap
-- Project-specific risks: Anonymous team, no product, regulatory concerns, influencer dependency
-- News sentiment and fundamental changes
-- Market conditions (Fear & Greed Index)
+## DEX Token Analysis
+User asks about low-cap/DEX token: "что с BONK", "как там PEPE"
+→ CALL: get_dex_token_info(token_address, chain)
+→ RETURN: {
+  "address": "...",
+  "price": ...,
+  "liquidity": ...,
+  "volume_24h": ...,
+  "price_change_5m": ...,
+  "price_change_1h": ...,
+  "price_change_6h": ...,
+  "price_change_24h": ...,
+  "txns": {...},
+  "holders": ...
+}
 
-**SCAM DETECTION** (REFUSE to analyze if ALL conditions met):
-If a token has ALL of these red flags, REFUSE analysis and warn user:
-1. Liquidity < $1,000 USD (extreme manipulation risk)
-2. 24h Volume < $500 USD (dead/fake token)
-3. No significant market cap or FDV data
-RESPONSE: "This token shows extreme scam indicators (liquidity <$1k, volume <$500).
-Analysis refused - likely a honeypot, rug pull, or dead project. DO NOT invest."
+# SCAM DETECTION:
+If token has ALL these flags:
+- Liquidity < $1,000
+- Volume 24h < $500
+- No market cap data
+→ RETURN: {"error": "scam_detected", "reason": "liquidity <$1k, volume <$500, likely honeypot/rug"}
 
-**Perspectives** (project outcomes):
-- Short-term (1-7 days): Based on momentum, volume, news
-- Mid-term (1-4 weeks): Based on fundamentals, market cycle
-- Long-term (1-3 months): Based on project viability, adoption
+# USER CONTEXT EXTRACTION:
+If user mentions team/events/roadmap/position:
+→ ADD to JSON: {
+  "user_context": {
+    "mentioned_team": "...",
+    "mentioned_events": "...",
+    "user_position": "...",  // entry price, P&L if mentioned
+    "concerns": "..."
+  }
+}
 
-# For DEX-only tokens:
-- Analyze liquidity stability over time (1h/6h/24h volume trends)
-- Assess transaction count (health indicator)
-- Check price volatility (5m/1h/6h/24h changes)
-- Evaluate chain and DEX (Solana/Raydium more volatile than ETH/Uniswap)
-- **Buy/Sell Pressure**: Calculate ratio of buys vs sells (>1.2 = bullish, <0.8 = bearish)
-- **Momentum Analysis**: Use 5m/1h/6h/24h price changes to identify trend direction
-- **Entry Points**: Calculate specific price levels based on:
-  * Current volatility (from price_change data)
-  * Volume-weighted support (current price - 2-5% for conservative, 5-10% for aggressive)
-  * Buy pressure zones (where buys > sells historically)
+# OUTPUT FORMAT:
+ALWAYS return pure JSON. No text before/after. Example:
 
-# Output Format:
-Structure your analysis clearly with sections:
-- Data Summary (what we found from tools)
-- User Context Summary (what user told us - team, events, plans, position)
-- Technical Analysis (if available) OR Price Action Analysis (for DEX)
-- Fundamental Assessment (liquidity, volume, market cap, phase, creator influence)
-- Risk Analysis (specific risks with data + regulatory + project risks)
-- **Fibonacci & Price Levels Analysis** (if fibonacci_levels available in data):
-  * Current Fibonacci zone (e.g., "0%-23.6% Near ATL oversold zone")
-  * Distance from ATH (percentage)
-  * Key support levels (Fibonacci + historical S/R)
-  * Key resistance levels (Fibonacci + historical S/R)
-  * Interpretation of current position in the cycle
-- **Decision Scenarios** (CRITICAL - use scenario_levels from data if available):
-  * USE the pre-calculated scenario_levels.scenarios data from tools
-  * Scenario A: Bullish Scenario
-    - Entry zones: Use scenario_levels.scenarios.bullish_scenario.entry_zone (conservative & aggressive)
-    - Stop loss: Use scenario_levels.scenarios.bullish_scenario.stop_loss
-    - Targets: Use scenario_levels.scenarios.bullish_scenario.targets (target_1, target_2, target_3)
-    - Conditions: Add/expand on scenario_levels.scenarios.bullish_scenario.conditions
-  * Scenario B: Bearish Scenario
-    - Entry zones: Use scenario_levels.scenarios.bearish_scenario.entry_zone
-    - Stop loss: Use scenario_levels.scenarios.bearish_scenario.stop_loss
-    - Targets: Use scenario_levels.scenarios.bearish_scenario.targets
-    - Conditions: Add/expand on scenario_levels.scenarios.bearish_scenario.conditions
-  * Scenario C: Range Trading (if applicable)
-    - Range boundaries: Use scenario_levels.scenarios.range_bound_scenario.range
-    - Strategy: scenario_levels.scenarios.range_bound_scenario.strategy
-  * For EACH scenario: Include risk/reward ratio, probability assessment, decision criteria
-  * If scenario_levels NOT available: Generate scenarios manually based on current price ±5-10%
-- Perspectives (short/mid/long-term based on data and user context)
+{
+  "data_type": "technical_analysis",
+  "coin_id": "ethereum",
+  "price": 3120,
+  "technical_indicators": {...},
+  "scenario_levels": {...},
+  ...
+}
 
-IMPORTANT RULES:
-- NEVER say "buy", "sell", "hold", "average down" as direct advice
-- Instead use "Scenario A/B/C" format with criteria for decision-making
-- ALWAYS use specific price levels from fibonacci_levels and scenario_levels when available
-- If ATH date (ath_date) is in extended_data, ALWAYS mention it with context (e.g., "ATH $2.39 was 11 months ago on Jan 12, 2024")
-- Be objective, factual, and thorough. NO personality in this step.
-- Focus on actionable insights with clear decision frameworks and CONCRETE price levels
+If get_market_overview():
+{
+  "data_type": "market_overview",
+  "btc": {...},
+  "eth": {...},
+  "alts": [...],
+  "market": {...},
+  "news": [...]
+}
+
+# SPECIAL CASES:
+If user asks general question (not about specific crypto/market):
+{
+  "data_type": "general_question",
+  "question": "user question text",
+  "context": "any relevant context from history"
+}
+
+If tools fail or data unavailable:
+{
+  "data_type": "error",
+  "error": "brief error description",
+  "fallback_data": {...}  // any partial data you got
+}
+
+NO comments. NO explanations. NO text like "I need data" or "Please provide". ONLY JSON.
 """
 
     async def stream_two_step_completion(
@@ -187,33 +175,60 @@ IMPORTANT RULES:
         user_id: int,
         user_message: str,
         user_language: str = "ru",
+        user_tier: str = "free",
         max_tool_iterations: int = 5,
     ) -> AsyncGenerator[str, None]:
         """
-        Two-step streaming completion with enhanced personality
+        Two-step streaming completion with enhanced personality (tier-aware)
 
         Step 1: Get data with function calling (mini model, no personality)
         Step 2: Style response with full Syntra persona (4o model, max creativity)
+
+        Tier-based Memory:
+        - FREE: 0 messages (no memory)
+        - BASIC: 5 messages
+        - PREMIUM: 10 messages
+        - VIP: 50 messages
 
         Args:
             session: Database session
             user_id: User's database ID
             user_message: User's message
             user_language: User's language ('ru' or 'en')
+            user_tier: User's subscription tier (free, basic, premium, vip)
             max_tool_iterations: Max function calling iterations
 
         Yields:
             Text chunks from final styled response
         """
+        from config.limits import get_chat_history_limit, should_save_chat_history
+        from src.database.models import SubscriptionTier
+
         try:
-            # Save user message to history
-            await add_chat_message(
-                session, user_id=user_id, role="user", content=user_message
-            )
+            # Get tier enum
+            try:
+                tier_enum = SubscriptionTier(user_tier)
+            except ValueError:
+                logger.warning(f"Invalid tier '{user_tier}', defaulting to FREE")
+                tier_enum = SubscriptionTier.FREE
+
+            # Get history limit for tier
+            max_history = get_chat_history_limit(tier_enum)
 
             logger.info(
-                f"🎬 Two-step process started for user {user_id}: {user_message[:50]}..."
+                f"🎬 Two-step process started for user {user_id} (tier={user_tier}, history_limit={max_history}): {user_message[:50]}..."
             )
+
+            # Save user message to history (only for tiers with save_chat_history=True)
+            if should_save_chat_history(tier_enum):
+                await add_chat_message(
+                    session, user_id=user_id, role="user", content=user_message
+                )
+                logger.debug(f"User message saved to history for tier {user_tier}")
+            else:
+                logger.debug(
+                    f"User message NOT saved to history for tier {user_tier} (save_chat_history=False)"
+                )
 
             # ==========================================
             # STEP 1: DATA ANALYSIS (mini, no personality)
@@ -221,16 +236,24 @@ IMPORTANT RULES:
 
             logger.info("📊 Step 1: Analyzing data with function calling...")
 
-            # Get recent chat history for context (last 5 messages)
-            history = await get_chat_history(session, user_id, limit=5)
+            # Get recent chat history for context (tier-aware)
+            history = []
+            if max_history > 0:
+                history = await get_chat_history(session, user_id, limit=max_history)
+                logger.info(f"Loaded {len(history)} messages from history")
+            else:
+                logger.info(f"No history loaded for FREE tier")
 
             # Build analysis messages with context
             analysis_messages: List[Dict[str, Any]] = [
                 {"role": "system", "content": self.ANALYSIS_SYSTEM_PROMPT}
             ]
 
-            # Add recent history for context (but not the last message - it's user_message)
-            for msg in history[:-1]:  # Exclude last message (it's the current one we just saved)
+            # Add recent history for context
+            # If we saved current message (paid tiers), exclude it from history
+            # If we didn't save (FREE tier), use all history
+            history_to_use = history[:-1] if should_save_chat_history(tier_enum) and len(history) > 0 else history
+            for msg in history_to_use:
                 analysis_messages.append({
                     "role": msg.role,
                     "content": msg.content
@@ -250,7 +273,7 @@ IMPORTANT RULES:
                 iteration += 1
 
                 # Use mini for data gathering (cost-effective)
-                response = await self.client.chat.completions.create(
+                response = await self.openai_client.chat.completions.create(
                     model=ModelConfig.GPT_4O_MINI,
                     messages=analysis_messages,
                     tools=CRYPTO_TOOLS,
@@ -298,6 +321,22 @@ IMPORTANT RULES:
 
                             result = await execute_tool(tool_name, arguments)
 
+                            # Логируем что вернул tool
+                            logger.info(f"📦 Tool {tool_name} result: {len(result)} chars")
+                            try:
+                                result_data = json.loads(result)
+                                if result_data.get('success'):
+                                    data_sources = result_data.get('data_sources', [])
+                                    logger.info(f"   ✅ Data sources: {data_sources}")
+                                    if 'funding_data' in result_data and result_data['funding_data']:
+                                        logger.info(f"   💰 Funding: {result_data['funding_data']}")
+                                    if 'long_short_data' in result_data and result_data['long_short_data']:
+                                        logger.info(f"   📈 L/S Ratio: {result_data['long_short_data']}")
+                                    if 'cycle_data' in result_data and result_data['cycle_data']:
+                                        logger.info(f"   🌈 Cycle: {result_data['cycle_data'].get('current_band')}")
+                            except:
+                                pass
+
                             analysis_messages.append({
                                 "role": "tool",
                                 "tool_call_id": tool_id,
@@ -324,6 +363,7 @@ IMPORTANT RULES:
                     # No more tools - AI provided structured analysis
                     structured_analysis = message.content or ""
                     logger.info(f"✅ Step 1 complete. Analysis: {len(structured_analysis)} chars")
+                    logger.info(f"📝 STRUCTURED ANALYSIS:\n{structured_analysis}\n{'='*80}")
                     break
 
             # ==========================================
@@ -389,67 +429,96 @@ IMPORTANT RULES:
             # Create styling prompt based on question type
             if is_trading_question:
                 styling_prompt = f"""
-Вот структурированный анализ от аналитика:
+Ты получил актуальные данные по монете:
 
 {structured_analysis}
 
 {safeguard_instruction}
 
-Твоя задача — ответить на вопрос пользователя в стиле Syntra, используя данные из анализа.
+⚡ ТВОЯ ЗАДАЧА — ПРОАНАЛИЗИРОВАТЬ И ДАТЬ РЕКОМЕНДАЦИЮ:
 
-💬 **ПИШИ СВОБОДНО**, но используй релевантные данные:
-- scenario_levels: уровни поддержки/сопротивления, ema_levels (с distance_pct), liquidity_zones
-- technical_indicators: RSI, MACD, EMA, ATR
-- funding_data, long_short_data, cycle_data (market_phase) - если доступно
-- scenarios: bullish/bearish сценарии с entry/SL/TP
-- leverage_recommendation: если есть, упомяни осторожно ("до Xx разумно, выше — казино")
+ВАЖНО: НИКОГДА не упоминай "JSON", "data collector", "данные", "структуру" или любые технические детали работы системы в ответе пользователю.
+Отвечай так, будто ты ВСЕГДА имел доступ к этой информации.
 
-✅ **ОБЯЗАТЕЛЬНО**:
-1. **ПРЯМОЙ ОТВЕТ**: Дай чёткий bias (long/short/wait) с условиями
-   - "Лонг — только если пробьёт $X и закрепится выше $Y"
-   - "Сейчас — wait, no-trade зона между $X и $Y"
-   - "Шорт имеет смысл, если не удержит $X"
+Используй полученные данные:
+- Технические индикаторы (RSI, MACD, EMA, ATR)
+- Уровни входа/выхода и стоп-лоссов
+- Уровни поддержки и сопротивления
+- Данные по фандингу и настроениям рынка
+- Соотношение лонгов/шортов
+- Фаза рыночного цикла (для BTC)
+- Исторические данные (ATH/ATL, объемы)
 
-2. **ВЫВОД**: Сформулируй итоговую позицию в конце анализа (не размазывай)
-   - Например: "Вывод: лонг рискованный, лучше дождаться закрепа выше $X или пропустить"
+Проанализируй эту информацию и дай профессиональную рекомендацию.
 
-3. **ПУТЬ К ЦЕЛИ** (если вопрос про цену типа "до $4к дойдёт?"):
-   - Перечисли уровни, которые нужно пробить: $A → $B → $C → цель
-   - Дай вероятность и условия: "Дойдёт, если пробьёт $X и удержит $Y. Без этого — мечты"
+ФОРМАТ ОТВЕТА (адаптируй под вопрос пользователя):
 
-4. **СЦЕНАРИИ** (2-3 варианта):
-   - Бычий: условия + entry/SL/targets + вероятность
-   - Медвежий: условия + entry/SL/targets + вероятность
-   - Боковик (если актуально): границы диапазона + стратегия
+Анализируй ЕСТЕСТВЕННО, как Syntra - профессионал с характером:
 
-5. **КОНКРЕТИКА**: Всегда давай цены ($), уровни, проценты, RSI/MACD если релевантно
+1. **ПРЯМОЙ ОТВЕТ**:
+   - Если вопрос про long/short → дай bias с обоснованием из данных
+   - Если вопрос про "держать или продать" → дай анализ ситуации и сценарии
+   - Если вопрос "дойдет до $X" → рассчитай путь по уровням с вероятностью
+   - Если вопрос про просадку → оцени текущую ситуацию и риски
 
-6. Добавь в конце: ⚡ NFA
+2. **СЦЕНАРИИ** (если релевантно):
+   - Бычий сценарий с условиями и уровнями
+   - Медвежий сценарий с условиями и уровнями
+   - Используй данные: RSI, funding, S/R уровни, объемы
 
-Исходный вопрос: "{user_message}"
+3. **ВЫВОД**: Твоя чёткая позиция на основе анализа
+
+4. **КОНКРЕТИКА**: Обязательно используй конкретные цифры ($, %, RSI, funding)
+
+⚠️ ЗАПРЕЩЕНО упоминать в ответе: "JSON", "данные от data collector", "structured_analysis", "нет данных в документе", или любые технические детали системы.
+
+НЕ используй жесткие шаблоны. Отвечай как профессиональный аналитик с характером Syntra.
+
+Добавь в конце: ⚡ NFA
+
+Вопрос: "{user_message}"
 """
             elif is_market_overview:
                 styling_prompt = f"""
-Вот данные о рынке от аналитика:
+Ты получил актуальные данные по рынку:
 
 {structured_analysis}
 
 {safeguard_instruction}
 
-Твоя задача — ответить на вопрос пользователя в стиле Syntra, используя релевантные данные.
+⚡ ТВОЯ ЗАДАЧА — ПРОАНАЛИЗИРОВАТЬ РЫНОК И ДАТЬ ВЫВОДЫ:
 
-💬 **ПИШИ СВОБОДНО**, но используй то что важно для вопроса:
-- BTC: цена, уровни (scenario_levels.key_levels), RSI, MACD, ATR, ema_levels (с distance_pct)
-- ETH: цена, change_24h
-- Рынок: btc_dominance, eth_dominance, altcoin_dominance, fear_greed_index, trend
-- Фьючи (если релевантно): funding_rate, long_short_ratio, sentiment
-- Market phase: cycle_data.current_band (Rainbow Chart)
-- Новости: news (если есть)
+ВАЖНО: НИКОГДА не упоминай "JSON", "data collector", "данные", или технические детали в ответе.
 
-✅ **ОБЯЗАТЕЛЬНО**:
-- Добавь в конце: ⚡ NFA
+Используй полученную информацию:
+- BTC: цена, изменение, расстояние от ATH, технические индикаторы
+- BTC: уровни поддержки/сопротивления, фандинг, long/short ratio
+- BTC: фаза рыночного цикла (Rainbow Chart)
+- ETH: цена, изменение, расстояние от ATH
+- Альткоины: массив монет с ценами и просадками от ATH
+- Рынок: доминация BTC/ETH/альтов, индекс страха и жадности
+- Новости: последние события на рынке
 
-Исходный вопрос: "{user_message}"
+Проанализируй эту информацию и сделай профессиональные выводы.
+
+ФОРМАТ (для market overview):
+- 2-3 строки: общая картина (dominance, F&G, trend) + твой вывод
+- 2-3 строки: BTC (цена, RSI, уровни, funding) + куда движется
+- 1-2 строки: альты/ETH + сравнение с BTC
+- 1 строка: циничный вывод
+
+ФОРМАТ (для risk/reward вопросов):
+- Разбей по сегментам: BTC / ETH / Alts
+- Для каждого: % от ATH → потенциал до ATH → RR оценка
+- Вывод: где максимальный RR и почему
+
+Используй конкретные цифры и данные.
+
+⚠️ ЗАПРЕЩЕНО упоминать: "JSON", "данные", "data collector", "документ", или технические детали системы.
+
+Добавь в конце: ⚡ NFA
+
+Вопрос: "{user_message}"
 """
             elif is_newbie_question:
                 styling_prompt = f"""
@@ -482,37 +551,43 @@ IMPORTANT RULES:
 """
             else:
                 styling_prompt = f"""
-Вот структурированный анализ от аналитика:
+Ты получил актуальную информацию:
 
 {structured_analysis}
 
 {safeguard_instruction}
 
-Твоя задача — ответить на вопрос пользователя в стиле Syntra, используя данные из анализа.
+⚡ ТВОЯ ЗАДАЧА — ПРОАНАЛИЗИРОВАТЬ И ДАТЬ ОТВЕТ:
 
-💬 **ПИШИ СВОБОДНО**, но используй релевантные данные:
-- Цена, change_24h, market_cap, volume, liquidity
-- Technical indicators (если есть): RSI, MACD, EMA, patterns, scenario_levels
-- Fibonacci, support/resistance levels (если есть)
-- Risks: liquidity risk, volume trends, project risks
-- User context: всё что пользователь упомянул (команда, события, roadmap, позиция)
-- Scenarios: если есть, используй с условиями и критериями
+ВАЖНО: НИКОГДА не упоминай "JSON", "данные", "data collector" или технические детали в ответе пользователю.
 
-✅ **ОБЯЗАТЕЛЬНО**:
-1. **ПРЯМОЙ ОТВЕТ на вопрос**:
-   - Если спрашивают "держать или фиксить?" → дай 2 пути с условиями:
-     * "Держать — если готов пересидеть тест $X и возможную просадку ещё -Y%"
-     * "Фиксить — если не готов терпеть риск падения до $X"
-   - Если спрашивают про новичковый вопрос → объясни просто, без заумности
-   - Если вопрос про уровни → дай уровни + что с ними делать
+Используй полученную информацию:
+- Цена, изменение за 24ч, капитализация, объем, ликвидность
+- Технические индикаторы (если есть): RSI, MACD, EMA
+- Уровни поддержки/сопротивления, уровни Фибоначчи
+- Уровни входа/выхода и стоп-лоссов
+- Контекст: команда, события, roadmap, позиция пользователя
+- Новости и настроения рынка
 
-2. **ВЫВОД**: Чёткая итоговая позиция (не размазывай)
+Проанализируй эту информацию и дай профессиональную рекомендацию.
 
-3. **КОНКРЕТИКА**: Используй цены, уровни, проценты из анализа
+ФОРМАТ ОТВЕТА:
 
-4. Добавь в конце: ⚡ NFA
+Отвечай ЕСТЕСТВЕННО на основе вопроса пользователя. НЕ используй шаблоны типа "Держать/Фиксить".
+Формат ответа должен соответствовать ВОПРОСУ:
+- Если спрашивают про цену → дай анализ цены и тренда
+- Если спрашивают про уровни → дай конкретные уровни с обоснованием
+- Если спрашивают про риски → оцени риски на основе данных
+- Если спрашивают про действия (держать/продать) → дай несколько сценариев с условиями
 
-Исходный вопрос: "{user_message}"
+ОБЯЗАТЕЛЬНО:
+1. **КОНКРЕТИКА**: Используй конкретные цифры ($, %, RSI, объёмы)
+2. **ВЫВОД**: Чёткая итоговая позиция основанная на анализе
+3. Добавь в конце: ⚡ NFA
+
+⚠️ ЗАПРЕЩЕНО упоминать: "JSON", "данные от collector", "в документе нет", "мне нечего анализировать", или любые технические детали системы.
+
+Вопрос: "{user_message}"
 """
 
             styling_messages = [
@@ -520,8 +595,11 @@ IMPORTANT RULES:
                 {"role": "user", "content": styling_prompt},
             ]
 
+            logger.info(f"🎨 Styling prompt length: {len(styling_prompt)} chars")
+            logger.debug(f"🎨 STYLING PROMPT:\n{styling_prompt}\n{'='*80}")
+
             # Stream styled response with GPT-4o (best model for creativity)
-            stream = await self.client.chat.completions.create(
+            stream = await self.openai_client.chat.completions.create(
                 model=ModelConfig.GPT_4O,  # ⚡ Always use 4o for styling
                 messages=styling_messages,
                 max_tokens=ModelConfig.MAX_TOKENS_RESPONSE,
@@ -564,25 +642,38 @@ IMPORTANT RULES:
             )
             total_cost = step1_cost + step2_cost
 
-            # Save assistant response to history
-            await add_chat_message(
-                session, user_id=user_id, role="assistant", content=full_response
-            )
+            # Save assistant response to history (only for tiers with save_chat_history=True)
+            if should_save_chat_history(tier_enum):
+                await add_chat_message(
+                    session, user_id=user_id, role="assistant", content=full_response
+                )
+                logger.debug(f"Assistant response saved to history for tier {user_tier}")
+            else:
+                logger.debug(
+                    f"Assistant response NOT saved to history for tier {user_tier} (save_chat_history=False)"
+                )
 
             # Track cost
             await track_cost(
                 session,
                 user_id=user_id,
                 service="openai_two_step",
-                model=f"mini+4o",
-                tokens=step1_input_tokens + step2_input_tokens + step1_output_tokens + step2_output_tokens,
+                model="mini+4o",
+                tokens=(
+                    step1_input_tokens
+                    + step2_input_tokens
+                    + step1_output_tokens
+                    + step2_output_tokens
+                ),
                 cost=total_cost,
             )
 
             logger.info(
                 f"✅ Two-step complete for user {user_id}\n"
-                f"   Step 1 (mini): {step1_input_tokens}+{step1_output_tokens} tokens, ${step1_cost:.4f}\n"
-                f"   Step 2 (4o):   {step2_input_tokens}+{step2_output_tokens} tokens, ${step2_cost:.4f}\n"
+                f"   Step 1 (mini): {step1_input_tokens}+"
+                f"{step1_output_tokens} tokens, ${step1_cost:.4f}\n"
+                f"   Step 2 (4o):   {step2_input_tokens}+"
+                f"{step2_output_tokens} tokens, ${step2_cost:.4f}\n"
                 f"   Total: ${total_cost:.4f}, Tools: {len(tool_calls_made)}"
             )
 

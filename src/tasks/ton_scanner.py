@@ -14,9 +14,8 @@ import os
 
 from src.database.engine import get_session_maker
 from src.services.ton_monitor_service import get_ton_monitor_service
-import logging
 
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 
 async def scan_ton_deposits():
@@ -64,10 +63,12 @@ async def scan_ton_deposits():
             # Используем async context manager для сессии БД
             session_maker = get_session_maker()
             async with session_maker() as session:
-                # Сканируем адрес на новые транзакции
-                async for tx_data in monitor.scan_address(session, deposit_address):
-                    transactions_found += 1
+                # Сканируем адрес на новые транзакции (возвращает список)
+                tx_list = await monitor.scan_address(session, deposit_address)
+                transactions_found = len(tx_list)
 
+                # Обрабатываем каждую транзакцию
+                for tx_data in tx_list:
                     # Обрабатываем транзакцию (передаем bot для уведомлений)
                     success = await monitor.process_transaction(session, tx_data, bot=bot)
 
@@ -128,9 +129,13 @@ if __name__ == "__main__":
     source .venv/bin/activate
     python -m src.tasks.ton_scanner
     """
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    # Configure loguru for standalone mode
+    import sys
+    logger.remove()  # Remove default handler
+    logger.add(
+        sys.stdout,
+        level="INFO",
+        format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <level>{message}</level>"
     )
 
     try:
