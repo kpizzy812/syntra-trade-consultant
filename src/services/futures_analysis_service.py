@@ -2103,8 +2103,8 @@ Return strict JSON format."""
                         ev_multiplier = 0.7  # -30% к EV
 
                     # Применяем penalty
-                    adjusted_ev = metrics.ev_r * ev_multiplier
-                    adjusted_score = metrics.scenario_score * ev_multiplier
+                    adjusted_ev = (metrics.ev_r or 0) * ev_multiplier
+                    adjusted_score = (metrics.scenario_score or 0) * ev_multiplier
 
                     if ev_multiplier < 1.0:
                         ev_flags.append(f"ev_adjusted_{ev_multiplier}")
