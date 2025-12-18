@@ -1,7 +1,7 @@
 """add_futures_count_to_request_limits
 
-Revision ID: a1b2c3d4e5f6
-Revises: f8a42c1b3e9d
+Revision ID: vee3pk1pikz8
+Revises: f3a4b5c6d7e8
 Create Date: 2025-12-19 00:00:00.000000
 
 """
@@ -12,8 +12,8 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'a1b2c3d4e5f6'
-down_revision: Union[str, Sequence[str], None] = 'f8a42c1b3e9d'
+revision: str = 'vee3pk1pikz8'
+down_revision: Union[str, Sequence[str], None] = 'f3a4b5c6d7e8'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
