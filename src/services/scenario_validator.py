@@ -211,6 +211,19 @@ class ScenarioValidator:
                 reasoning=response.get("reasoning", "")
             )
 
+            # 🛡️ OVERRIDE: If LLM incorrectly rejects probs_sum_invalid but probs ARE valid
+            if result.hard_violation == "probs_sum_invalid":
+                outcome_probs = scenario.get("outcome_probs_raw", {})
+                probs_sum = sum(outcome_probs.values()) if outcome_probs else 0
+                if 0.95 <= probs_sum <= 1.05:
+                    logger.warning(
+                        f"🛡️ Override: LLM incorrectly rejected probs_sum_invalid "
+                        f"(sum={probs_sum:.4f} is valid). Allowing scenario."
+                    )
+                    result.hard_violation = None
+                    result.is_valid = True
+                    result.issues.append(f"LLM误判probs (sum={probs_sum:.4f} is valid)")
+
             # Log validation result
             if result.hard_violation:
                 logger.warning(
@@ -268,6 +281,8 @@ class ScenarioValidator:
         # Outcome probs
         outcome_probs = scenario.get("outcome_probs_raw", {})
         probs_sum = sum(outcome_probs.values()) if outcome_probs else 0
+        probs_valid = 0.95 <= probs_sum <= 1.05  # Pre-validated by Python
+        logger.debug(f"📊 Validator probs check: sum={probs_sum:.4f}, valid={probs_valid}, raw={outcome_probs}")
 
         # Market context
         current_price = market_context.get("current_price", 0)
@@ -286,7 +301,7 @@ SCENARIO #{scenario_id}:
 - Entry zone: ${entry_min:.2f} - ${entry_max:.2f}
 - Stop loss: ${sl_recommended:.2f}
 - Targets: {[f"${t:.2f}" for t in target_prices]}
-- Outcome probs sum: {probs_sum:.2f}
+- Outcome probs sum: {probs_sum:.2f} {"✓ VALID (pre-checked)" if probs_valid else "⚠ INVALID"}
 
 MARKET CONTEXT:
 - Current price: ${current_price:.2f}
@@ -305,7 +320,7 @@ YOUR TASK:
    - entry_level_not_exists: Entry prices should reference real levels
    - targets_below_entry_long: For LONG, targets must be ABOVE entry
    - targets_above_entry_short: For SHORT, targets must be BELOW entry
-   - probs_sum_invalid: Outcome probs should sum to ~1.0 (0.90-1.10, normalized before you see them)
+   - probs_sum_invalid: ONLY if probs marked "⚠ INVALID" above. If marked "✓ VALID (pre-checked)" - DO NOT reject!
 
 2. If no hard violations, check for ISSUES (mode="adjust"):
    - Entry zone too wide for ATR (>3x ATR)
