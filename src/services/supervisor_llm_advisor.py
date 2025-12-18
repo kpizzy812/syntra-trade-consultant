@@ -386,7 +386,7 @@ class SupervisorLLMAdvisor:
             user_prompt = self._build_prompt(context)
             full_prompt = f"{system_prompt}\n\n---\n\n{user_prompt}"
 
-            # JSON schema for structured output
+            # JSON schema for structured output (strict mode requires additionalProperties: false)
             json_schema = {
                 "name": "supervisor_advice",
                 "schema": {
@@ -398,12 +398,13 @@ class SupervisorLLMAdvisor:
                                 "type": "object",
                                 "properties": {
                                     "type": {"type": "string", "enum": ["move_sl", "set_break_even", "take_partial", "close_position", "reduce_position", "hold"]},
-                                    "params": {"type": "object"},
+                                    "params": {"type": "object", "additionalProperties": True},
                                     "urgency": {"type": "string", "enum": ["low", "med", "high", "critical"]},
-                                    "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+                                    "confidence": {"type": "integer"},
                                     "reason_bullets": {"type": "array", "items": {"type": "string"}}
                                 },
-                                "required": ["type", "params", "urgency", "confidence", "reason_bullets"]
+                                "required": ["type", "params", "urgency", "confidence", "reason_bullets"],
+                                "additionalProperties": False
                             }
                         },
                         "market_assessment": {"type": "string"},
@@ -411,7 +412,8 @@ class SupervisorLLMAdvisor:
                         "risk_level": {"type": "string", "enum": ["safe", "medium", "high", "critical"]},
                         "summary": {"type": "string"}
                     },
-                    "required": ["recommendations", "market_assessment", "scenario_still_valid", "risk_level", "summary"]
+                    "required": ["recommendations", "market_assessment", "scenario_still_valid", "risk_level", "summary"],
+                    "additionalProperties": False
                 },
                 "strict": True
             }
