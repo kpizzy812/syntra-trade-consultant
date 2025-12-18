@@ -37,6 +37,8 @@ class ModeConfig:
     invalidation_threat_pct: float = 2.0  # Warn if within X% of invalidation
     advice_expiration_min: int = 30  # How long advice is valid
     default_cooldown_min: int = 15  # Cooldown after advice
+    # 🆕 Funding rate thresholds (risk philosophy)
+    funding_extreme: float = 0.001  # Threshold for "extreme" funding (0.1% default)
 
 
 # =============================================================================
@@ -70,6 +72,8 @@ CONSERVATIVE_MODE = ModeConfig(
     invalidation_threat_pct=1.5,
     advice_expiration_min=120,
     default_cooldown_min=60,
+    # Risk philosophy: catch overheating early
+    funding_extreme=0.0005,  # 0.05% - very sensitive
 )
 
 STANDARD_MODE = ModeConfig(
@@ -97,6 +101,8 @@ STANDARD_MODE = ModeConfig(
     invalidation_threat_pct=2.0,
     advice_expiration_min=60,
     default_cooldown_min=30,
+    # Risk philosophy: market default
+    funding_extreme=0.001,  # 0.10% - standard threshold
 )
 
 HIGH_RISK_MODE = ModeConfig(
@@ -131,6 +137,8 @@ HIGH_RISK_MODE = ModeConfig(
     invalidation_threat_pct=1.0,
     advice_expiration_min=30,
     default_cooldown_min=15,
+    # Risk philosophy: allows skew, expects impulse
+    funding_extreme=0.002,  # 0.20% - less sensitive
 )
 
 MEME_MODE = ModeConfig(
@@ -167,6 +175,8 @@ MEME_MODE = ModeConfig(
     invalidation_threat_pct=3.0,  # Wider due to volatility
     advice_expiration_min=20,
     default_cooldown_min=20,
+    # Risk philosophy: memes often have 0.2-0.5% funding, that's normal
+    funding_extreme=0.003,  # 0.30% - very tolerant
 )
 
 
