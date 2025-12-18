@@ -38,6 +38,7 @@ from src.services.trading_modes import (
     build_mode_profile_block,
     get_mode_notes_schema,
 )
+from src.services.market_data_enricher import market_data_enricher
 
 # Learning system integration
 from src.learning import confidence_calibrator, sltp_optimizer, ev_calculator
@@ -53,12 +54,12 @@ from src.database.engine import get_session_maker
 
 
 # ==============================================================================
-# FUTURES MODEL CONFIGURATION (editable)
+# FUTURES MODEL CONFIGURATION
 # ==============================================================================
-# GPT-5 and variants support structured outputs (August 2025+)
-# gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-pro - all support structured outputs
-# gpt-4.1, gpt-4o, gpt-4o-mini - also support structured outputs
-FUTURES_MODEL = "gpt-5-mini"  # Balance of cost and quality
+# Heavy model for scenario generation (deep analysis, best reasoning)
+# Configured via config.py: MODEL_SCENARIO_GENERATOR (default: gpt-5.2)
+from config.config import MODEL_SCENARIO_GENERATOR
+FUTURES_MODEL = MODEL_SCENARIO_GENERATOR  # gpt-5.2 for best reasoning quality
 
 # Bias factor caps (max contribution per factor)
 BIAS_CAPS = {
@@ -250,6 +251,69 @@ class FuturesAnalysisService:
             }
         return None
 
+    # =========================================================================
+    # HISTORY METHODS FOR ENRICHMENT
+    # =========================================================================
+
+    async def _get_funding_history(
+        self,
+        symbol: str,
+        limit: int = 12
+    ) -> list | None:
+        """Get funding rate history: Binance (has history), Bybit fallback."""
+        # Binance has better history API
+        try:
+            data = await self.binance.get_funding_rate(symbol, limit=limit)
+            if data is not None and not data.empty:
+                return [
+                    {
+                        "funding_rate": float(row.get("fundingRate", 0)),
+                        "timestamp": int(row.get("fundingTime", 0))
+                    }
+                    for _, row in data.iterrows()
+                ]
+        except Exception as e:
+            logger.warning(f"Binance funding history error: {e}")
+
+        # No good fallback for history, return None
+        return None
+
+    async def _get_oi_history(
+        self,
+        symbol: str,
+        interval: str = "1h",
+        limit: int = 24
+    ) -> list | None:
+        """Get OI history: Bybit first, Binance fallback."""
+        # Try Bybit first
+        data = await self.bybit.get_open_interest_history(symbol, interval, limit)
+        if data:
+            return data
+
+        # Fallback to Binance
+        binance_period_map = {"1h": "1h", "4h": "4h", "1d": "1d"}
+        period = binance_period_map.get(interval, "1h")
+        data = await self.binance.get_open_interest_history(symbol, period, limit)
+        return data
+
+    async def _get_ls_ratio_history(
+        self,
+        symbol: str,
+        period: str = "1h",
+        limit: int = 12
+    ) -> list | None:
+        """Get LS ratio history: Bybit first, Binance fallback."""
+        # Try Bybit first
+        data = await self.bybit.get_long_short_ratio_history(symbol, period, limit)
+        if data:
+            return data
+
+        # Fallback to Binance
+        binance_period_map = {"1h": "1h", "4h": "4h", "1d": "1d"}
+        period = binance_period_map.get(period, "1h")
+        data = await self.binance.get_long_short_ratio_history(symbol, period, limit)
+        return data
+
     async def analyze_symbol(
         self,
         symbol: str,
@@ -341,6 +405,14 @@ class FuturesAnalysisService:
             # 1.8 Получить Fear & Greed Index
             fear_greed = await self.fear_greed.get_current()
 
+            # 1.9 Получить history данные для enrichment (параллельно)
+            import asyncio
+            funding_history, ls_history, oi_history = await asyncio.gather(
+                self._get_funding_history(symbol, limit=12),
+                self._get_ls_ratio_history(symbol, period="1h", limit=12),
+                self._get_oi_history(symbol, interval="1h", limit=24),
+            )
+
             # ====================================================================
             # 2. РАСЧЁТ ИНДИКАТОРОВ
             # ====================================================================
@@ -407,6 +479,36 @@ class FuturesAnalysisService:
                 )
 
             # ====================================================================
+            # 4.6 🔥 NEW: MARKET DATA ENRICHMENT
+            # ====================================================================
+
+            # Получаем support_near и resistance_near из key_levels
+            support_near = key_levels.get("support", [])[:5]
+            resistance_near = key_levels.get("resistance", [])[:5]
+
+            # Mode config для enricher
+            mode_config = get_mode_config(mode)
+
+            # Вызываем enricher
+            enriched_data = market_data_enricher.enrich(
+                klines=klines_df,
+                funding_history=funding_history,
+                ls_ratio_history=ls_history,
+                oi_history=oi_history,
+                support_near=support_near,
+                resistance_near=resistance_near,
+                current_price=current_price,
+                current_atr=indicators.get("atr", 0),
+                timeframe=timeframe,
+                mode_config=mode_config,
+            )
+
+            logger.debug(
+                f"📈 Enriched data: positioning={enriched_data.get('positioning')}, "
+                f"stop_hunt={enriched_data.get('microstructure', {}).get('stop_hunt', {}).get('detected')}"
+            )
+
+            # ====================================================================
             # 5. SCENARIO GENERATION
             # ====================================================================
 
@@ -424,7 +526,8 @@ class FuturesAnalysisService:
                 max_scenarios=max_scenarios,
                 price_structure=price_structure,
                 liquidation_clusters=liquidation_clusters,
-                mode=mode  # 🆕 Trading mode
+                mode=mode,
+                enriched_data=enriched_data  # 🆕 Enriched market data
             )
 
             # ====================================================================
@@ -1208,7 +1311,8 @@ class FuturesAnalysisService:
         max_scenarios: int = 3,
         price_structure: Optional[Dict] = None,
         liquidation_clusters: Optional[Dict] = None,
-        mode: str = "standard"  # 🆕 Trading mode
+        mode: str = "standard",
+        enriched_data: Optional[Dict] = None  # 🆕 Enriched market data
     ) -> List[Dict[str, Any]]:
         """
         🤖 AI-DRIVEN: LLM генерирует торговые сценарии с анализом полного контекста
@@ -1239,7 +1343,8 @@ class FuturesAnalysisService:
                 max_scenarios=max_scenarios,
                 price_structure=price_structure,
                 liquidation_clusters=liquidation_clusters,
-                mode=mode  # 🆕 Trading mode
+                mode=mode,
+                enriched_data=enriched_data  # 🆕 Enriched market data
             )
 
             logger.info(f"✅ AI generated {len(scenarios)} scenarios")
@@ -1296,6 +1401,14 @@ class FuturesAnalysisService:
                 atr=atr
             )
 
+            # 🆕 LLM VALIDATION: Проверяем логическую coherence сценариев
+            final_scenarios = await self._llm_validate_scenarios(
+                scenarios=final_scenarios,
+                market_context=market_context,
+                candidates=candidates,
+                current_price=current_price,
+            )
+
             # 🆕 LEARNING: Калибровка confidence и SL/TP suggestions
             final_scenarios = await self._apply_learning_calibration(
                 scenarios=final_scenarios,
@@ -1339,7 +1452,8 @@ class FuturesAnalysisService:
         max_scenarios: int = 3,
         price_structure: Optional[Dict] = None,
         liquidation_clusters: Optional[Dict] = None,
-        mode: str = "standard"  # 🆕 Trading mode
+        mode: str = "standard",
+        enriched_data: Optional[Dict] = None  # 🆕 Enriched market data
     ) -> List[Dict]:
         """
         🤖 **MAIN AI ENGINE**: LLM анализирует рынок и генерирует торговые сценарии
@@ -1494,7 +1608,14 @@ class FuturesAnalysisService:
                 "signal": patterns.get("pattern_signal") if patterns else None,
                 "last_pattern": patterns.get("last_pattern") if patterns else None,
                 "strength": round(patterns.get("strength", 0), 2) if patterns else 0
-            }
+            },
+
+            # 🔥 NEW: Enriched Market Data (5 blocks)
+            "positioning": enriched_data.get("positioning") if enriched_data else None,
+            "microstructure": enriched_data.get("microstructure") if enriched_data else None,
+            "volatility_context": enriched_data.get("volatility_context") if enriched_data else None,
+            "levels_meta": enriched_data.get("levels_meta") if enriched_data else None,
+            "oi": enriched_data.get("oi") if enriched_data else None
         }
 
         # 🆕 Get mode configuration and build MODE PROFILE block
@@ -1512,6 +1633,12 @@ class FuturesAnalysisService:
 - Targets: ONLY from resistance_near (longs) or support_near (shorts)
 - _macro levels are FOR CONTEXT/NARRATIVE ONLY - DO NOT use them for entry!
 - DO NOT make up arbitrary prices! Select from provided levels.
+
+📈 **ENRICHED DATA RULES** (use positioning, microstructure, volatility_context, levels_meta, oi):
+1. **Crowding + Stop-hunt combo**: If positioning.crowding_score > 0.7 AND microstructure.stop_hunt.detected=true → Prefer counter-trend. Breakout requires extra confirmation.
+2. **Extreme volatility**: If volatility_context.atr_vs_30d = "extreme" → Tighten no_trade conditions. DO NOT propose tight SL (<0.5x ATR).
+3. **OI divergence**: If oi.trend = "falling" during price impulse → Treat as move on closing/flush, be cautious with continuation.
+4. **Level freshness**: Prefer levels with age_hours < 24 and touches >= 2 from levels_meta. Stale levels (age > 72h, touches = 1) are weaker.
 
 📊 **MARKET DATA** (JSON):
 ```json
@@ -1972,6 +2099,111 @@ Return strict JSON format."""
         else:
             # Если сценариев меньше max_scenarios, возвращаем все
             return adapted_scenarios, no_trade_raw
+
+    # =========================================================================
+    # 🆕 LLM SCENARIO VALIDATION
+    # =========================================================================
+
+    async def _llm_validate_scenarios(
+        self,
+        scenarios: List[Dict],
+        market_context: Dict,
+        candidates: Dict,
+        current_price: float,
+    ) -> List[Dict]:
+        """
+        LLM-based validation of scenario logical coherence.
+
+        Uses fast model (gpt-5-mini) to validate:
+        - SL/entry logic (SL below entry for long, above for short)
+        - Entry alignment with real levels
+        - Target placement logic
+        - Overall scenario coherence
+
+        Modes:
+        - ADJUST (default): Add flags, adjust confidence
+        - STRICT: Reject scenario on hard violations
+
+        Args:
+            scenarios: Scenarios to validate
+            market_context: Market context dict
+            candidates: Available price levels
+            current_price: Current price
+
+        Returns:
+            Validated scenarios (some may be rejected on STRICT violations)
+        """
+        from src.services.scenario_validator import scenario_validator
+
+        if not scenarios:
+            return scenarios
+
+        logger.info(f"🔍 LLM validating {len(scenarios)} scenarios...")
+
+        validated = []
+        rejected_count = 0
+
+        for scenario in scenarios:
+            try:
+                # Build candidate levels for validator
+                candidate_levels = {
+                    "support_near": candidates.get("supports", []),
+                    "resistance_near": candidates.get("resistances", []),
+                }
+
+                # Add market context info
+                validation_context = {
+                    "current_price": current_price,
+                    "trend": market_context.get("trend", "unknown"),
+                    "atr_percent": market_context.get("volatility_atr_pct", 0),
+                }
+
+                # Validate with LLM
+                result = await scenario_validator.validate(
+                    scenario=scenario,
+                    market_context=validation_context,
+                    candidate_levels=candidate_levels,
+                )
+
+                # STRICT: Reject on hard violations
+                if result.hard_violation:
+                    logger.warning(
+                        f"❌ Scenario #{scenario.get('id')} REJECTED: "
+                        f"{result.hard_violation}"
+                    )
+                    rejected_count += 1
+                    continue
+
+                # ADJUST: Add flags and adjust confidence
+                scenario["validator_flags"] = result.issues
+                scenario["validator_suggestions"] = result.suggestions
+
+                # Apply confidence adjustment (clamped to 0.1-0.95)
+                old_conf = scenario.get("confidence", 0.5)
+                new_conf = max(0.1, min(0.95, old_conf + result.confidence_adjustment))
+                scenario["confidence"] = new_conf
+
+                if result.confidence_adjustment != 0:
+                    logger.info(
+                        f"📊 Scenario #{scenario.get('id')} confidence: "
+                        f"{old_conf:.2f} → {new_conf:.2f} "
+                        f"(adj: {result.confidence_adjustment:+.2f})"
+                    )
+
+                validated.append(scenario)
+
+            except Exception as e:
+                logger.error(f"LLM validation error for scenario #{scenario.get('id')}: {e}")
+                # On error, keep scenario but add warning
+                scenario["validator_flags"] = [f"Validation error: {str(e)}"]
+                validated.append(scenario)
+
+        if rejected_count > 0:
+            logger.warning(f"🚫 LLM validation rejected {rejected_count} scenarios")
+
+        logger.info(f"✅ LLM validation complete: {len(validated)} scenarios passed")
+
+        return validated
 
     # =========================================================================
     # 🆕 LEARNING SYSTEM INTEGRATION

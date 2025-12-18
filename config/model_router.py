@@ -190,11 +190,12 @@ def get_reasoning_model(tier: SubscriptionTier) -> Optional[str]:
     return config.reasoning_model
 
 
-# Cost estimation (Standard tier, updated Nov 2025)
+# Cost estimation (Standard tier, updated Dec 2025)
 MODEL_COSTS = {
     # GPT-5 models
+    "gpt-5.2": {"input": 2.00, "input_cached": 0.20, "output": 12.00},  # Heavy reasoning
     "gpt-5.1": {"input": 1.25, "input_cached": 0.125, "output": 10.00},
-    "gpt-5-mini": {"input": 0.25, "input_cached": 0.025, "output": 2.00},
+    "gpt-5-mini": {"input": 0.25, "input_cached": 0.025, "output": 2.00},  # Fast
 
     # GPT-4o models (legacy)
     "gpt-4o": {"input": 2.50, "input_cached": 1.25, "output": 10.00},

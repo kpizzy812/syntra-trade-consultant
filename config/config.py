@@ -59,7 +59,18 @@ DATABASE_URL: str = os.getenv(
 # AI API Keys (both providers initialized, selection is dynamic based on user tier)
 # OpenAI API (GPT-4o, GPT-4o-mini, Vision)
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+
+# =============================================================================
+# MULTI-MODEL CONFIGURATION
+# =============================================================================
+# Heavy model for scenario generation (deep analysis, best reasoning)
+MODEL_SCENARIO_GENERATOR: str = os.getenv("MODEL_SCENARIO_GENERATOR", "gpt-5.2")
+
+# Fast model for validation, supervisor, quick decisions
+MODEL_FAST: str = os.getenv("MODEL_FAST", "gpt-5-mini")
+
+# Legacy (for backwards compatibility with chat/general use)
+OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", MODEL_FAST)
 
 # DeepSeek API
 DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")

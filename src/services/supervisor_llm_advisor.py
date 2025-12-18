@@ -23,10 +23,13 @@ from src.database.models import (
 )
 from src.services.binance_service import binance_service
 from src.services.openai_service import OpenAIService
-from config.config import OPENAI_MODEL
+from config.config import MODEL_FAST
 
 # Create instance for LLM calls
 _openai_service = OpenAIService()
+
+# Supervisor uses fast model for quick decisions
+SUPERVISOR_MODEL = MODEL_FAST  # gpt-5-mini
 
 
 # ============================================================================
@@ -162,8 +165,8 @@ class SupervisorLLMAdvisor:
     def __init__(self):
         self.binance = binance_service
         self.openai = _openai_service
-        self.model = OPENAI_MODEL
-        logger.info("SupervisorLLMAdvisor initialized")
+        self.model = SUPERVISOR_MODEL  # gpt-5-mini for fast decisions
+        logger.info(f"SupervisorLLMAdvisor initialized with model={self.model}")
 
     # ========================================================================
     # MARKET CONTEXT BUILDING
