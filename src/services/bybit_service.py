@@ -139,7 +139,7 @@ class BybitService:
         Returns:
             DataFrame с колонками: open, high, low, close, volume, timestamp
         """
-        cache_key = CacheKeyBuilder.klines(interval, limit, symbol, prefix="syntra:bybit")
+        cache_key = CacheKeyBuilder.build("bybit", "klines", {"interval": interval, "limit": limit, "symbol": symbol})
 
         # Проверяем кэш
         try:
