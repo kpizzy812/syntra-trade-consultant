@@ -740,7 +740,7 @@ class OpenAIService:
         """
         try:
             # Только OpenAI поддерживает structured outputs (не DeepSeek)
-            # Build params - temperature optional (reasoning models don't support it)
+            # Build params - temperature optional (reasoning models and gpt-5-mini don't support it)
             params = {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
@@ -749,7 +749,9 @@ class OpenAIService:
                     "json_schema": json_schema
                 }
             }
-            if temperature is not None:
+            # gpt-5-mini and reasoning models (o3, o4) don't support custom temperature
+            models_without_temp = ("gpt-5-mini", "o3", "o4", "o3-mini", "o4-mini")
+            if temperature is not None and not model.startswith(models_without_temp):
                 params["temperature"] = temperature
 
             response = await self.openai_client.chat.completions.create(**params)

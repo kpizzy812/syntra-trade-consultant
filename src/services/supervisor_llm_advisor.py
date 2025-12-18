@@ -251,15 +251,15 @@ class SupervisorLLMAdvisor:
         """Get OHLCV summary for timeframe"""
         try:
             klines = await self.binance.get_klines(symbol, interval, limit)
-            if not klines:
+            if klines is None or klines.empty:
                 return None
 
-            # Calculate aggregates
-            opens = [float(k[1]) for k in klines]
-            highs = [float(k[2]) for k in klines]
-            lows = [float(k[3]) for k in klines]
-            closes = [float(k[4]) for k in klines]
-            volumes = [float(k[5]) for k in klines]
+            # Calculate aggregates (klines is a DataFrame)
+            opens = klines['open'].astype(float).tolist()
+            highs = klines['high'].astype(float).tolist()
+            lows = klines['low'].astype(float).tolist()
+            closes = klines['close'].astype(float).tolist()
+            volumes = klines['volume'].astype(float).tolist()
 
             first_open = opens[0]
             last_close = closes[-1]
@@ -283,19 +283,19 @@ class SupervisorLLMAdvisor:
         """Calculate ATR as percentage of price"""
         try:
             klines = await self.binance.get_klines(symbol, "1h", 14)
-            if not klines or len(klines) < 14:
+            if klines is None or klines.empty or len(klines) < 14:
                 return None
 
             trs = []
             for i in range(1, len(klines)):
-                high = float(klines[i][2])
-                low = float(klines[i][3])
-                prev_close = float(klines[i-1][4])
+                high = float(klines.iloc[i]['high'])
+                low = float(klines.iloc[i]['low'])
+                prev_close = float(klines.iloc[i-1]['close'])
                 tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
                 trs.append(tr)
 
             atr = sum(trs) / len(trs)
-            current_price = float(klines[-1][4])
+            current_price = float(klines.iloc[-1]['close'])
             return round((atr / current_price) * 100, 3)
         except Exception as e:
             logger.warning(f"Failed to calculate ATR: {e}")
@@ -305,10 +305,10 @@ class SupervisorLLMAdvisor:
         """Calculate current volume vs average"""
         try:
             klines = await self.binance.get_klines(symbol, "1h", 24)
-            if not klines or len(klines) < 24:
+            if klines is None or klines.empty or len(klines) < 24:
                 return None
 
-            volumes = [float(k[5]) for k in klines]
+            volumes = klines['volume'].astype(float).tolist()
             avg_volume = sum(volumes[:-1]) / (len(volumes) - 1)
             current_volume = volumes[-1]
 
