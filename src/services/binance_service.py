@@ -11,7 +11,7 @@ import hmac
 import hashlib
 import time
 import logging  # Needed for tenacity before_sleep_log level constants
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from urllib.parse import urlencode
 import aiohttp
 import pandas as pd
@@ -932,6 +932,98 @@ class BinanceService:
 
         except Exception as e:
             logger.exception(f"Error fetching instrument info for {symbol}: {e}")
+            return None
+
+    async def get_open_interest_history(
+        self,
+        symbol: str,
+        period: str = "1h",
+        limit: int = 24
+    ) -> Optional[List[Dict]]:
+        """
+        Получить историю открытого интереса (fallback для Bybit).
+
+        Args:
+            symbol: Торговая пара (e.g., "BTCUSDT")
+            period: Период (5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d)
+            limit: Количество точек (max 500)
+
+        Returns:
+            List of {openInterest, timestamp} dicts
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.futures_url}/futures/data/openInterestHist"
+                params = {
+                    "symbol": symbol,
+                    "period": period,
+                    "limit": min(limit, 500)
+                }
+
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data:
+                            return [
+                                {
+                                    "openInterest": float(item.get("sumOpenInterest", 0)),
+                                    "timestamp": int(item.get("timestamp", 0))
+                                }
+                                for item in data
+                            ]
+                    else:
+                        logger.warning(f"Binance OI history error: {response.status}")
+                    return None
+
+        except Exception as e:
+            logger.error(f"Error fetching Binance OI history for {symbol}: {e}")
+            return None
+
+    async def get_long_short_ratio_history(
+        self,
+        symbol: str,
+        period: str = "1h",
+        limit: int = 12
+    ) -> Optional[List[Dict]]:
+        """
+        Получить историю соотношения long/short позиций (fallback для Bybit).
+
+        Args:
+            symbol: Торговая пара
+            period: Период (5m, 15m, 30m, 1h, 2h, 4h, 6h, 12h, 1d)
+            limit: Количество точек (max 500)
+
+        Returns:
+            List of {longShortRatio, longAccount, shortAccount, timestamp} dicts
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.futures_url}/futures/data/topLongShortAccountRatio"
+                params = {
+                    "symbol": symbol,
+                    "period": period,
+                    "limit": min(limit, 500)
+                }
+
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data:
+                            return [
+                                {
+                                    "long_short_ratio": float(item.get("longShortRatio", 1.0)),
+                                    "longAccount": float(item.get("longAccount", 0.5)),
+                                    "shortAccount": float(item.get("shortAccount", 0.5)),
+                                    "timestamp": int(item.get("timestamp", 0))
+                                }
+                                for item in data
+                            ]
+                    else:
+                        logger.warning(f"Binance LS ratio history error: {response.status}")
+                    return None
+
+        except Exception as e:
+            logger.error(f"Error fetching Binance LS ratio history for {symbol}: {e}")
             return None
 
 
