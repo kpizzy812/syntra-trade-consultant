@@ -20,20 +20,27 @@ from src.database.models import ArchetypeStats
 # CONSTANTS
 # =============================================================================
 
-# Default outcome probabilities (terminal outcomes)
+# Default outcome probabilities (terminal outcomes) - V2 with path probs
+# ⚠️ ВАЖНО: Это OPTIMISTIC PRIOR (tp2+ = ~55%)
+# Real probs ВСЕГДА переопределяются learning при sample_size >= 30
+# Без learning paper EV будет завышен!
 DEFAULT_PROBS_LONG = {
-    "sl": 0.40,
-    "tp1": 0.30,
-    "tp2": 0.18,
-    "tp3": 0.07,
+    "sl_early": 0.28,        # SL до TP1 (полный лосс)
+    "be_after_tp1": 0.07,    # BE hit после TP1
+    "stop_in_profit": 0.05,  # Trail profit после TP1
+    "tp1_final": 0.25,       # Финал на TP1
+    "tp2_final": 0.20,       # Финал на TP2
+    "tp3_final": 0.10,       # Финал на TP3
     "other": 0.05,
 }
 DEFAULT_PROBS_SHORT = {
-    "sl": 0.42,
-    "tp1": 0.28,
-    "tp2": 0.17,
-    "tp3": 0.07,
-    "other": 0.06,
+    "sl_early": 0.30,
+    "be_after_tp1": 0.07,
+    "stop_in_profit": 0.05,
+    "tp1_final": 0.23,
+    "tp2_final": 0.20,
+    "tp3_final": 0.10,
+    "other": 0.05,
 }
 
 # Dirichlet prior strength (как будто N виртуальных сделок)
@@ -42,8 +49,12 @@ PRIOR_STRENGTH = 6
 # Minimum trades for reliable probabilities
 MIN_TRADES_FOR_PROBS = 30
 
-# Default fees in R (conservative)
-DEFAULT_FEES_R = 0.15
+# Default fees in R
+DEFAULT_FEES_R = 0.05  # Снижено с 0.15 (более реалистично для Bybit)
+
+# Stop in profit heuristic (V1 placeholder)
+# TODO: replace with empirical avg_r_stop_in_profit from Real EV
+STOP_IN_PROFIT_HEURISTIC_R = 0.5
 
 # Sanity check thresholds
 MIN_PROB_FLOOR = 0.01
@@ -56,11 +67,13 @@ MAX_PROB_CAP = 0.95
 
 @dataclass
 class OutcomeProbs:
-    """Вероятности terminal outcomes."""
-    sl: float
-    tp1: float
-    tp2: Optional[float]
-    tp3: Optional[float]
+    """Вероятности terminal outcomes (V2 с path probs)."""
+    sl_early: float         # SL до любого TP (полный лосс -1R)
+    be_after_tp1: float     # BE hit после TP1 (payout = RR1*w1)
+    stop_in_profit: float   # Trail/lock profit после TP1 (payout > RR1*w1)
+    tp1_final: float        # Финал на TP1
+    tp2_final: float        # Финал на TP2
+    tp3_final: Optional[float]
     other: float
     source: str  # "learning" | "llm" | "default"
     sample_size: int
@@ -71,11 +84,11 @@ class OutcomeProbs:
 @dataclass
 class EVMetrics:
     """Результат EV расчёта."""
-    ev_r: float           # Net EV (с учётом fees)
-    ev_r_gross: float     # Gross EV (без fees)
-    fees_r: float         # Комиссии в R
-    ev_grade: str         # A/B/C/D
-    scenario_score: float # Normalized score
+    ev_r: float             # Net EV (fees уже в payouts)
+    ev_r_after_tp1: float   # Conditional EV после TP1 (NEW!)
+    fees_r: float           # Комиссии в R
+    ev_grade: str           # A/B/C/D
+    scenario_score: float   # Normalized score
     n_targets: int
     flags: List[str]
 
@@ -86,17 +99,16 @@ class EVMetrics:
 
 class EVCalculator:
     """
-    Калькулятор Expected Value для сценариев.
+    Калькулятор Expected Value для сценариев (V2 с path probabilities).
+
+    Учитывает Break-Even механику:
+    - sl_early: SL до TP1 = -1R
+    - be_after_tp1: BE hit после TP1 = RR1*w1 (остальное 0)
+    - stop_in_profit: Trail/lock после TP1 = RR1*w1 + bonus
+    - tp*_final: Кумулятивные payouts
 
     Формула:
-    EV_R = Σ(P_TPk * payout_TPk) + P_SL * payout_SL + P_OTHER * payout_OTHER
-
-    Где payouts кумулятивные:
-    - payout_tp1 = RR1 * w1 - fees_r
-    - payout_tp2 = RR1 * w1 + RR2 * w2 - fees_r
-    - payout_tp3 = RR1 * w1 + RR2 * w2 + RR3 * w3 - fees_r
-    - payout_sl = -1.0 - fees_r
-    - payout_other = avg_pnl_r_other - fees_r
+    EV_R = Σ(P_outcome * payout_outcome) для всех outcomes
     """
 
     async def calculate_ev(
@@ -157,28 +169,30 @@ class EVCalculator:
             return self._default_result(side, confidence, flags)
 
         # 3. Рассчитываем payouts
-        payouts = self._calculate_payouts(targets, weights, fees_r, probs)
+        payouts = self._calculate_payouts(targets, weights, fees_r)
 
-        # 4. Рассчитываем EV
-        ev_r_gross = self._calculate_ev_gross(probs, payouts, fees_r)
-        ev_r = ev_r_gross - fees_r  # Net EV
+        # 4. Рассчитываем EV (fees уже в payouts!)
+        ev_r = self._calculate_ev(probs, payouts)
 
-        # 5. Sanity checks
+        # 5. Рассчитываем EV после TP1 (conditional)
+        ev_r_after_tp1 = self._calculate_ev_after_tp1(probs, payouts, weights[0])
+
+        # 6. Sanity checks
         if ev_r > 2.5:
             flags.append("fantasy_ev")
         if fees_r > 0.30:
             flags.append("high_fees_impact")
 
-        # 6. EV Grade
+        # 7. EV Grade
         ev_grade = self._get_ev_grade(ev_r)
 
-        # 7. Scenario Score (clamp EV для нормализации)
+        # 8. Scenario Score (clamp EV для нормализации)
         ev_clamped = max(-1.0, min(1.0, ev_r))
         scenario_score = 0.6 * ev_clamped + 0.4 * confidence
 
         metrics = EVMetrics(
             ev_r=round(ev_r, 4),
-            ev_r_gross=round(ev_r_gross, 4),
+            ev_r_after_tp1=round(ev_r_after_tp1, 4),
             fees_r=fees_r,
             ev_grade=ev_grade,
             scenario_score=round(scenario_score, 4),
@@ -198,46 +212,26 @@ class EVCalculator:
         llm_probs: Optional[Dict[str, float]],
         n_targets: int,
     ) -> OutcomeProbs:
-        """Получить outcome probs с fallback."""
+        """Получить outcome probs с fallback (V2 с path probs)."""
         side_lower = side.lower()
         flags = []
 
-        # 1. Пробуем Learning Module
+        # 1. Пробуем Learning Module (V2 с новыми полями)
         if archetype:
             stats = await self._get_archetype_stats(
                 session, archetype, side_lower, timeframe, volatility_regime
             )
             if stats and stats.total_trades >= MIN_TRADES_FOR_PROBS:
-                probs = self._dirichlet_smooth(stats, side_lower)
+                probs = self._dirichlet_smooth_v2(stats, side_lower)
                 probs = self._adapt_probs_to_targets(probs, n_targets, flags)
-                return OutcomeProbs(
-                    sl=probs["sl"],
-                    tp1=probs["tp1"],
-                    tp2=probs.get("tp2"),
-                    tp3=probs.get("tp3"),
-                    other=probs["other"],
-                    source="learning",
-                    sample_size=stats.total_trades,
-                    n_targets=n_targets,
-                    flags=flags,
-                )
+                return self._create_outcome_probs(probs, "learning", stats.total_trades, n_targets, flags)
 
-        # 2. Пробуем LLM probs
+        # 2. Пробуем LLM probs (конвертируем в V2 формат)
         if llm_probs:
-            validated = self._validate_llm_probs(llm_probs)
+            validated = self._validate_and_convert_llm_probs(llm_probs)
             if validated:
                 validated = self._adapt_probs_to_targets(validated, n_targets, flags)
-                return OutcomeProbs(
-                    sl=validated["sl"],
-                    tp1=validated["tp1"],
-                    tp2=validated.get("tp2"),
-                    tp3=validated.get("tp3"),
-                    other=validated["other"],
-                    source="llm",
-                    sample_size=0,
-                    n_targets=n_targets,
-                    flags=flags,
-                )
+                return self._create_outcome_probs(validated, "llm", 0, n_targets, flags)
             else:
                 flags.append("llm_probs_rejected")
 
@@ -246,14 +240,27 @@ class EVCalculator:
         adapted = self._adapt_probs_to_targets(defaults.copy(), n_targets, flags)
         flags.append("using_defaults")
 
+        return self._create_outcome_probs(adapted, "default", 0, n_targets, flags)
+
+    def _create_outcome_probs(
+        self,
+        probs: Dict[str, float],
+        source: str,
+        sample_size: int,
+        n_targets: int,
+        flags: List[str],
+    ) -> OutcomeProbs:
+        """Создать OutcomeProbs из dict."""
         return OutcomeProbs(
-            sl=adapted["sl"],
-            tp1=adapted["tp1"],
-            tp2=adapted.get("tp2"),
-            tp3=adapted.get("tp3"),
-            other=adapted["other"],
-            source="default",
-            sample_size=0,
+            sl_early=probs.get("sl_early", 0.0),
+            be_after_tp1=probs.get("be_after_tp1", 0.0),
+            stop_in_profit=probs.get("stop_in_profit", 0.0),
+            tp1_final=probs.get("tp1_final", 0.0),
+            tp2_final=probs.get("tp2_final", 0.0),
+            tp3_final=probs.get("tp3_final"),
+            other=probs.get("other", 0.05),
+            source=source,
+            sample_size=sample_size,
             n_targets=n_targets,
             flags=flags,
         )
@@ -298,9 +305,9 @@ class EVCalculator:
 
         return None
 
-    def _dirichlet_smooth(self, stats: ArchetypeStats, side: str) -> Dict[str, float]:
+    def _dirichlet_smooth_v2(self, stats: ArchetypeStats, side: str) -> Dict[str, float]:
         """
-        Применить Dirichlet smoothing к counts.
+        Применить Dirichlet smoothing к counts (V2 с path probs).
 
         P_i = (count_i + α_i) / (N + Σα)
         где α_i = default_i * PRIOR_STRENGTH
@@ -308,38 +315,68 @@ class EVCalculator:
         defaults = DEFAULT_PROBS_LONG if side == "long" else DEFAULT_PROBS_SHORT
         alpha = {k: v * PRIOR_STRENGTH for k, v in defaults.items()}
 
-        counts = {
-            "sl": stats.exit_sl_count,
-            "tp1": stats.exit_tp1_count,
-            "tp2": stats.exit_tp2_count,
-            "tp3": stats.exit_tp3_count,
-            "other": stats.exit_other_count,
-        }
+        # V2 counts - если новые поля есть, используем их
+        # Иначе fallback на legacy с флагом
+        has_v2_counts = hasattr(stats, "exit_sl_early_count") and stats.exit_sl_early_count is not None
+
+        if has_v2_counts:
+            counts = {
+                "sl_early": getattr(stats, "exit_sl_early_count", 0) or 0,
+                "be_after_tp1": getattr(stats, "exit_be_after_tp1_count", 0) or 0,
+                "stop_in_profit": getattr(stats, "exit_stop_in_profit_count", 0) or 0,
+                "tp1_final": getattr(stats, "exit_tp1_count", 0) or 0,
+                "tp2_final": getattr(stats, "exit_tp2_count", 0) or 0,
+                "tp3_final": getattr(stats, "exit_tp3_count", 0) or 0,
+                "other": getattr(stats, "exit_other_count", 0) or 0,
+            }
+        else:
+            # Legacy fallback - НЕ выдумываем 75/25!
+            # Просто используем defaults, learning пропускаем
+            logger.debug("Legacy stats without V2 counts, using defaults")
+            return defaults.copy()
 
         N = sum(counts.values())
         sum_alpha = PRIOR_STRENGTH
 
         probs = {}
-        for key in ["sl", "tp1", "tp2", "tp3", "other"]:
-            probs[key] = (counts[key] + alpha[key]) / (N + sum_alpha)
+        for key in defaults.keys():
+            count = counts.get(key, 0)
+            probs[key] = (count + alpha[key]) / (N + sum_alpha)
 
         return probs
 
-    def _validate_llm_probs(self, probs: Dict[str, float]) -> Optional[Dict[str, float]]:
-        """Валидация LLM probs."""
-        required = ["sl", "tp1", "other"]
-        for key in required:
-            if key not in probs:
-                return None
+    def _validate_and_convert_llm_probs(self, probs: Dict[str, float]) -> Optional[Dict[str, float]]:
+        """Валидация LLM probs и конвертация в V2 формат."""
+        # Проверяем что есть базовые ключи (V1 или V2)
+        has_v1 = "sl" in probs and "tp1" in probs
+        has_v2 = "sl_early" in probs and "tp1_final" in probs
+
+        if not has_v1 and not has_v2:
+            return None
+
+        # Конвертируем V1 → V2 если нужно
+        if has_v1 and not has_v2:
+            # Конвертация: sl → sl_early + be_after_tp1
+            sl_total = probs.get("sl", 0.4)
+            probs = {
+                "sl_early": sl_total * 0.75,       # 75% SL до TP1
+                "be_after_tp1": sl_total * 0.20,   # 20% BE после TP1
+                "stop_in_profit": sl_total * 0.05, # 5% trail profit
+                "tp1_final": probs.get("tp1", 0.25),
+                "tp2_final": probs.get("tp2", 0.15),
+                "tp3_final": probs.get("tp3", 0.10),
+                "other": probs.get("other", 0.05),
+            }
 
         # Проверяем сумму
-        total = sum(probs.get(k, 0) for k in ["sl", "tp1", "tp2", "tp3", "other"])
-        if abs(total - 1.0) > 0.1:
+        all_keys = ["sl_early", "be_after_tp1", "stop_in_profit", "tp1_final", "tp2_final", "tp3_final", "other"]
+        total = sum(probs.get(k, 0) for k in all_keys)
+        if abs(total - 1.0) > 0.15:
             return None
 
         # Применяем floor/cap
         validated = {}
-        for key in ["sl", "tp1", "tp2", "tp3", "other"]:
+        for key in all_keys:
             val = probs.get(key, 0)
             if val > 0:
                 val = max(MIN_PROB_FLOOR, min(MAX_PROB_CAP, val))
@@ -350,8 +387,9 @@ class EVCalculator:
         if total > 0:
             validated = {k: v / total for k, v in validated.items()}
 
-        # Sanity checks
-        if validated["sl"] < 0.05 or validated["sl"] > 0.90:
+        # Sanity checks - sl_early должен быть в разумных пределах
+        total_sl = validated.get("sl_early", 0) + validated.get("be_after_tp1", 0) + validated.get("stop_in_profit", 0)
+        if total_sl < 0.05 or total_sl > 0.90:
             return None
 
         return validated
@@ -362,7 +400,7 @@ class EVCalculator:
         n_targets: int,
         flags: List[str]
     ) -> Dict[str, float]:
-        """Перераспределить probs под количество targets."""
+        """Перераспределить probs под количество targets (V2)."""
         if n_targets >= 3:
             return probs
 
@@ -370,19 +408,19 @@ class EVCalculator:
 
         if n_targets == 2:
             # TP3 → TP2
-            adapted["tp2"] = probs.get("tp2", 0) + probs.get("tp3", 0)
-            adapted["tp3"] = None
+            adapted["tp2_final"] = probs.get("tp2_final", 0) + probs.get("tp3_final", 0)
+            adapted["tp3_final"] = None
             flags.append("probs_redistributed_2tp")
 
         elif n_targets == 1:
             # TP2 + TP3 → TP1
-            adapted["tp1"] = (
-                probs.get("tp1", 0) +
-                probs.get("tp2", 0) +
-                probs.get("tp3", 0)
+            adapted["tp1_final"] = (
+                probs.get("tp1_final", 0) +
+                probs.get("tp2_final", 0) +
+                probs.get("tp3_final", 0)
             )
-            adapted["tp2"] = None
-            adapted["tp3"] = None
+            adapted["tp2_final"] = None
+            adapted["tp3_final"] = None
             flags.append("probs_redistributed_1tp")
 
         return adapted
@@ -410,43 +448,93 @@ class EVCalculator:
         targets: List[Dict[str, Any]],
         weights: List[float],
         fees_r: float,
-        probs: OutcomeProbs,
     ) -> Dict[str, float]:
-        """Рассчитать payouts для каждого terminal outcome."""
-        n = len(targets)
+        """Рассчитать payouts для каждого terminal outcome (V2)."""
         payouts = {}
+        rr1 = targets[0].get("rr", 1.5)
+        w1 = weights[0]
 
-        # Кумулятивные payouts
-        cumulative = 0.0
-        for i in range(n):
-            rr = targets[i].get("rr", 1.5)
-            w = weights[i]
-            cumulative += rr * w
-            payouts[f"tp{i + 1}"] = cumulative - fees_r
+        # SL до TP1 = полный лосс
+        payouts["sl_early"] = -1.0 - fees_r
 
-        payouts["sl"] = -1.0 - fees_r
-        payouts["other"] = 0.0 - fees_r  # avg_pnl_r_other можно добавить
+        # BE после TP1 = профит от TP1, остальное 0
+        payouts["be_after_tp1"] = (rr1 * w1) - fees_r
+
+        # Stop in profit после TP1 = TP1 + ~0.5R на остаток
+        # TODO: replace with empirical avg_r_stop_in_profit from Real EV
+        payouts["stop_in_profit"] = (rr1 * w1) + STOP_IN_PROFIT_HEURISTIC_R * (1 - w1) - fees_r
+
+        # TP1 final = только TP1
+        payouts["tp1_final"] = (rr1 * w1) - fees_r
+
+        # TP2 final = TP1 + TP2
+        cumulative = rr1 * w1
+        if len(targets) >= 2:
+            cumulative += targets[1].get("rr", 2.0) * weights[1]
+        payouts["tp2_final"] = cumulative - fees_r
+
+        # TP3 final = TP1 + TP2 + TP3
+        if len(targets) >= 3:
+            cumulative += targets[2].get("rr", 3.0) * weights[2]
+        payouts["tp3_final"] = cumulative - fees_r
+
+        payouts["other"] = 0.0 - fees_r
 
         return payouts
 
-    def _calculate_ev_gross(
+    def _calculate_ev(self, probs: OutcomeProbs, payouts: Dict[str, float]) -> float:
+        """Рассчитать EV (fees уже в payouts!)."""
+        return (
+            probs.sl_early * payouts["sl_early"] +
+            probs.be_after_tp1 * payouts["be_after_tp1"] +
+            probs.stop_in_profit * payouts["stop_in_profit"] +
+            probs.tp1_final * payouts["tp1_final"] +
+            probs.tp2_final * payouts["tp2_final"] +
+            (probs.tp3_final or 0.0) * payouts.get("tp3_final", 0.0) +
+            probs.other * payouts["other"]
+        )
+        # НЕТ + fees_r! Fees уже в payouts
+
+    def _calculate_ev_after_tp1(
         self,
         probs: OutcomeProbs,
         payouts: Dict[str, float],
-        fees_r: float,
+        w1: float,
     ) -> float:
-        """Рассчитать gross EV (без вычитания fees)."""
-        ev = probs.sl * payouts["sl"]
-        ev += probs.other * payouts["other"]
+        """
+        Conditional EV оставшейся позиции (1-w1) после TP1.
+        Риск = 0 (BE активен), апсайд = TP2/TP3.
+        """
+        # Вероятности УСЛОВНЫЕ (при условии что TP1 уже сработал)
+        p_reach_tp1 = (
+            probs.be_after_tp1 +
+            probs.stop_in_profit +
+            probs.tp1_final +
+            probs.tp2_final +
+            (probs.tp3_final or 0)
+        )
 
-        if probs.tp1:
-            ev += probs.tp1 * payouts.get("tp1", 0)
-        if probs.tp2:
-            ev += probs.tp2 * payouts.get("tp2", 0)
-        if probs.tp3:
-            ev += probs.tp3 * payouts.get("tp3", 0)
+        if p_reach_tp1 < 0.01:
+            return 0.0
 
-        return ev + fees_r  # Add back fees to get gross
+        # Conditional probs после TP1
+        p_be_given_tp1 = probs.be_after_tp1 / p_reach_tp1
+        p_sip_given_tp1 = probs.stop_in_profit / p_reach_tp1
+        p_tp2_given_tp1 = probs.tp2_final / p_reach_tp1
+        p_tp3_given_tp1 = (probs.tp3_final or 0) / p_reach_tp1
+
+        # Payouts для ОСТАВШЕЙСЯ позиции
+        remaining = 1 - w1
+        if remaining <= 0.01:
+            return 0.0
+
+        ev_after = (
+            p_be_given_tp1 * 0 +  # BE = 0R на остаток
+            p_sip_given_tp1 * STOP_IN_PROFIT_HEURISTIC_R +  # ~0.5R
+            p_tp2_given_tp1 * (payouts["tp2_final"] - payouts["tp1_final"]) / remaining +
+            p_tp3_given_tp1 * (payouts.get("tp3_final", 0) - payouts["tp1_final"]) / remaining
+        )
+        return ev_after
 
     def _get_ev_grade(self, ev_r: float) -> str:
         """Получить буквенную оценку EV."""
@@ -469,10 +557,12 @@ class EVCalculator:
         defaults = DEFAULT_PROBS_LONG if side.lower() == "long" else DEFAULT_PROBS_SHORT
 
         probs = OutcomeProbs(
-            sl=defaults["sl"],
-            tp1=defaults["tp1"],
-            tp2=defaults["tp2"],
-            tp3=defaults["tp3"],
+            sl_early=defaults["sl_early"],
+            be_after_tp1=defaults["be_after_tp1"],
+            stop_in_profit=defaults["stop_in_profit"],
+            tp1_final=defaults["tp1_final"],
+            tp2_final=defaults["tp2_final"],
+            tp3_final=defaults["tp3_final"],
             other=defaults["other"],
             source="default",
             sample_size=0,
@@ -482,7 +572,7 @@ class EVCalculator:
 
         metrics = EVMetrics(
             ev_r=0.0,
-            ev_r_gross=0.0,
+            ev_r_after_tp1=0.0,
             fees_r=DEFAULT_FEES_R,
             ev_grade="D",
             scenario_score=0.4 * confidence,

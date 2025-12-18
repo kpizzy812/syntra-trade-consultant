@@ -201,7 +201,11 @@ class FuturesAnalysisService:
         # Try Bybit first
         rate = await self.bybit.get_funding_rate(symbol)
         if rate is not None:
-            return {"fundingRate": rate, "source": "bybit"}
+            return {
+                "funding_rate": rate,
+                "funding_rate_pct": rate * 100,  # Convert to percentage
+                "source": "bybit"
+            }
 
         # Fallback to Binance
         data = await self.binance.get_latest_funding_rate(symbol)
@@ -2659,10 +2663,9 @@ Return strict JSON format."""
 
             if stop <= 0:
                 issues.append("invalid_stop: stop <= 0")
-                sc["rr_validation"] = "invalid"
-                sc["rr_issues"] = issues
-                validated.append(sc)
-                continue
+                # Fallback: рассчитываем RR с default 1% stop
+                stop = entry_ref * (0.99 if is_long else 1.01)
+                issues.append(f"fallback_stop_1pct={stop:.2f}")
 
             # === 3. Санити: stop vs entry zone ===
             if is_long:
@@ -2699,10 +2702,9 @@ Return strict JSON format."""
 
             if risk_per_unit <= 0:
                 issues.append(f"zero_risk: entry_ref={entry_ref:.2f}, stop={stop:.2f}")
-                sc["rr_validation"] = "invalid"
-                sc["rr_issues"] = issues
-                validated.append(sc)
-                continue
+                # Fallback: используем 1% от entry как risk
+                risk_per_unit = entry_ref * 0.01
+                issues.append(f"fallback_risk_1pct={risk_per_unit:.4f}")
 
             # === 5. Пересчитываем RR для каждого TP ===
             targets = sc.get("targets", [])
@@ -2712,6 +2714,9 @@ Return strict JSON format."""
                 tp_price = tp.get("price", 0)
 
                 if tp_price <= 0:
+                    # Invalid price - ставим RR = 0
+                    sc["targets"][i]["rr"] = 0.0
+                    issues.append(f"TP{i+1}_invalid_price=0")
                     continue
 
                 # Санити: TP в правильном направлении

@@ -246,21 +246,23 @@ class LearningSuggestions(BaseModel):
 
 
 class OutcomeProbsAPI(BaseModel):
-    """Terminal outcome probabilities for EV calculation"""
-    sl: float = Field(..., description="P(stop loss) - не дошли ни до одного TP")
-    tp1: float = Field(..., description="P(exit at TP1)")
-    tp2: Optional[float] = Field(default=None, description="P(exit at TP2) — если 2+ targets")
-    tp3: Optional[float] = Field(default=None, description="P(exit at TP3) — если 3 targets")
-    other: float = Field(..., description="P(manual/timeout/breakeven)")
+    """Terminal outcome probabilities for EV calculation (V2 format)"""
+    sl_early: float = Field(..., description="P(SL до любого TP) - полный лосс -1R")
+    be_after_tp1: float = Field(..., description="P(BE hit после TP1) - payout = RR1*w1")
+    stop_in_profit: float = Field(..., description="P(trail/lock profit после TP1)")
+    tp1_final: float = Field(..., description="P(финал на TP1)")
+    tp2_final: float = Field(..., description="P(финал на TP2)")
+    tp3_final: Optional[float] = Field(default=None, description="P(финал на TP3) - если 3 targets")
+    other: float = Field(..., description="P(manual/timeout)")
     source: str = Field(..., description="learning | llm | default")
-    sample_size: Optional[int] = Field(default=None, description="Количество сделок в выборке")
+    sample_size: int = Field(default=0, description="Количество сделок в выборке")
     n_targets: int = Field(default=3, description="Количество TP уровней (1-3)")
 
 
 class EVMetricsAPI(BaseModel):
     """Expected Value metrics for scenario scoring"""
-    ev_r: float = Field(..., description="Expected Value в R (с учётом fees)")
-    ev_r_gross: float = Field(..., description="EV до вычета fees (для дебага)")
+    ev_r: float = Field(..., description="Expected Value в R (net, с учётом fees)")
+    ev_r_after_tp1: float = Field(..., description="Conditional EV после TP1")
     fees_r: float = Field(..., description="Комиссии в R")
     ev_grade: str = Field(..., description="A (>=0.5), B (>=0.2), C (>=0), D (<0)")
     scenario_score: float = Field(..., description="Нормализованный скор для ранжирования")

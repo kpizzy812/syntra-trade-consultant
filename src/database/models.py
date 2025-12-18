@@ -4215,6 +4215,26 @@ class ArchetypeStats(Base):
         comment="Средний PnL для OTHER исходов"
     )
 
+    # === V2 PATH OUTCOME COUNTS (для EV v2) ===
+    exit_sl_early_count: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        default=None,
+        nullable=True,
+        comment="SL до TP1 (полный лосс -1R)"
+    )
+    exit_be_after_tp1_count: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        default=None,
+        nullable=True,
+        comment="BE hit после TP1"
+    )
+    exit_stop_in_profit_count: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        default=None,
+        nullable=True,
+        comment="Trail/lock profit после TP1"
+    )
+
     # === MAE/MFE ===
     avg_mae_r: Mapped[float] = mapped_column(
         Float,
