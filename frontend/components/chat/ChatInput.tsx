@@ -1,39 +1,53 @@
 /**
  * Chat Input Component - ChatGPT Style
  * Минималистичный инпут с круглыми кнопками
+ * С поддержкой Signals mode для Premium/VIP
  */
 
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslations } from 'next-intl';
 import { vibrate } from '@/shared/telegram/vibration';
 import { useUserStore } from '@/shared/store/userStore';
 import { usePostHog } from '@/components/providers/PostHogProvider';
 import { useKeyboardVisible } from '@/hooks/useKeyboardVisible';
 import Image from 'next/image';
+import SignalsGuideModal, { useSignalsGuide } from '@/components/modals/SignalsGuideModal';
 
 interface ChatInputProps {
   onSendMessage: (message: string, image?: string) => void;
   isLoading?: boolean;
   disabled?: boolean;
+  signalsMode?: boolean;
+  onSignalsModeChange?: (enabled: boolean) => void;
 }
 
 export default function ChatInput({
   onSendMessage,
   isLoading = false,
   disabled = false,
+  signalsMode = false,
+  onSignalsModeChange,
 }: ChatInputProps) {
   const t = useTranslations();
+  const tSignals = useTranslations('signals');
   const [message, setMessage] = useState('');
   const [attachedImage, setAttachedImage] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [showGuideModal, setShowGuideModal] = useState(false);
+  const [showSignalsTooltip, setShowSignalsTooltip] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { user } = useUserStore();
   const posthog = usePostHog();
   const isKeyboardVisible = useKeyboardVisible();
+  const { shouldShowGuide } = useSignalsGuide();
+
+  // Check if user has premium/VIP tier (required for signals)
+  const userTier = user?.subscription?.tier?.toLowerCase() || 'free';
+  const canUseSignals = userTier === 'premium' || userTier === 'vip';
 
   // Auto-resize textarea
   useEffect(() => {
@@ -182,6 +196,59 @@ export default function ChatInput({
     }
   }, [isLimitReached, posthog, user, requestsUsed, requestsLimit]);
 
+  // Handle signals toggle click
+  const handleSignalsToggle = () => {
+    if (!canUseSignals) {
+      // Show tooltip for non-premium users
+      setShowSignalsTooltip(true);
+      vibrate('light');
+      setTimeout(() => setShowSignalsTooltip(false), 3000);
+
+      // 📊 Track premium gate hit
+      if (posthog.__loaded && user) {
+        posthog.capture('signals_premium_gate', {
+          tier: userTier,
+          platform: 'miniapp',
+        });
+      }
+      return;
+    }
+
+    // If turning on and should show guide, show modal first
+    if (!signalsMode && shouldShowGuide) {
+      setShowGuideModal(true);
+      vibrate('light');
+      return;
+    }
+
+    // Toggle signals mode
+    vibrate('light');
+    onSignalsModeChange?.(!signalsMode);
+
+    // 📊 Track signals toggle
+    if (posthog.__loaded && user) {
+      posthog.capture('signals_mode_toggle', {
+        enabled: !signalsMode,
+        tier: userTier,
+        platform: 'miniapp',
+      });
+    }
+  };
+
+  // Handle guide modal confirm
+  const handleGuideConfirm = () => {
+    setShowGuideModal(false);
+    onSignalsModeChange?.(true);
+
+    // 📊 Track signals enabled after guide
+    if (posthog.__loaded && user) {
+      posthog.capture('signals_enabled_after_guide', {
+        tier: userTier,
+        platform: 'miniapp',
+      });
+    }
+  };
+
   const handleUpgradeClick = () => {
     // 📊 Track upgrade button click
     if (posthog.__loaded && user) {
@@ -277,6 +344,57 @@ export default function ChatInput({
                 <line x1="5" y1="12" x2="19" y2="12"></line>
               </svg>
             </button>
+
+            {/* Signals Toggle Button */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={handleSignalsToggle}
+                disabled={disabled || isLoading || isLimitReached}
+                className={`
+                  flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center
+                  transition-all duration-200 active:scale-95
+                  disabled:cursor-not-allowed disabled:opacity-40
+                  ${signalsMode
+                    ? 'bg-gradient-to-br from-purple-500 to-blue-600 shadow-lg shadow-purple-500/30'
+                    : 'hover:bg-blue-500/20 disabled:hover:bg-transparent'
+                  }
+                `}
+                title={signalsMode ? tSignals('mode_active') : 'Signals'}
+              >
+                <svg
+                  width="18"
+                  height="18"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className={signalsMode ? 'text-white' : 'text-blue-400'}
+                >
+                  {/* Lightning bolt icon */}
+                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+                </svg>
+              </button>
+
+              {/* Signals Tooltip (for non-premium users) */}
+              <AnimatePresence>
+                {showSignalsTooltip && (
+                  <motion.div
+                    initial={{ opacity: 0, y: 10, scale: 0.9 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: 10, scale: 0.9 }}
+                    className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 border border-orange-500/30 rounded-xl shadow-lg whitespace-nowrap z-50"
+                  >
+                    <p className="text-xs text-orange-300 font-medium">
+                      {tSignals('premium_required')}
+                    </p>
+                    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-2 h-2 bg-gray-900 border-r border-b border-orange-500/30 rotate-45" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
 
             {/* Hidden file input */}
             <input
@@ -386,7 +504,40 @@ export default function ChatInput({
             </div>
           </motion.div>
         )}
+
+        {/* Signals Mode Indicator */}
+        {signalsMode && !isLimitReached && (
+          <motion.div
+            initial={{ opacity: 0, y: -5 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-2 flex items-center justify-center gap-2"
+          >
+            <div className="flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-purple-500/20 to-blue-500/20 border border-purple-500/30 rounded-full">
+              <svg
+                width="12"
+                height="12"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className="text-purple-400"
+              >
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+              </svg>
+              <span className="text-xs font-medium text-purple-300">
+                {tSignals('mode_active')}
+              </span>
+            </div>
+          </motion.div>
+        )}
       </div>
+
+      {/* Signals Guide Modal */}
+      <SignalsGuideModal
+        isOpen={showGuideModal}
+        onClose={() => setShowGuideModal(false)}
+        onConfirm={handleGuideConfirm}
+      />
     </div>
   );
 }

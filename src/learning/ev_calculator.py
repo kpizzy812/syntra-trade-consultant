@@ -451,7 +451,9 @@ class EVCalculator:
     ) -> Dict[str, float]:
         """Рассчитать payouts для каждого terminal outcome (V2)."""
         payouts = {}
-        rr1 = targets[0].get("rr", 1.5)
+        # .get() не защищает от явного None - нужна проверка
+        rr1_raw = targets[0].get("rr")
+        rr1 = rr1_raw if rr1_raw is not None else 1.5
         w1 = weights[0]
 
         # SL до TP1 = полный лосс
@@ -470,12 +472,16 @@ class EVCalculator:
         # TP2 final = TP1 + TP2
         cumulative = rr1 * w1
         if len(targets) >= 2:
-            cumulative += targets[1].get("rr", 2.0) * weights[1]
+            rr2_raw = targets[1].get("rr")
+            rr2 = rr2_raw if rr2_raw is not None else 2.0
+            cumulative += rr2 * weights[1]
         payouts["tp2_final"] = cumulative - fees_r
 
         # TP3 final = TP1 + TP2 + TP3
         if len(targets) >= 3:
-            cumulative += targets[2].get("rr", 3.0) * weights[2]
+            rr3_raw = targets[2].get("rr")
+            rr3 = rr3_raw if rr3_raw is not None else 3.0
+            cumulative += rr3 * weights[2]
         payouts["tp3_final"] = cumulative - fees_r
 
         payouts["other"] = 0.0 - fees_r

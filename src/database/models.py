@@ -506,10 +506,11 @@ class RequestLimit(Base):
     """
     Request limits model - tracks daily request limits with separate counters
 
-    Tracks three types of requests separately:
+    Tracks four types of requests separately:
     - Text requests (AI chat analysis)
     - Chart requests (technical chart generation)
     - Vision requests (screenshot/image analysis)
+    - Futures requests (futures signal generation)
 
     Counter resets at 00:00 UTC
     """
@@ -542,6 +543,9 @@ class RequestLimit(Base):
     vision_count: Mapped[int] = mapped_column(
         Integer, default=0, nullable=False, comment="Number of vision requests made today"
     )
+    futures_count: Mapped[int] = mapped_column(
+        Integer, default=0, nullable=False, comment="Number of futures signal requests made today"
+    )
 
     # Legacy field for backward compatibility (deprecated, use text_count)
     count: Mapped[int] = mapped_column(
@@ -558,7 +562,7 @@ class RequestLimit(Base):
     __table_args__ = (UniqueConstraint("user_id", "date", name="uix_user_date"),)
 
     def __repr__(self) -> str:
-        return f"<RequestLimit(user_id={self.user_id}, date={self.date}, text={self.text_count}, chart={self.chart_count}, vision={self.vision_count})>"
+        return f"<RequestLimit(user_id={self.user_id}, date={self.date}, text={self.text_count}, chart={self.chart_count}, vision={self.vision_count}, futures={self.futures_count})>"
 
 
 class CostTracking(Base):

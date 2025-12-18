@@ -16,6 +16,7 @@ from . import (
     points,
     points_admin,
     task_review,
+    futures,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "points",
     "points_admin",
     "task_review",
+    "futures",
 ]

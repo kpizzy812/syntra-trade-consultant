@@ -232,8 +232,8 @@
       "emoji": "🥈",
       "limit": "15 text + 5 charts + 5 vision/day",
       "feature_1": "• 🔥 Advanced AI models (2025)",
-      "feature_2": "• On-chain metrics + Liquidations",
-      "feature_3": "• Market cycle analysis",
+      "feature_2": "• 📊 Futures Signals (1/day)",
+      "feature_3": "• On-chain metrics + Liquidations",
       "feature_4": "• 🎁 7-day free trial",
       "points_bonus": "💎 +{points} $SYNTRA Points"
     },
@@ -241,8 +241,8 @@
       "name": "VIP",
       "emoji": "🥇",
       "limit": "30 text + 10 charts + 10 vision/day",
-      "feature_1": "• Professional-grade AI analysis",
-      "feature_2": "• Multi-step reasoning engine",
+      "feature_1": "• 📊 Futures Signals (5/day)",
+      "feature_2": "• 🧠 UltraThink: deep analysis",
       "feature_3": "• All features unlocked",
       "feature_4": "• VIP support 24/7",
       "points_bonus": "💎 +{points} $SYNTRA Points"
@@ -367,7 +367,7 @@
       "price": "$24.99/month",
       "description": "Full functionality",
       "limits": "15 text, 5 charts, 5 vision/day",
-      "features": "• 🔥 Advanced AI models (2025)\n• On-chain metrics + Liquidations\n• Market cycle analysis\n• 🎁 7-day free trial",
+      "features": "• 🔥 Advanced AI models (2025)\n• 📊 Futures Signals (1/day)\n• On-chain metrics + Liquidations\n• 🎁 7-day free trial",
       "trial": "🎉 7 days free"
     },
     "vip": {
@@ -375,7 +375,7 @@
       "price": "$49.99/month",
       "description": "Maximum capabilities",
       "limits": "30 text, 10 charts, 10 vision/day",
-      "features": "• 🧠 UltraThink: deep AI analysis\n• All features unlocked\n• Priority support 24/7"
+      "features": "• 📊 Futures Signals (5/day)\n• 🧠 UltraThink: deep AI analysis\n• All features unlocked\n• VIP support 24/7"
     }
   },
   "errors": {
@@ -456,5 +456,17 @@
     "earn_tip": "💡 Earn points for requests, purchases and referrals!",
     "how_to_earn": "📊 How to earn $SYNTRA points",
     "earn_methods": "💎 <b>How to earn $SYNTRA points:</b>\n\n📝 <b>For requests:</b>\n• Text request: +10 points\n• Vision analysis: +20 points\n• Technical analysis: +15 points\n\n🔥 <b>Daily login:</b>\n• 1 day: +50 points\n• 7 days streak: +500 points\n• 30 days streak: +3000 points\n\n💰 <b>Subscriptions:</b>\n• BASIC (1 month): +500 points\n• PREMIUM (1 month): +1500 points\n• VIP (1 month): +3000 points\n\n👥 <b>Referrals:</b>\n• Referral signup: +500 points\n• Referral purchase: +1000 points\n\n📈 <b>Multipliers:</b>\n• Level (1-6): from 1.0x to 2.0x\n• Subscription: FREE 1.0x, PREMIUM 1.5x, VIP 2.0x\n\n💡 <i>Level up and upgrade subscription for maximum earning!</i>"
+  },
+  "futures": {
+    "premium_required": "⚠️ <b>Futures Signals available for Premium and VIP users only</b>\n\nThis feature generates professional trading scenarios with entry points, stop-losses and take-profits.\n\n💎 <b>Premium:</b> 1 signal/day\n👑 <b>VIP:</b> 5 signals/day\n\nUpgrade now: /premium",
+    "limit_reached": "⚠️ <b>Signal limit reached</b>\n\nYou've used all {used}/{limit} signals for today.\n\n⏰ Limit resets at 00:00 UTC.\n\n💡 Upgrade to VIP for 5 signals/day: /premium",
+    "guide": "📊 <b>Futures Signals</b>\n\n🎯 Generate professional trading scenarios with:\n• Entry points (ladder orders)\n• Stop-losses\n• Take-profits (TP1, TP2, TP3)\n• Leverage recommendations\n\n📌 <b>Signals remaining:</b> {remaining}/{limit}\n\n<b>How to use:</b>\nSend coin name and timeframe:\n• <code>BTC 4h</code>\n• <code>signal for ETH 1d</code>\n• <code>entry points SOL</code>\n\n<i>If timeframe not specified, 4H will be used by default.</i>",
+    "analyzing": "🔍 <i>Analyzing request...</i>",
+    "generating": "📊 <b>Generating trading scenarios...</b>\n\n<i>This may take 10-30 seconds.</i>",
+    "not_signal_request": "🤔 <b>This is not a signal request</b>\n\nTry something like:\n• <code>BTC 4h</code>\n• <code>signal for ETH</code>\n• <code>entry points SOL 1d</code>",
+    "need_clarification": "🤔 <b>Please clarify</b>\n\n{questions}",
+    "generation_failed": "❌ <b>Generation failed</b>\n\n{error}\n\n<i>Limit was not used. Please try again.</i>",
+    "error": "❌ <b>An error occurred</b>\n\nPlease try again later or contact support.",
+    "cancelled": "❌ <b>Signals mode cancelled</b>\n\nUse /futures to start again."
   }
 }

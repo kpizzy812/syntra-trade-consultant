@@ -17,6 +17,7 @@ from config.limits import (
     get_text_limit,
     get_chart_limit,
     get_vision_limit,
+    get_futures_limit,
     LimitType,
 )
 
@@ -26,6 +27,7 @@ class RequestType(str, Enum):
     TEXT = "text"       # Text AI analysis
     CHART = "chart"     # Chart/graph generation
     VISION = "vision"   # Vision/image analysis
+    FUTURES = "futures" # Futures signal generation
 
 
 async def get_or_create_limit_record(
@@ -62,6 +64,7 @@ async def get_or_create_limit_record(
         text_count=0,
         chart_count=0,
         vision_count=0,
+        futures_count=0,
         count=0,  # Legacy field
         limit=5,  # Legacy field
     )
@@ -102,6 +105,8 @@ async def check_limit(
         limit = get_chart_limit(tier)
     elif request_type == RequestType.VISION:
         limit = get_vision_limit(tier)
+    elif request_type == RequestType.FUTURES:
+        limit = get_futures_limit(tier)
     else:
         raise ValueError(f"Unknown request type: {request_type}")
 
@@ -114,6 +119,8 @@ async def check_limit(
         current_count = limit_record.chart_count
     elif request_type == RequestType.VISION:
         current_count = limit_record.vision_count
+    elif request_type == RequestType.FUTURES:
+        current_count = limit_record.futures_count
     else:
         current_count = 0
 
@@ -154,6 +161,8 @@ async def increment_limit(
         limit_record.chart_count += 1
     elif request_type == RequestType.VISION:
         limit_record.vision_count += 1
+    elif request_type == RequestType.FUTURES:
+        limit_record.futures_count += 1
     else:
         raise ValueError(f"Unknown request type: {request_type}")
 
@@ -163,7 +172,7 @@ async def increment_limit(
     logger.info(
         f"User {user_id} {request_type.value} count incremented: "
         f"text={limit_record.text_count}, chart={limit_record.chart_count}, "
-        f"vision={limit_record.vision_count}"
+        f"vision={limit_record.vision_count}, futures={limit_record.futures_count}"
     )
 
     return limit_record
@@ -193,6 +202,7 @@ async def get_usage_stats(
     text_limit = get_text_limit(tier)
     chart_limit = get_chart_limit(tier)
     vision_limit = get_vision_limit(tier)
+    futures_limit = get_futures_limit(tier)
 
     # Get current counts
     limit_record = await get_or_create_limit_record(session, user.id)
@@ -215,6 +225,13 @@ async def get_usage_stats(
             "limit": vision_limit,
             "remaining": max(0, vision_limit - limit_record.vision_count),
             "percentage": int((limit_record.vision_count / vision_limit * 100) if vision_limit > 0 else 0),
+        },
+        "futures": {
+            "count": limit_record.futures_count,
+            "limit": futures_limit,
+            "remaining": max(0, futures_limit - limit_record.futures_count),
+            "percentage": int((limit_record.futures_count / futures_limit * 100) if futures_limit > 0 else 0),
+            "available": futures_limit > 0,  # True only for Premium/VIP
         },
         "tier": tier.value,
         "date": limit_record.date.isoformat(),
@@ -244,6 +261,7 @@ async def reset_limit(
         limit_record.text_count = 0
         limit_record.chart_count = 0
         limit_record.vision_count = 0
+        limit_record.futures_count = 0
         limit_record.count = 0
         logger.info(f"Admin: Reset ALL limits for user {user_id}")
     elif request_type == RequestType.TEXT:
@@ -256,6 +274,9 @@ async def reset_limit(
     elif request_type == RequestType.VISION:
         limit_record.vision_count = 0
         logger.info(f"Admin: Reset VISION limit for user {user_id}")
+    elif request_type == RequestType.FUTURES:
+        limit_record.futures_count = 0
+        logger.info(f"Admin: Reset FUTURES limit for user {user_id}")
 
     await session.commit()
     await session.refresh(limit_record)

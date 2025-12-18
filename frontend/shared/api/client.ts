@@ -799,6 +799,46 @@ export const api = {
   },
 
   /**
+   * Futures Signals API (Premium/VIP only)
+   */
+  futuresSignals: {
+    /**
+     * Analyze request and generate trading scenarios
+     * Returns scenarios if sufficient data, or clarifying questions if not
+     */
+    analyze: async (params: {
+      message: string;
+      ticker?: string;
+      timeframe?: string;
+      mode?: 'conservative' | 'standard' | 'high_risk' | 'meme';
+      language?: string;
+    }) => {
+      const response = await apiClient.post('/api/futures-signals/analyze', params);
+      return response.data;
+    },
+
+    /**
+     * Get current user's futures signals limits
+     */
+    getLimits: async () => {
+      const response = await apiClient.get('/api/futures-signals/limits');
+      return response.data;
+    },
+
+    /**
+     * Validate request without generating (preview mode)
+     * Does NOT check or decrement limits
+     */
+    validate: async (params: {
+      message: string;
+      language?: string;
+    }) => {
+      const response = await apiClient.post('/api/futures-signals/validate', params);
+      return response.data;
+    },
+  },
+
+  /**
    * Social Tasks API (Earn points by completing tasks)
    */
   tasks: {

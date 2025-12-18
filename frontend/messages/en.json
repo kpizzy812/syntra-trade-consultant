@@ -42,8 +42,8 @@
         "features": {
           "limits": "15 text + 5 charts + 5 vision/day",
           "includes": "Everything in Basic +",
+          "signals": "📊 Futures Signals (1/day)",
           "onchain": "On-chain data (whale alerts, exchange flows)",
-          "macro": "Pi Cycle & macro indicators",
           "trial": "7-day free trial"
         }
       },
@@ -52,9 +52,9 @@
         "features": {
           "limits": "30 text + 10 charts + 10 vision/day",
           "includes": "Everything in Premium +",
-          "reasoning": "Multi-step reasoning (complex scenarios)",
-          "priority": "Priority queue & fastest responses",
-          "support": "Dedicated support"
+          "signals": "📊 Futures Signals (5/day)",
+          "reasoning": "🧠 UltraThink: deep analysis",
+          "support": "VIP support 24/7"
         }
       }
     },
@@ -542,11 +542,10 @@
       "premium_price": "$24.99/month",
       "premium_note": "Full functionality + AI 2025",
       "premium_feature1": "15 requests + 5 charts + 5 screenshots/day",
-      "premium_feature2": "🔥 Advanced AI models (2025)",
-      "premium_feature3": "On-chain metrics",
-      "premium_feature4": "Liquidations history",
-      "premium_feature5": "Market cycle analysis",
-      "premium_feature6": "🎁 7-day free trial",
+      "premium_feature2": "📊 Futures Signals (1/day)",
+      "premium_feature3": "🔥 Advanced AI models (2025)",
+      "premium_feature4": "On-chain metrics + Liquidations",
+      "premium_feature5": "🎁 7-day free trial",
       "premium_cta": "Start Premium trial",
       "premium_discount": "🎁 -20% discount on first payment (48 hours after trial)"
     },
@@ -666,6 +665,32 @@
       "privacy": "Privacy Policy",
       "copyright": "© Syntra AI. This is not financial advice."
     }
+  },
+
+  "signals": {
+    "guide_title": "Futures Signals",
+    "guide_subtitle": "Trading scenarios for Premium/VIP",
+    "what_is_title": "What is it?",
+    "what_is_description": "Professional trading scenarios with specific entry levels, stop-losses and take-profits.",
+    "what_you_get_title": "What you'll get",
+    "feature_entry": "Entry points (ladder orders)",
+    "feature_stoploss": "Stop-loss recommendations",
+    "feature_targets": "Take-profits (TP1, TP2, TP3)",
+    "feature_leverage": "Leverage recommendations",
+    "how_to_use_title": "How to use",
+    "disclaimer": "This is not financial advice. Always use risk management and only trade with funds you can afford to lose.",
+    "dont_show_again": "Don't show again",
+    "cancel": "Cancel",
+    "enable_signals": "Enable Signals",
+    "mode_active": "Signals mode active",
+    "mode_inactive": "Regular chat",
+    "premium_required": "Signals available for Premium/VIP only",
+    "upgrade_to_use": "Subscribe to access trading signals",
+    "remaining": "Remaining: {count}/{limit}",
+    "limit_reached": "Limit reached",
+    "generating": "Generating scenarios...",
+    "clarification_needed": "Please clarify your request",
+    "error": "Generation error"
   },
 
   "tasks": {

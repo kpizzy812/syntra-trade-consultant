@@ -32,6 +32,7 @@ from src.api.tasks import router as tasks_router
 from src.api.tasks_admin import router as tasks_admin_router
 from src.api.startapp_admin import router as startapp_admin_router
 from src.api.futures_scenarios import router as futures_scenarios_router
+from src.api.futures_signals import router as futures_signals_router
 from src.api.supervisor import router as supervisor_router
 from src.api.feedback import router as feedback_router
 
@@ -58,7 +59,8 @@ router.include_router(points_router)  # $SYNTRA points system
 router.include_router(tasks_router)  # Social tasks for earning points
 router.include_router(tasks_admin_router)  # Social tasks admin management
 router.include_router(startapp_admin_router)  # Startapp parameter tracking admin
-router.include_router(futures_scenarios_router)  # Futures trading scenarios API
+router.include_router(futures_scenarios_router)  # Futures trading scenarios API (API Key auth)
+router.include_router(futures_signals_router)  # Futures signals for users (tma/JWT auth)
 router.include_router(supervisor_router)  # Syntra Supervisor API
 router.include_router(feedback_router)  # Trade feedback and learning API
 
