@@ -401,9 +401,10 @@ class SupervisorLLMAdvisor:
                                     "params": {
                                         "type": "object",
                                         "properties": {
-                                            "new_sl": {"type": "number"},
-                                            "percent": {"type": "integer"}
+                                            "new_sl": {"type": ["number", "null"]},
+                                            "percent": {"type": ["integer", "null"]}
                                         },
+                                        "required": ["new_sl", "percent"],
                                         "additionalProperties": False
                                     },
                                     "urgency": {"type": "string", "enum": ["low", "med", "high", "critical"]},
