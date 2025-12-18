@@ -106,8 +106,8 @@ class AdvicePack:
 # ============================================================================
 
 # Cooldown settings
-DEFAULT_COOLDOWN_MINUTES = 15
-MIN_COOLDOWN_MINUTES = 5
+DEFAULT_COOLDOWN_MINUTES = 60  # 1 hour
+MIN_COOLDOWN_MINUTES = 30
 
 # Risk thresholds
 LIQ_PROXIMITY_WARN_PCT = 15  # Warn if price within 15% of liquidation

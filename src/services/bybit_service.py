@@ -366,6 +366,107 @@ class BybitService:
             logger.error(f"Error fetching Bybit L/S ratio for {symbol}: {e}")
             return None
 
+    async def get_open_interest_history(
+        self,
+        symbol: str,
+        interval: str = "1h",
+        limit: int = 24
+    ) -> Optional[List[Dict]]:
+        """
+        Получить историю открытого интереса.
+
+        Args:
+            symbol: Торговая пара (e.g., "BTCUSDT")
+            interval: Интервал (5min, 15min, 30min, 1h, 4h, 1d)
+            limit: Количество точек (1-200)
+
+        Returns:
+            List of {openInterest, timestamp} dicts
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.BASE_URL}/v5/market/open-interest"
+                params = {
+                    "category": "linear",
+                    "symbol": symbol,
+                    "intervalTime": interval,
+                    "limit": min(limit, 200)
+                }
+
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        if data.get("retCode") != 0:
+                            logger.warning(f"Bybit OI history error: {data.get('retMsg')}")
+                            return None
+
+                        oi_list = data.get("result", {}).get("list", [])
+                        if oi_list:
+                            return [
+                                {
+                                    "openInterest": float(item.get("openInterest", 0)),
+                                    "timestamp": int(item.get("timestamp", 0))
+                                }
+                                for item in oi_list
+                            ]
+                    return None
+
+        except Exception as e:
+            logger.error(f"Error fetching Bybit OI history for {symbol}: {e}")
+            return None
+
+    async def get_long_short_ratio_history(
+        self,
+        symbol: str,
+        period: str = "1h",
+        limit: int = 12
+    ) -> Optional[List[Dict]]:
+        """
+        Получить историю соотношения long/short позиций.
+
+        Args:
+            symbol: Торговая пара
+            period: Период (5min, 15min, 30min, 1h, 4h, 1d)
+            limit: Количество точек (1-500)
+
+        Returns:
+            List of {buyRatio, sellRatio, timestamp} dicts
+        """
+        try:
+            async with aiohttp.ClientSession() as session:
+                url = f"{self.BASE_URL}/v5/market/account-ratio"
+                params = {
+                    "category": "linear",
+                    "symbol": symbol,
+                    "period": period,
+                    "limit": min(limit, 500)
+                }
+
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+
+                        if data.get("retCode") != 0:
+                            logger.warning(f"Bybit LS ratio history error: {data.get('retMsg')}")
+                            return None
+
+                        ratio_list = data.get("result", {}).get("list", [])
+                        if ratio_list:
+                            return [
+                                {
+                                    "buyRatio": float(item.get("buyRatio", 0)),
+                                    "sellRatio": float(item.get("sellRatio", 0)),
+                                    "timestamp": int(item.get("timestamp", 0))
+                                }
+                                for item in ratio_list
+                            ]
+                    return None
+
+        except Exception as e:
+            logger.error(f"Error fetching Bybit LS ratio history for {symbol}: {e}")
+            return None
+
 
 # Singleton instance
 bybit_service = BybitService()
