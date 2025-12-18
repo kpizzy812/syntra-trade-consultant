@@ -398,7 +398,14 @@ class SupervisorLLMAdvisor:
                                 "type": "object",
                                 "properties": {
                                     "type": {"type": "string", "enum": ["move_sl", "set_break_even", "take_partial", "close_position", "reduce_position", "hold"]},
-                                    "params": {"type": "object", "additionalProperties": True},
+                                    "params": {
+                                        "type": "object",
+                                        "properties": {
+                                            "new_sl": {"type": "number"},
+                                            "percent": {"type": "integer"}
+                                        },
+                                        "additionalProperties": False
+                                    },
                                     "urgency": {"type": "string", "enum": ["low", "med", "high", "critical"]},
                                     "confidence": {"type": "integer"},
                                     "reason_bullets": {"type": "array", "items": {"type": "string"}}

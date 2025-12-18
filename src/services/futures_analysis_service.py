@@ -25,6 +25,7 @@ import pandas as pd
 from loguru import logger
 
 from src.services.binance_service import BinanceService
+from src.services.bybit_service import bybit_service
 from src.services.candlestick_patterns import CandlestickPatterns
 from src.services.fear_greed_service import FearGreedService
 from src.services.openai_service import OpenAIService
@@ -149,14 +150,101 @@ class FuturesAnalysisService:
 
     def __init__(self):
         """Initialize services"""
-        self.binance = BinanceService()
+        self.bybit = bybit_service  # Primary source
+        self.binance = BinanceService()  # Fallback
         self.technical = TechnicalIndicators()
         self.patterns = CandlestickPatterns()
         self.price_levels = PriceLevelsService()
         self.fear_greed = FearGreedService()
         self.openai = OpenAIService()
 
-        logger.info("FuturesAnalysisService initialized")
+        logger.info("FuturesAnalysisService initialized (Bybit primary, Binance fallback)")
+
+    # ========================================================================
+    # DATA FETCHING WITH FALLBACK (Bybit -> Binance)
+    # ========================================================================
+
+    async def _get_current_price(self, symbol: str) -> float | None:
+        """Get current price: Bybit first, Binance fallback."""
+        # Try Bybit first
+        price = await self.bybit.get_current_price(symbol)
+        if price:
+            logger.debug(f"Price for {symbol} from Bybit: {price}")
+            return price
+
+        # Fallback to Binance
+        logger.info(f"Bybit price failed for {symbol}, trying Binance...")
+        price = await self.binance.get_current_price(symbol)
+        if price:
+            logger.debug(f"Price for {symbol} from Binance: {price}")
+        return price
+
+    async def _get_klines(
+        self, symbol: str, interval: str, limit: int = 200
+    ) -> pd.DataFrame | None:
+        """Get klines: Bybit first, Binance fallback."""
+        # Try Bybit first
+        df = await self.bybit.get_klines(symbol, interval, limit)
+        if df is not None and len(df) > 0:
+            logger.debug(f"Klines for {symbol} from Bybit: {len(df)} candles")
+            return df
+
+        # Fallback to Binance
+        logger.info(f"Bybit klines failed for {symbol}, trying Binance...")
+        df = await self.binance.get_klines(symbol, interval, limit)
+        if df is not None:
+            logger.debug(f"Klines for {symbol} from Binance: {len(df)} candles")
+        return df
+
+    async def _get_funding_rate(self, symbol: str) -> dict | None:
+        """Get funding rate: Bybit first, Binance fallback."""
+        # Try Bybit first
+        rate = await self.bybit.get_funding_rate(symbol)
+        if rate is not None:
+            return {"fundingRate": rate, "source": "bybit"}
+
+        # Fallback to Binance
+        data = await self.binance.get_latest_funding_rate(symbol)
+        if data:
+            data["source"] = "binance"
+        return data
+
+    async def _get_open_interest(self, symbol: str) -> dict | None:
+        """Get open interest: Bybit first, Binance fallback."""
+        # Try Bybit first
+        oi = await self.bybit.get_open_interest(symbol)
+        if oi:
+            oi["source"] = "bybit"
+            return oi
+
+        # Fallback to Binance
+        data = await self.binance.get_open_interest(symbol)
+        if data:
+            data["source"] = "binance"
+        return data
+
+    async def _get_long_short_ratio(self, symbol: str, period: str = "5m") -> dict | None:
+        """Get long/short ratio: Bybit first, Binance fallback."""
+        # Map period for Bybit (uses different format)
+        bybit_period_map = {"5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h"}
+        bybit_period = bybit_period_map.get(period, "1h")
+
+        # Try Bybit first
+        ratio = await self.bybit.get_long_short_ratio(symbol, bybit_period)
+        if ratio:
+            ratio["source"] = "bybit"
+            return ratio
+
+        # Fallback to Binance
+        data = await self.binance.get_long_short_ratio(symbol, period, limit=30)
+        if data is not None and not data.empty:
+            latest = data.iloc[-1]
+            return {
+                "buyRatio": float(latest.get("longAccount", 0.5)),
+                "sellRatio": float(latest.get("shortAccount", 0.5)),
+                "source": "binance"
+            }
+        return None
 
     async def analyze_symbol(
         self,
@@ -192,23 +280,19 @@ class FuturesAnalysisService:
             logger.info(f"Starting futures analysis for {symbol} on {timeframe} [mode={mode}]")
 
             # ====================================================================
-            # 1. СБОР ДАННЫХ
+            # 1. СБОР ДАННЫХ (Bybit primary, Binance fallback)
             # ====================================================================
 
             # 1.1 Получить current price
-            current_price = await self.binance.get_current_price(symbol)
+            current_price = await self._get_current_price(symbol)
             if not current_price:
                 return {
                     "success": False,
-                    "error": f"Failed to fetch current price for {symbol}"
+                    "error": f"Failed to fetch current price for {symbol} (both Bybit and Binance failed)"
                 }
 
             # 1.2 Получить OHLCV данные (200 свечей для индикаторов)
-            klines_df = await self.binance.get_klines(
-                symbol=symbol,
-                interval=timeframe,
-                limit=200
-            )
+            klines_df = await self._get_klines(symbol, timeframe, limit=200)
 
             if klines_df is None or len(klines_df) < 50:
                 return {
@@ -220,30 +304,26 @@ class FuturesAnalysisService:
             mtf_data = await self._get_multi_timeframe_data(symbol)
 
             # 1.4 Получить funding rate
-            funding_data = await self.binance.get_latest_funding_rate(symbol)
+            funding_data = await self._get_funding_rate(symbol)
 
             # 1.5 Получить Open Interest
-            oi_data = await self.binance.get_open_interest(symbol)
+            oi_data = await self._get_open_interest(symbol)
 
             # 1.6 Получить Long/Short ratio
-            ls_ratio = await self.binance.get_long_short_ratio(
-                symbol=symbol,
-                period="5m",
-                limit=30
-            )
+            ls_ratio = await self._get_long_short_ratio(symbol, period="5m")
 
-            # 1.7 Получить liquidation history (если API keys есть)
+            # 1.7 Получить liquidation history
+            # Note: Bybit REST API не предоставляет публичные ликвидации
+            # Fallback на Binance если есть credentials
             liquidation_data = None
             if self.binance.has_credentials:
-                # 🔧 FIX: Увеличиваем time range в зависимости от таймфрейма
                 end_time = int(time.time() * 1000)
-                # Для разных таймфреймов - разный time range (но max 7 дней)
                 if timeframe in ["1d", "1w"]:
-                    days = 7  # 7 дней для больших таймфреймов
+                    days = 7
                 elif timeframe in ["4h", "6h", "8h", "12h"]:
-                    days = 5  # 5 дней для средних таймфреймов
+                    days = 5
                 else:
-                    days = 3  # 3 дня для малых таймфреймов (1h, 15m, etc)
+                    days = 3
 
                 start_time = end_time - (days * 24 * 60 * 60 * 1000)
 
@@ -425,11 +505,7 @@ class FuturesAnalysisService:
 
         for tf in timeframes:
             try:
-                df = await self.binance.get_klines(
-                    symbol=symbol,
-                    interval=tf,
-                    limit=100
-                )
+                df = await self._get_klines(symbol, tf, limit=100)
                 if df is not None and len(df) >= 20:
                     mtf_data[tf] = df
             except Exception as e:
@@ -2011,12 +2087,36 @@ Return strict JSON format."""
                         llm_probs=sc.get("outcome_probs_raw"),  # если LLM предоставил
                     )
 
-                    # Добавляем в сценарий
+                    # Gate: TP1 RR < 1.0 при BE
+                    tp1_rr = targets[0].get("rr", 0) if targets else 0
+                    ev_multiplier = 1.0
+                    ev_flags = list(metrics.flags)
+
+                    if tp1_rr < 0.8:
+                        # Hard reject - помечаем как мусорный
+                        ev_flags.append("tp1_rr_too_low_reject")
+                        sc["rejected"] = True
+                        sc["reject_reason"] = f"TP1 RR {tp1_rr:.2f} < 0.8 (BE enabled)"
+                    elif tp1_rr < 1.0:
+                        # Penalty zone
+                        ev_flags.append("tp1_rr_penalty_zone")
+                        ev_multiplier = 0.7  # -30% к EV
+
+                    # Применяем penalty
+                    adjusted_ev = metrics.ev_r * ev_multiplier
+                    adjusted_score = metrics.scenario_score * ev_multiplier
+
+                    if ev_multiplier < 1.0:
+                        ev_flags.append(f"ev_adjusted_{ev_multiplier}")
+
+                    # Добавляем в сценарий (V2 формат)
                     sc["outcome_probs"] = {
-                        "sl": probs.sl,
-                        "tp1": probs.tp1,
-                        "tp2": probs.tp2,
-                        "tp3": probs.tp3,
+                        "sl_early": probs.sl_early,
+                        "be_after_tp1": probs.be_after_tp1,
+                        "stop_in_profit": probs.stop_in_profit,
+                        "tp1_final": probs.tp1_final,
+                        "tp2_final": probs.tp2_final,
+                        "tp3_final": probs.tp3_final,
                         "other": probs.other,
                         "source": probs.source,
                         "sample_size": probs.sample_size,
@@ -2024,21 +2124,28 @@ Return strict JSON format."""
                     }
 
                     sc["ev_metrics"] = {
-                        "ev_r": metrics.ev_r,
-                        "ev_r_gross": metrics.ev_r_gross,
+                        "ev_r": round(adjusted_ev, 4),
+                        "ev_r_after_tp1": metrics.ev_r_after_tp1,
                         "fees_r": metrics.fees_r,
                         "ev_grade": metrics.ev_grade,
-                        "scenario_score": metrics.scenario_score,
+                        "scenario_score": round(adjusted_score, 4),
                         "n_targets": metrics.n_targets,
-                        "flags": metrics.flags,
+                        "flags": ev_flags,
                     }
 
-                # Сортировка по scenario_score (EV + confidence)
+                # Фильтруем rejected сценарии и сортируем по scenario_score
+                valid_scenarios = [sc for sc in scenarios if not sc.get("rejected")]
+                rejected_scenarios = [sc for sc in scenarios if sc.get("rejected")]
+
                 scenarios = sorted(
-                    scenarios,
+                    valid_scenarios,
                     key=lambda x: x.get("ev_metrics", {}).get("scenario_score", 0),
                     reverse=True
                 )
+
+                # Логируем rejected
+                if rejected_scenarios:
+                    logger.info(f"Rejected {len(rejected_scenarios)} scenarios due to low TP1 RR")
 
                 logger.debug(
                     f"EV calculation applied to {len(scenarios)} scenarios, "
