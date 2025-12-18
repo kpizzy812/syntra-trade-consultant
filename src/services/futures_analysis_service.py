@@ -34,6 +34,7 @@ from src.services.session_detector import session_detector
 from src.services.technical_indicators import TechnicalIndicators
 from src.services.volume_analyzer import volume_analyzer
 from src.services.trading_modes import (
+    ModeConfig,
     get_mode_config,
     build_mode_profile_block,
     get_mode_notes_schema,
@@ -424,6 +425,9 @@ class FuturesAnalysisService:
             # 3. MARKET CONTEXT ANALYSIS
             # ====================================================================
 
+            # Get mode config early (needed for bias thresholds)
+            mode_config = get_mode_config(mode)
+
             market_context = self._analyze_market_context(
                 price=current_price,
                 klines=klines_df,
@@ -433,7 +437,8 @@ class FuturesAnalysisService:
                 ls_ratio=ls_ratio,
                 fear_greed=fear_greed,
                 mtf_data=mtf_data,
-                timeframe=timeframe  # 🆕 ADD timeframe for dynamic F&G weight
+                timeframe=timeframe,
+                mode_config=mode_config  # For funding_extreme threshold
             )
 
             # ====================================================================
@@ -486,10 +491,7 @@ class FuturesAnalysisService:
             support_near = key_levels.get("support", [])[:5]
             resistance_near = key_levels.get("resistance", [])[:5]
 
-            # Mode config для enricher
-            mode_config = get_mode_config(mode)
-
-            # Вызываем enricher
+            # Вызываем enricher (mode_config already defined above)
             enriched_data = market_data_enricher.enrich(
                 klines=klines_df,
                 funding_history=funding_history,
@@ -630,7 +632,8 @@ class FuturesAnalysisService:
         ls_ratio: Optional[Dict],
         fear_greed: Optional[Dict],
         mtf_data: Dict[str, pd.DataFrame],
-        timeframe: str = "4h"  # 🆕 ADD timeframe for dynamic F&G weight
+        timeframe: str = "4h",
+        mode_config: Optional["ModeConfig"] = None  # For funding_extreme threshold
     ) -> Dict[str, Any]:
         """
         Определить текущий контекст рынка
@@ -774,18 +777,21 @@ class FuturesAnalysisService:
         bias_score += fg_contribution
 
         # 4. Funding bias (contrarian, capped)
+        # Use mode_config.funding_extreme as threshold (risk philosophy)
+        funding_threshold = mode_config.funding_extreme if mode_config else 0.001
         funding_contribution = 0
         if funding:
             funding_rate = funding.get("funding_rate_pct", 0)
             # 🔍 DEBUG: логируем raw значения funding
+            passes = abs(funding_rate) > funding_threshold
             logger.debug(
                 f"🔍 Funding DEBUG: raw={funding}, "
                 f"funding_rate_pct={funding_rate}, "
-                f"threshold=0.05, passes={funding_rate > 0.05 or funding_rate < -0.05}"
+                f"threshold={funding_threshold}, passes={passes}"
             )
-            if funding_rate > 0.05:  # High positive funding
+            if funding_rate > funding_threshold:  # High positive funding
                 funding_contribution = -1  # Too many longs = bearish bias
-            elif funding_rate < -0.05:  # High negative funding
+            elif funding_rate < -funding_threshold:  # High negative funding
                 funding_contribution = 1  # Too many shorts = bullish bias
         else:
             logger.warning("⚠️ Funding data is None in bias calculation!")
@@ -1010,7 +1016,8 @@ class FuturesAnalysisService:
                 all(lows[i] < low for low in right_lows) and
                 prominence_low >= min_threshold):
                 price = lows[i]
-                distance_pct = ((price - current_price) / current_price) * 100
+                # Use abs() for support distance - always positive (how far below current)
+                distance_pct = abs((price - current_price) / current_price) * 100
                 swing_lows.append({
                     "price": round(price, 2),
                     "distance_pct": round(distance_pct, 2),
@@ -1114,8 +1121,27 @@ class FuturesAnalysisService:
             if nearest_support:
                 structure["distance_to_support_pct"] = nearest_support["distance_pct"]
 
+        # Convert numpy types to native Python types for JSON serialization
+        structure = self._convert_numpy_types(structure)
+
         logger.debug(f"Price structure calculated: {structure}")
         return structure
+
+    def _convert_numpy_types(self, obj: Any) -> Any:
+        """Recursively convert numpy types to native Python types"""
+        import numpy as np
+
+        if isinstance(obj, dict):
+            return {k: self._convert_numpy_types(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._convert_numpy_types(item) for item in obj]
+        elif isinstance(obj, (np.integer, np.int64, np.int32)):
+            return int(obj)
+        elif isinstance(obj, (np.floating, np.float64, np.float32)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return obj
 
     def _aggregate_liquidation_clusters(
         self,
@@ -2137,6 +2163,37 @@ Return strict JSON format."""
 
         if not scenarios:
             return scenarios
+
+        # =====================================================================
+        # NORMALIZE PROBS before validation (fix common LLM output issues)
+        # =====================================================================
+        def normalize_probs(probs: Dict[str, float]) -> Dict[str, float]:
+            """Normalize outcome_probs to sum to 1.0"""
+            if not probs:
+                return probs
+
+            # Convert percentages to fractions if needed (e.g., 35 -> 0.35)
+            values = list(probs.values())
+            if any(v > 1.0 for v in values):
+                probs = {k: v / 100.0 for k, v in probs.items()}
+
+            total = sum(probs.values())
+            if total == 0:
+                return probs
+
+            # Normalize if sum is not ~1.0 (tolerance: 0.01)
+            if abs(total - 1.0) > 0.01:
+                probs = {k: round(v / total, 4) for k, v in probs.items()}
+                logger.debug(f"📊 Normalized probs: sum was {total:.3f}, now 1.0")
+
+            return probs
+
+        # Apply normalization to all scenarios
+        for scenario in scenarios:
+            if "outcome_probs_raw" in scenario:
+                scenario["outcome_probs_raw"] = normalize_probs(
+                    scenario["outcome_probs_raw"]
+                )
 
         logger.info(f"🔍 LLM validating {len(scenarios)} scenarios...")
 

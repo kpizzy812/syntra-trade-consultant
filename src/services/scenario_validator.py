@@ -305,7 +305,7 @@ YOUR TASK:
    - entry_level_not_exists: Entry prices should reference real levels
    - targets_below_entry_long: For LONG, targets must be ABOVE entry
    - targets_above_entry_short: For SHORT, targets must be BELOW entry
-   - probs_sum_invalid: Outcome probs should sum to ~1.0 (0.95-1.05)
+   - probs_sum_invalid: Outcome probs should sum to ~1.0 (0.90-1.10, normalized before you see them)
 
 2. If no hard violations, check for ISSUES (mode="adjust"):
    - Entry zone too wide for ATR (>3x ATR)
