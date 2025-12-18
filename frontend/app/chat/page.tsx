@@ -193,6 +193,26 @@ export default function ChatPage() {
     }
   }, [searchParams, loadChatHistory, getInitialMessages, router, ACTIVE_CHAT_KEY]);
 
+  // Reload chat history when returning to page (visibilitychange)
+  // Это нужно чтобы увидеть ответ AI если пользователь ушёл пока генерация шла
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const handleVisibilityChange = () => {
+      // Когда страница становится видимой и есть активный чат - перезагружаем историю
+      if (document.visibilityState === 'visible' && currentChatId && !isLoading) {
+        console.log('📱 Page visible - reloading chat history for chat:', currentChatId);
+        loadChatHistory(currentChatId);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [currentChatId, isLoading, loadChatHistory]);
+
   // Send message handler with SSE streaming
   const handleSendMessage = useCallback(
     async (content: string, image?: string, skipPointsAnimation = false) => {
