@@ -32,6 +32,11 @@ from src.services.price_levels_service import PriceLevelsService
 from src.services.session_detector import session_detector
 from src.services.technical_indicators import TechnicalIndicators
 from src.services.volume_analyzer import volume_analyzer
+from src.services.trading_modes import (
+    get_mode_config,
+    build_mode_profile_block,
+    get_mode_notes_schema,
+)
 
 # Learning system integration
 from src.learning import confidence_calibrator, sltp_optimizer, ev_calculator
@@ -157,7 +162,8 @@ class FuturesAnalysisService:
         self,
         symbol: str,
         timeframe: str = "4h",
-        max_scenarios: int = 3
+        max_scenarios: int = 3,
+        mode: str = "standard"  # 🆕 Trading mode
     ) -> Dict[str, Any]:
         """
         Полный анализ фьючерсного контракта с генерацией торговых сценариев
@@ -166,6 +172,7 @@ class FuturesAnalysisService:
             symbol: Trading pair (e.g., 'BTCUSDT')
             timeframe: Primary timeframe for analysis ('1h', '4h', '1d')
             max_scenarios: Maximum number of scenarios to generate (2-3)
+            mode: Trading mode ('conservative', 'standard', 'high_risk', 'meme')
 
         Returns:
             Структурированный JSON со сценариями для автоматизации
@@ -182,7 +189,7 @@ class FuturesAnalysisService:
             }
         """
         try:
-            logger.info(f"Starting futures analysis for {symbol} on {timeframe}")
+            logger.info(f"Starting futures analysis for {symbol} on {timeframe} [mode={mode}]")
 
             # ====================================================================
             # 1. СБОР ДАННЫХ
@@ -331,8 +338,9 @@ class FuturesAnalysisService:
                 liquidation_data=liquidation_data,
                 patterns=candlestick_patterns,
                 max_scenarios=max_scenarios,
-                price_structure=price_structure,  # 🆕 NEW
-                liquidation_clusters=liquidation_clusters  # 🆕 NEW
+                price_structure=price_structure,
+                liquidation_clusters=liquidation_clusters,
+                mode=mode  # 🆕 Trading mode
             )
 
             # ====================================================================
@@ -586,10 +594,18 @@ class FuturesAnalysisService:
         funding_contribution = 0
         if funding:
             funding_rate = funding.get("funding_rate_pct", 0)
+            # 🔍 DEBUG: логируем raw значения funding
+            logger.debug(
+                f"🔍 Funding DEBUG: raw={funding}, "
+                f"funding_rate_pct={funding_rate}, "
+                f"threshold=0.05, passes={funding_rate > 0.05 or funding_rate < -0.05}"
+            )
             if funding_rate > 0.05:  # High positive funding
                 funding_contribution = -1  # Too many longs = bearish bias
             elif funding_rate < -0.05:  # High negative funding
                 funding_contribution = 1  # Too many shorts = bullish bias
+        else:
+            logger.warning("⚠️ Funding data is None in bias calculation!")
         funding_contribution = apply_cap(funding_contribution, "funding")
         bias_components["funding"] = funding_contribution
         bias_score += funding_contribution
@@ -598,10 +614,19 @@ class FuturesAnalysisService:
         ls_contribution = 0
         if ls_ratio:
             ratio = ls_ratio.get("long_short_ratio", 1.0)
+            long_pct = ls_ratio.get("long_account", 0)
+            # 🔍 DEBUG: логируем raw значения ls_ratio
+            logger.debug(
+                f"🔍 LS Ratio DEBUG: long_short_ratio={ratio}, "
+                f"long_account={long_pct}, threshold=2.0, "
+                f"passes_long={ratio > 2.0}, passes_short={ratio < 0.5}"
+            )
             if ratio > 2.0:  # Too many longs
                 ls_contribution = -1
             elif ratio < 0.5:  # Too many shorts
                 ls_contribution = 1
+        else:
+            logger.warning("⚠️ LS Ratio data is None in bias calculation!")
         ls_contribution = apply_cap(ls_contribution, "ls_ratio")
         bias_components["ls_ratio"] = ls_contribution
         bias_score += ls_contribution
@@ -1101,8 +1126,9 @@ class FuturesAnalysisService:
         liquidation_data: Optional[Dict],
         patterns: Dict,
         max_scenarios: int = 3,
-        price_structure: Optional[Dict] = None,  # 🆕 NEW
-        liquidation_clusters: Optional[Dict] = None  # 🆕 NEW
+        price_structure: Optional[Dict] = None,
+        liquidation_clusters: Optional[Dict] = None,
+        mode: str = "standard"  # 🆕 Trading mode
     ) -> List[Dict[str, Any]]:
         """
         🤖 AI-DRIVEN: LLM генерирует торговые сценарии с анализом полного контекста
@@ -1131,8 +1157,9 @@ class FuturesAnalysisService:
                 funding=funding,
                 ls_ratio=ls_ratio,
                 max_scenarios=max_scenarios,
-                price_structure=price_structure,  # 🆕 NEW
-                liquidation_clusters=liquidation_clusters  # 🆕 NEW
+                price_structure=price_structure,
+                liquidation_clusters=liquidation_clusters,
+                mode=mode  # 🆕 Trading mode
             )
 
             logger.info(f"✅ AI generated {len(scenarios)} scenarios")
@@ -1230,8 +1257,9 @@ class FuturesAnalysisService:
         funding: Optional[Dict],
         ls_ratio: Optional[Dict],
         max_scenarios: int = 3,
-        price_structure: Optional[Dict] = None,  # 🆕 NEW
-        liquidation_clusters: Optional[Dict] = None  # 🆕 NEW
+        price_structure: Optional[Dict] = None,
+        liquidation_clusters: Optional[Dict] = None,
+        mode: str = "standard"  # 🆕 Trading mode
     ) -> List[Dict]:
         """
         🤖 **MAIN AI ENGINE**: LLM анализирует рынок и генерирует торговые сценарии
@@ -1389,8 +1417,14 @@ class FuturesAnalysisService:
             }
         }
 
+        # 🆕 Get mode configuration and build MODE PROFILE block
+        mode_config = get_mode_config(mode)
+        mode_profile_block = build_mode_profile_block(mode_config)
+
         # Короткий промпт с инструкциями
         prompt = f"""You are a professional futures trader with 10+ years of experience. Analyze the market data and generate trading scenarios with EXECUTION PLANS.
+
+{mode_profile_block}
 
 🔥 **CRITICAL: USE ONLY _near LEVELS FOR ENTRY/SL/TP!**
 - Entry orders: ONLY from resistance_near (shorts) or support_near (longs), ema_20/50/200, vwap
@@ -1615,9 +1649,11 @@ Return strict JSON format."""
                                     },
                                     "required": ["sl", "tp1", "tp2", "tp3", "other"],
                                     "additionalProperties": False
-                                }
+                                },
+                                # 🆕 Trading mode notes (how LLM applied mode params)
+                                "mode_notes": get_mode_notes_schema()
                             },
-                            "required": ["id", "name", "bias", "entry_plan", "stop_loss", "targets", "confidence", "confidence_factors", "risks", "leverage", "invalidation_price", "conditions", "outcome_probs_raw"],
+                            "required": ["id", "name", "bias", "entry_plan", "stop_loss", "targets", "confidence", "confidence_factors", "risks", "leverage", "invalidation_price", "conditions", "outcome_probs_raw", "mode_notes"],
                             "additionalProperties": False
                         }
                     },
@@ -1649,11 +1685,11 @@ Return strict JSON format."""
                             },
                             "estimated_wait_hours": {"type": "integer", "minimum": 1, "maximum": 168}
                         },
-                        "required": ["should_not_trade", "confidence", "reasons", "category"],
+                        "required": ["should_not_trade", "confidence", "reasons", "category", "wait_for", "estimated_wait_hours"],
                         "additionalProperties": False
                     }
                 },
-                "required": ["scenarios", "market_summary", "primary_scenario_id", "risk_level"],
+                "required": ["scenarios", "market_summary", "primary_scenario_id", "risk_level", "no_trade"],
                 "additionalProperties": False
             },
             "strict": True
@@ -1815,7 +1851,10 @@ Return strict JSON format."""
                 "atr_multiple_stop": round(atr_multiple_stop, 2) if atr_multiple_stop else None,
                 "time_valid_hours": entry_plan.get("time_valid_hours", time_valid_hours),
                 "entry_trigger": entry_trigger,
-                "no_trade_conditions": no_trade_conditions
+                "no_trade_conditions": no_trade_conditions,
+
+                # 🆕 Trading mode notes
+                "mode_notes": sc.get("mode_notes", []),
             }
 
             adapted_scenarios.append(adapted_sc)
@@ -2379,24 +2418,27 @@ Return strict JSON format."""
                         sc["stop_loss"]["recommended"] = round(nearest_to_sl + atr_offset, 2)
                     fixed_fields.append("stop_loss")
 
-            # 3. Validate targets
+            # 3. Validate targets (only TP1 - TP2/TP3 can be at distant levels)
             targets = sc.get("targets", [])
-            tp_tolerance = tolerance * 1.5  # Чуть больше tolerance для TP
+            tp1_tolerance = tolerance * 1.5  # Tolerance только для TP1
 
-            for i, tp in enumerate(targets):
-                tp_price = tp.get("price", 0)
-                if tp_price > 0:
-                    nearest_to_tp = min(all_candidates, key=lambda x: abs(x - tp_price))
-                    tp_delta = abs(nearest_to_tp - tp_price)
+            # Валидируем только TP1 на близость к уровню
+            # TP2/TP3 могут быть на дальних целях - это нормальная торговая практика
+            if targets and len(targets) > 0:
+                tp1 = targets[0]
+                tp1_price = tp1.get("price", 0)
+                if tp1_price > 0:
+                    nearest_to_tp1 = min(all_candidates, key=lambda x: abs(x - tp1_price))
+                    tp1_delta = abs(nearest_to_tp1 - tp1_price)
 
-                    if tp_delta > tp_tolerance:
+                    if tp1_delta > tp1_tolerance:
                         validation_issues.append(
-                            f"TP{i+1} {tp_price:.2f} too far from nearest candidate "
-                            f"{nearest_to_tp:.2f}"
+                            f"TP1 {tp1_price:.2f} too far from nearest candidate "
+                            f"{nearest_to_tp1:.2f}"
                         )
-                        # Fix: snap to nearest candidate
-                        sc["targets"][i]["price"] = round(nearest_to_tp, 2)
-                        fixed_fields.append(f"TP{i+1}")
+                        # Fix: snap TP1 to nearest candidate
+                        sc["targets"][0]["price"] = round(nearest_to_tp1, 2)
+                        fixed_fields.append("TP1")
 
             # Set validation status
             if entry_unrealistic:

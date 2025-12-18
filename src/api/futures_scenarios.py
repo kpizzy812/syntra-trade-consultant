@@ -67,13 +67,20 @@ class FuturesScenariosRequest(BaseModel):
         le=5,
         example=3
     )
+    mode: Optional[str] = Field(
+        default="standard",
+        description="Trading mode: conservative, standard, high_risk, meme",
+        pattern="^(conservative|standard|high_risk|meme)$",
+        example="standard"
+    )
 
     class Config:
         schema_extra = {
             "example": {
                 "symbol": "BTCUSDT",
                 "timeframe": "4h",
-                "max_scenarios": 3
+                "max_scenarios": 3,
+                "mode": "standard"
             }
         }
 
@@ -450,6 +457,12 @@ class TradingScenario(BaseModel):
         description="Validation result: 'valid', 'fixed:field', 'warning'"
     )
 
+    # 🆕 Trading mode notes (how AI applied mode parameters)
+    mode_notes: Optional[List[str]] = Field(
+        default=None,
+        description="Notes explaining how the scenario reflects trading mode parameters"
+    )
+
     # EV (Expected Value) metrics
     outcome_probs: Optional[OutcomeProbsAPI] = Field(
         default=None,
@@ -754,7 +767,8 @@ async def get_futures_scenarios(
         result = await futures_analysis_service.analyze_symbol(
             symbol=symbol,
             timeframe=request.timeframe,
-            max_scenarios=request.max_scenarios
+            max_scenarios=request.max_scenarios,
+            mode=request.mode  # 🆕 Trading mode
         )
 
         # Check if analysis was successful
