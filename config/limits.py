@@ -18,9 +18,10 @@ from typing import Dict, Any
 TIER_LIMITS = {
     # FREE TIER - Promo for new users (after 7-day Premium trial ends)
     SubscriptionTier.FREE: {
-        "text_per_day": 1,          # Text requests (AI analysis)
+        "text_per_day": 2,          # Text requests (AI analysis)
         "charts_per_day": 1,         # Chart/graph generations
         "vision_per_day": 0,         # Vision analysis (screenshots)
+        "futures_per_day": 0,        # Futures signals (Premium+ only)
 
         # Token limits (to control API costs)
         "max_input_tokens": 2000,    # Max tokens in user message + history
@@ -55,9 +56,10 @@ TIER_LIMITS = {
 
     # BASIC TIER - Entry level paid subscription
     SubscriptionTier.BASIC: {
-        "text_per_day": 15,          # Increased from 10 (+50%)
-        "charts_per_day": 5,          # Increased from 3 (+67%)
-        "vision_per_day": 3,          # Increased from 2 (+50%)
+        "text_per_day": 10,          # Quality over quantity
+        "charts_per_day": 3,          # Sustainable limits
+        "vision_per_day": 2,          # Screenshot analysis
+        "futures_per_day": 0,        # Futures signals (Premium+ only)
 
         # Token limits
         "max_input_tokens": 4000,    # More context allowed
@@ -91,9 +93,10 @@ TIER_LIMITS = {
 
     # PREMIUM TIER - Full-featured subscription (7-day trial for new users)
     SubscriptionTier.PREMIUM: {
-        "text_per_day": 20,           # Decreased from 30 (-33%) - value in features, not quantity
-        "charts_per_day": 7,           # Decreased from 10 (-30%)
-        "vision_per_day": 7,           # Decreased from 10 (-30%)
+        "text_per_day": 15,           # Quality over quantity - value in features
+        "charts_per_day": 5,           # Sustainable limits
+        "vision_per_day": 5,           # Full vision access
+        "futures_per_day": 1,         # Futures signals (1/day for Premium)
 
         # Token limits
         "max_input_tokens": 8000,    # Extended context (full history)
@@ -132,9 +135,10 @@ TIER_LIMITS = {
 
     # VIP TIER - Premium + higher limits + priority + UltraThink
     SubscriptionTier.VIP: {
-        "text_per_day": 50,            # Decreased from 100 (-50%) - sustainable limits
-        "charts_per_day": 15,          # Decreased from 30 (-50%)
-        "vision_per_day": 15,          # Decreased from 30 (-50%)
+        "text_per_day": 30,            # Quality over quantity - UltraThink value
+        "charts_per_day": 10,          # Sustainable limits
+        "vision_per_day": 10,          # Full vision access
+        "futures_per_day": 5,          # Futures signals (5/day for VIP)
 
         # Token limits
         "max_input_tokens": 16000,   # Maximum context window
@@ -206,6 +210,11 @@ def get_chart_limit(tier: SubscriptionTier) -> int:
 def get_vision_limit(tier: SubscriptionTier) -> int:
     """Get daily vision request limit for tier"""
     return TIER_LIMITS.get(tier, TIER_LIMITS[SubscriptionTier.FREE])["vision_per_day"]
+
+
+def get_futures_limit(tier: SubscriptionTier) -> int:
+    """Get daily futures signal limit for tier (Premium+ only)"""
+    return TIER_LIMITS.get(tier, TIER_LIMITS[SubscriptionTier.FREE])["futures_per_day"]
 
 
 def has_feature(tier: SubscriptionTier, feature: str) -> bool:
@@ -297,6 +306,7 @@ class LimitType:
     TEXT = "text"           # Text AI requests
     CHART = "chart"         # Chart/graph generations
     VISION = "vision"       # Vision/image analysis
+    FUTURES = "futures"     # Futures signal generation
 
 
 # ============================================================================

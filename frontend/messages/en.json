@@ -31,7 +31,7 @@
       "basic": {
         "name": "Basic",
         "features": {
-          "limits": "15 text + 5 charts + 3 vision/day",
+          "limits": "10 text + 3 charts + 2 vision/day",
           "thinking": "Thinking Mode — deep market analysis",
           "indicators": "Technical indicators (RSI, MACD, Bollinger)",
           "levels": "Support levels & resistance zones"
@@ -40,7 +40,7 @@
       "premium": {
         "name": "Premium",
         "features": {
-          "limits": "20 text + 7 charts + 7 vision/day",
+          "limits": "15 text + 5 charts + 5 vision/day",
           "includes": "Everything in Basic +",
           "onchain": "On-chain data (whale alerts, exchange flows)",
           "macro": "Pi Cycle & macro indicators",
@@ -50,7 +50,7 @@
       "vip": {
         "name": "VIP",
         "features": {
-          "limits": "50 text + 15 charts + 15 vision/day",
+          "limits": "30 text + 10 charts + 10 vision/day",
           "includes": "Everything in Premium +",
           "reasoning": "Multi-step reasoning (complex scenarios)",
           "priority": "Priority queue & fastest responses",
@@ -521,7 +521,7 @@
       "free_title": "Free",
       "free_price": "$0/month",
       "free_note": "After trial period",
-      "free_feature1": "1 text request/day",
+      "free_feature1": "2 text requests/day",
       "free_feature2": "1 chart/day",
       "free_feature3": "Basic indicators",
       "free_feature4": "Market news",
@@ -530,7 +530,7 @@
       "basic_title": "Basic",
       "basic_price": "$9.99/month",
       "basic_note": "For active traders",
-      "basic_feature1": "15 requests + 5 charts + 3 screenshots/day",
+      "basic_feature1": "10 requests + 3 charts + 2 screenshots/day",
       "basic_feature2": "🧠 AI Thinking Mode",
       "basic_feature3": "All technical indicators",
       "basic_feature4": "Candlestick patterns",
@@ -541,7 +541,7 @@
       "premium_title": "Premium",
       "premium_price": "$24.99/month",
       "premium_note": "Full functionality + AI 2025",
-      "premium_feature1": "20 requests + 7 charts + 7 screenshots/day",
+      "premium_feature1": "15 requests + 5 charts + 5 screenshots/day",
       "premium_feature2": "🔥 Advanced AI models (2025)",
       "premium_feature3": "On-chain metrics",
       "premium_feature4": "Liquidations history",

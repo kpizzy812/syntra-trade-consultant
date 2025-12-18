@@ -221,7 +221,7 @@
     "basic": {
       "name": "BASIC",
       "emoji": "🥉",
-      "limit": "15 text + 5 charts + 3 vision/day",
+      "limit": "10 text + 3 charts + 2 vision/day",
       "feature_1": "• 🧠 AI Thinking Mode",
       "feature_2": "• All technical indicators",
       "feature_3": "• Candlestick patterns + Funding rates",
@@ -230,7 +230,7 @@
     "premium": {
       "name": "PREMIUM",
       "emoji": "🥈",
-      "limit": "20 text + 7 charts + 7 vision/day",
+      "limit": "15 text + 5 charts + 5 vision/day",
       "feature_1": "• 🔥 Advanced AI models (2025)",
       "feature_2": "• On-chain metrics + Liquidations",
       "feature_3": "• Market cycle analysis",
@@ -240,7 +240,7 @@
     "vip": {
       "name": "VIP",
       "emoji": "🥇",
-      "limit": "50 text + 15 charts + 15 vision/day",
+      "limit": "30 text + 10 charts + 10 vision/day",
       "feature_1": "• Professional-grade AI analysis",
       "feature_2": "• Multi-step reasoning engine",
       "feature_3": "• All features unlocked",
@@ -352,30 +352,30 @@
     "free": {
       "name": "FREE",
       "description": "Basic analysis",
-      "limits": "1 text, 1 chart/day",
+      "limits": "2 text, 1 chart/day",
       "features": "• Basic TA (RSI, MACD)\n• News\n• Fear & Greed index"
     },
     "basic": {
       "name": "BASIC",
       "price": "$9.99/month",
       "description": "Extended analysis",
-      "limits": "15 text, 5 charts, 3 vision/day",
-      "features": "• AI Thinking Mode\n• All technical indicators\n• Candlestick patterns"
+      "limits": "10 text, 3 charts, 2 vision/day",
+      "features": "• 🧠 AI Thinking Mode\n• All technical indicators\n• Candlestick patterns + Funding rates"
     },
     "premium": {
       "name": "PREMIUM",
       "price": "$24.99/month",
       "description": "Full functionality",
-      "limits": "20 text, 7 charts, 7 vision/day",
-      "features": "• Advanced AI models (2025)\n• On-chain metrics\n• Market cycle analysis",
+      "limits": "15 text, 5 charts, 5 vision/day",
+      "features": "• 🔥 Advanced AI models (2025)\n• On-chain metrics + Liquidations\n• Market cycle analysis\n• 🎁 7-day free trial",
       "trial": "🎉 7 days free"
     },
     "vip": {
       "name": "VIP",
       "price": "$49.99/month",
       "description": "Maximum capabilities",
-      "limits": "50 text, 15 charts, 15 vision/day",
-      "features": "• Professional-grade AI\n• Multi-step reasoning\n• All features unlocked"
+      "limits": "30 text, 10 charts, 10 vision/day",
+      "features": "• 🧠 UltraThink: deep AI analysis\n• All features unlocked\n• Priority support 24/7"
     }
   },
   "errors": {
