@@ -48,6 +48,18 @@ class BybitService:
         self._redis = None
         logger.info("BybitService initialized")
 
+    def _get_klines_ttl(self, interval: str) -> int:
+        """Get appropriate TTL for klines based on interval"""
+        interval_ttl_map = {
+            "1m": CacheTTL.BINANCE_KLINES_1M,
+            "5m": CacheTTL.BINANCE_KLINES_5M,
+            "15m": CacheTTL.BINANCE_KLINES_15M,
+            "1h": CacheTTL.BINANCE_KLINES_1H,
+            "4h": CacheTTL.BINANCE_KLINES_4H,
+            "1d": CacheTTL.BINANCE_KLINES_1D,
+        }
+        return interval_ttl_map.get(interval, CacheTTL.BINANCE_KLINES_1H)
+
     @property
     def redis(self):
         if self._redis is None:
@@ -198,7 +210,7 @@ class BybitService:
                     df = pd.DataFrame(rows)
 
                     # Кэшируем
-                    ttl = CacheTTL.get_kline_ttl(interval)
+                    ttl = self._get_klines_ttl(interval)
                     try:
                         await self.redis.set(cache_key, rows, ttl=ttl)
                         logger.debug(f"Redis cache SET: {cache_key} (TTL={ttl}s)")
