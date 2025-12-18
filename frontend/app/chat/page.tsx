@@ -54,6 +54,7 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [showPremiumModal, setShowPremiumModal] = useState(false);
   const [referralDiscount, setReferralDiscount] = useState(0);
+  const [signalsMode, setSignalsMode] = useState(false);
   const { user } = useUserStore();
   const { updateBalance, setBalance } = usePointsStore();
   const { platformType } = usePlatform();
@@ -262,6 +263,130 @@ export default function ChatPage() {
 
       setMessages((prev) => [...prev, aiMessage]);
 
+      // 🔮 SIGNALS MODE: Use futures analysis API instead of regular chat
+      if (signalsMode) {
+        try {
+          const tSignals = t;
+          const userLang = user?.language || 'ru';
+
+          // Call futures signals API
+          const result = await api.futuresSignals.analyze({
+            message: content.trim(),
+            language: userLang,
+          });
+
+          let responseContent = '';
+
+          if (result.success) {
+            // Format successful scenario response
+            if (result.scenarios && result.scenarios.length > 0) {
+              const scenario = result.scenarios[0]; // Primary scenario
+
+              responseContent = `## 📊 ${scenario.direction === 'long' ? '🟢 LONG' : '🔴 SHORT'} ${result.ticker}\n\n`;
+              responseContent += `**Timeframe:** ${result.timeframe}\n`;
+              responseContent += `**Mode:** ${scenario.mode}\n`;
+              responseContent += `**Confidence:** ${Math.round((scenario.confidence || 0.7) * 100)}%\n\n`;
+
+              // Entry Plan
+              if (scenario.entry_plan?.orders) {
+                responseContent += `### 📍 Entry Plan\n`;
+                scenario.entry_plan.orders.forEach((order: { price: number; allocation: number }, i: number) => {
+                  responseContent += `- **Entry ${i + 1}:** $${order.price.toLocaleString()} (${order.allocation}%)\n`;
+                });
+                responseContent += '\n';
+              }
+
+              // Stop Loss
+              if (scenario.stop_loss) {
+                responseContent += `### 🛑 Stop Loss\n`;
+                responseContent += `- **Recommended:** $${scenario.stop_loss.recommended?.toLocaleString()}\n`;
+                if (scenario.stop_loss.aggressive) {
+                  responseContent += `- **Aggressive:** $${scenario.stop_loss.aggressive.toLocaleString()}\n`;
+                }
+                responseContent += '\n';
+              }
+
+              // Take Profit Targets
+              if (scenario.targets && scenario.targets.length > 0) {
+                responseContent += `### 🎯 Take Profit Targets\n`;
+                scenario.targets.forEach((tp: { level: string; price: number; rr: number; allocation: number }) => {
+                  responseContent += `- **${tp.level}:** $${tp.price.toLocaleString()} (R:R ${tp.rr}x, ${tp.allocation}%)\n`;
+                });
+                responseContent += '\n';
+              }
+
+              // Leverage
+              if (scenario.leverage) {
+                responseContent += `### ⚡ Leverage\n`;
+                responseContent += `- **Recommended:** ${scenario.leverage.recommended}x\n`;
+                responseContent += `- **Max:** ${scenario.leverage.max}x\n\n`;
+              }
+
+              // Rationale
+              if (scenario.rationale) {
+                responseContent += `### 💡 Rationale\n${scenario.rationale}\n`;
+              }
+
+            } else if (result.clarifying_questions && result.clarifying_questions.length > 0) {
+              // Need clarification
+              responseContent = `### 🤔 ${tSignals('signals.clarification_needed')}\n\n`;
+              result.clarifying_questions.forEach((q: string) => {
+                responseContent += `- ${q}\n`;
+              });
+            }
+
+            // Show default timeframe message if applicable
+            if (result.default_message) {
+              responseContent = `> ℹ️ ${result.default_message}\n\n` + responseContent;
+            }
+
+          } else {
+            // Error response
+            responseContent = `❌ ${result.error || tSignals('signals.error')}`;
+
+            // If limit issue, show remaining
+            if (result.remaining !== undefined) {
+              responseContent += `\n\n📊 ${tSignals('signals.remaining', { count: result.remaining, limit: result.limit || 1 })}`;
+            }
+          }
+
+          // Update message with response
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === aiMessageId
+                ? { ...msg, content: responseContent, isStreaming: false }
+                : msg
+            )
+          );
+
+          // 📊 Track signals request
+          if (posthog.__loaded) {
+            posthog.capture('signals_request_completed', {
+              success: result.success,
+              ticker: result.ticker,
+              tier: user?.subscription?.tier || 'free',
+              platform: 'miniapp',
+            });
+          }
+
+        } catch (error) {
+          console.error('Signals API error:', error);
+          const errorMessage = (error as { message?: string })?.message || t('signals.error');
+
+          setMessages((prev) =>
+            prev.map((msg) =>
+              msg.id === aiMessageId
+                ? { ...msg, content: `❌ ${errorMessage}`, isStreaming: false }
+                : msg
+            )
+          );
+        } finally {
+          setIsLoading(false);
+        }
+        return; // Exit early for signals mode
+      }
+
+      // 💬 REGULAR CHAT MODE
       try {
         // Stream response from backend
         await api.chat.streamMessage(
@@ -377,7 +502,7 @@ export default function ChatPage() {
         setIsLoading(false);
       }
     },
-    [isLoading, posthog, user, currentChatId, t, openPremiumModal, updateBalance, router, setBalance]
+    [isLoading, posthog, user, currentChatId, t, openPremiumModal, updateBalance, router, setBalance, signalsMode]
   );
 
   // Auto-send prompt from URL parameter (for "What does it mean?" button)
@@ -633,7 +758,12 @@ export default function ChatPage() {
           )}
 
           {/* Chat Input */}
-          <ChatInput onSendMessage={handleSendMessage} isLoading={isLoading} />
+          <ChatInput
+            onSendMessage={handleSendMessage}
+            isLoading={isLoading}
+            signalsMode={signalsMode}
+            onSignalsModeChange={setSignalsMode}
+          />
         </div>
 
         {/* TabBar - отдельно, фиксированный внизу */}
