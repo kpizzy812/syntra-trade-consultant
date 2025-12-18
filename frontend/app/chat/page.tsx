@@ -197,6 +197,29 @@ export default function ChatPage() {
     async (content: string, image?: string, skipPointsAnimation = false) => {
       if ((!content.trim() && !image) || isLoading) return;
 
+      // 🆕 Create new chat if sending first message without chat_id
+      let chatIdToUse = currentChatId;
+      if (!chatIdToUse) {
+        try {
+          const newChat = await api.chats.createChat('New Chat');
+          chatIdToUse = newChat.id;
+          setCurrentChatId(newChat.id);
+          // Save to localStorage
+          try {
+            localStorage.setItem(ACTIVE_CHAT_KEY, newChat.id.toString());
+          } catch (e) {
+            console.warn('Failed to save chat ID to localStorage:', e);
+          }
+          // Update URL with chat_id (without page reload)
+          router.replace(`/chat?chat_id=${newChat.id}`, { scroll: false });
+          console.log(`✅ New chat created before first message: chat_id=${newChat.id}`);
+        } catch (error) {
+          console.error('Failed to create chat:', error);
+          toast.error(t('chat.error_create_chat') || 'Failed to create chat');
+          return;
+        }
+      }
+
       // Add user message to chat
       const userMessage: Message = {
         id: `user-${Date.now()}`,
@@ -304,8 +327,8 @@ export default function ChatPage() {
           },
           // Image (if provided)
           image,
-          // Chat ID (if exists)
-          currentChatId || undefined
+          // Chat ID (always use chatIdToUse which is guaranteed to exist now)
+          chatIdToUse || undefined
         );
       } catch (error: unknown) {
         console.error('Failed to send message:', error);
