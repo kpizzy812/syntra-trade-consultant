@@ -35,6 +35,16 @@ from src.services.supervisor_llm_advisor import (
     supervisor_llm_advisor,
     supervisor_guardrails,
 )
+from src.services.trading_modes import get_mode_config
+
+
+# Mode family mapping
+MODE_FAMILIES = {
+    "conservative": "cautious",
+    "standard": "balanced",
+    "high_risk": "speculative",
+    "meme": "speculative",
+}
 
 
 # ============================================================================
@@ -134,6 +144,25 @@ class SupervisorService:
         self.binance = binance_service
         logger.info("SupervisorService initialized")
 
+    def _get_thresholds(self, mode_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get mode-specific thresholds for supervision.
+
+        Args:
+            mode_id: Trading mode ID or None for defaults
+
+        Returns:
+            Dict with threshold values
+        """
+        mode = get_mode_config(mode_id)
+        return {
+            "liq_proximity_warn_pct": mode.liq_proximity_warn_pct,
+            "liq_proximity_critical_pct": mode.liq_proximity_critical_pct,
+            "invalidation_threat_pct": mode.invalidation_threat_pct,
+            "advice_expiration_min": mode.advice_expiration_min,
+            "default_cooldown_min": mode.default_cooldown_min,
+        }
+
     # ========================================================================
     # SCENARIO REGISTRATION
     # ========================================================================
@@ -146,7 +175,8 @@ class SupervisorService:
         symbol: str,
         timeframe: str,
         side: str,
-        scenario_data: Dict[str, Any]
+        scenario_data: Dict[str, Any],
+        mode: str = "standard"  # 🆕 Trading mode
     ) -> ScenarioSnapshot:
         """
         Register a new trade with its scenario snapshot.
@@ -158,6 +188,7 @@ class SupervisorService:
             timeframe: Analysis timeframe (1h, 4h, 1d)
             side: Position side (Long/Short)
             scenario_data: Full scenario from futures-scenarios API
+            mode: Trading mode (conservative, standard, high_risk, meme)
 
         Returns:
             Created ScenarioSnapshot
@@ -204,6 +235,9 @@ class SupervisorService:
         time_valid_hours = scenario_data.get("time_valid_hours", 48)
         valid_until = datetime.now(UTC) + timedelta(hours=time_valid_hours)
 
+        # 🆕 Get mode family
+        mode_family = MODE_FAMILIES.get(mode.lower(), "balanced")
+
         # Create snapshot
         snapshot = ScenarioSnapshot(
             trade_id=trade_id,
@@ -219,6 +253,8 @@ class SupervisorService:
             invalidation_price=invalidation_price,
             take_profits_json=json.dumps(take_profits),
             conditions_json=json.dumps(conditions),
+            mode_id=mode.lower(),  # 🆕 Trading mode
+            mode_family=mode_family,  # 🆕 Mode family
             valid_until=valid_until,
             source="syntra",
             is_active=True,
@@ -470,9 +506,13 @@ class SupervisorService:
         # ====================================================================
         risk_state = self._determine_risk_state(events, position)
 
+        # 🆕 Get mode-aware expiration/cooldown
+        mode_id = getattr(scenario, 'mode_id', None)
+        thresholds = self._get_thresholds(mode_id)
+
         now = datetime.now(UTC)
-        expires_at = now + timedelta(minutes=ADVICE_EXPIRATION_MINUTES)
-        cooldown_until = now + timedelta(minutes=DEFAULT_COOLDOWN_MINUTES)
+        expires_at = now + timedelta(minutes=thresholds["advice_expiration_min"])
+        cooldown_until = now + timedelta(minutes=thresholds["default_cooldown_min"])
 
         advice = AdvicePack(
             pack_id=str(uuid.uuid4())[:8],
@@ -513,15 +553,20 @@ class SupervisorService:
         entry = position.entry_price
         side = position.side
 
+        # 🆕 Get mode from scenario for mode-aware thresholds
+        mode_id = getattr(scenario, 'mode_id', None)
+
         # CRITICAL: Invalidation hit
         if self._check_invalidation(scenario.invalidation_price, price, side):
             events.append(SupervisorEvent.INVALIDATION_HIT)
-        # HIGH: Invalidation threat (approaching)
-        elif self._check_invalidation_threat(scenario.invalidation_price, price, side):
+        # HIGH: Invalidation threat (approaching) - mode-aware
+        elif self._check_invalidation_threat(
+            scenario.invalidation_price, price, side, mode_id=mode_id
+        ):
             events.append(SupervisorEvent.INVALIDATION_THREAT)
 
-        # CRITICAL: Liquidation risk
-        liq_risk = self._check_liq_proximity(position)
+        # CRITICAL: Liquidation risk - mode-aware
+        liq_risk = self._check_liq_proximity(position, mode_id=mode_id)
         if liq_risk == "critical":
             events.append(SupervisorEvent.LIQ_CRITICAL)
         elif liq_risk == "high":
@@ -555,20 +600,28 @@ class SupervisorService:
         return events
 
     def _check_invalidation_threat(
-        self, invalidation_price: float, current_price: float, side: str
+        self,
+        invalidation_price: float,
+        current_price: float,
+        side: str,
+        mode_id: Optional[str] = None  # 🆕 Trading mode
     ) -> bool:
-        """Check if price is approaching invalidation (within 2%)."""
+        """Check if price is approaching invalidation (mode-aware threshold)."""
         if invalidation_price == 0:
             return False
+
+        # 🆕 Get mode-specific threshold
+        thresholds = self._get_thresholds(mode_id)
+        threat_pct = thresholds["invalidation_threat_pct"]
 
         distance_pct = abs(current_price - invalidation_price) / current_price * 100
 
         if side == "Long":
             # For long, invalidation is below price
-            return current_price > invalidation_price and distance_pct <= INVALIDATION_THREAT_PCT
+            return current_price > invalidation_price and distance_pct <= threat_pct
         else:
             # For short, invalidation is above price
-            return current_price < invalidation_price and distance_pct <= INVALIDATION_THREAT_PCT
+            return current_price < invalidation_price and distance_pct <= threat_pct
 
     def _check_tp_near(
         self, take_profits: List[Dict], price: float, side: str
@@ -738,19 +791,28 @@ class SupervisorService:
         delta = valid_until - now
         return int(delta.total_seconds() / 60)
 
-    def _check_liq_proximity(self, position: PositionSnapshot) -> Optional[str]:
-        """Check proximity to liquidation price."""
+    def _check_liq_proximity(
+        self,
+        position: PositionSnapshot,
+        mode_id: Optional[str] = None  # 🆕 Trading mode
+    ) -> Optional[str]:
+        """Check proximity to liquidation price (mode-aware thresholds)."""
         if not position.liq_price or position.liq_price == 0:
             return None
 
         price = position.mark_price
         liq = position.liq_price
 
+        # 🆕 Get mode-specific thresholds
+        thresholds = self._get_thresholds(mode_id)
+        critical_pct = thresholds["liq_proximity_critical_pct"]
+        warn_pct = thresholds["liq_proximity_warn_pct"]
+
         distance_pct = abs(price - liq) / price * 100
 
-        if distance_pct <= LIQ_PROXIMITY_CRITICAL_PCT:
+        if distance_pct <= critical_pct:
             return "critical"
-        elif distance_pct <= LIQ_PROXIMITY_WARN_PCT:
+        elif distance_pct <= warn_pct:
             return "high"
 
         return None

@@ -31,6 +31,12 @@ class ModeConfig:
     # Prompt additions
     prompt_rules: List[str]
     prompt_context: str
+    # 🆕 Supervisor thresholds
+    liq_proximity_warn_pct: float = 10.0  # Warn if price within X% of liquidation
+    liq_proximity_critical_pct: float = 5.0  # Critical if within X%
+    invalidation_threat_pct: float = 2.0  # Warn if within X% of invalidation
+    advice_expiration_min: int = 30  # How long advice is valid
+    default_cooldown_min: int = 15  # Cooldown after advice
 
 
 # =============================================================================
@@ -58,6 +64,12 @@ CONSERVATIVE_MODE = ModeConfig(
         "- Higher confidence threshold: min 0.65",
     ],
     prompt_context="CONSERVATIVE: Wait for perfect setups. Quality over quantity.",
+    # Supervisor: wider safety margins
+    liq_proximity_warn_pct=15.0,
+    liq_proximity_critical_pct=8.0,
+    invalidation_threat_pct=1.5,
+    advice_expiration_min=120,
+    default_cooldown_min=60,
 )
 
 STANDARD_MODE = ModeConfig(
@@ -79,6 +91,12 @@ STANDARD_MODE = ModeConfig(
         "- ATR-based stop placement (1.0-1.5x ATR)",
     ],
     prompt_context="STANDARD: Balanced approach. Trust levels, normal risk.",
+    # Supervisor: default thresholds
+    liq_proximity_warn_pct=10.0,
+    liq_proximity_critical_pct=5.0,
+    invalidation_threat_pct=2.0,
+    advice_expiration_min=60,
+    default_cooldown_min=30,
 )
 
 HIGH_RISK_MODE = ModeConfig(
@@ -107,6 +125,12 @@ HIGH_RISK_MODE = ModeConfig(
         "Tight stops are CRITICAL to prevent liquidation on high leverage. "
         "Better to get stopped out early than lose big."
     ),
+    # Supervisor: tighter thresholds (high leverage = faster reactions)
+    liq_proximity_warn_pct=8.0,
+    liq_proximity_critical_pct=4.0,
+    invalidation_threat_pct=1.0,
+    advice_expiration_min=30,
+    default_cooldown_min=15,
 )
 
 MEME_MODE = ModeConfig(
@@ -137,6 +161,12 @@ MEME_MODE = ModeConfig(
         "Wide stops are REQUIRED to avoid getting stopped out on noise. "
         "Position size is reduced. Fast trades only."
     ),
+    # Supervisor: wider invalidation (volatile), but quick expiration
+    liq_proximity_warn_pct=12.0,
+    liq_proximity_critical_pct=6.0,
+    invalidation_threat_pct=3.0,  # Wider due to volatility
+    advice_expiration_min=20,
+    default_cooldown_min=20,
 )
 
 

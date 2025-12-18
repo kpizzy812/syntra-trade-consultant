@@ -3478,6 +3478,20 @@ class ScenarioSnapshot(Base):
         comment="JSON array of validity conditions"
     )
 
+    # 🆕 Trading mode
+    mode_id: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        default="standard",
+        comment="Trading mode: conservative, standard, high_risk, meme"
+    )
+    mode_family: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        nullable=True,
+        default="balanced",
+        comment="Mode family: cautious, balanced, speculative"
+    )
+
     # Validity
     valid_until: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

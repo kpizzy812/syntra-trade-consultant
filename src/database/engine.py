@@ -7,6 +7,7 @@ Async SQLAlchemy 2.0 setup with connection pooling
 from typing import AsyncGenerator
 
 from fastapi import HTTPException
+from fastapi.exceptions import RequestValidationError
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncEngine,
@@ -107,8 +108,8 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with session_maker() as session:
         try:
             yield session
-        except HTTPException:
-            # HTTPException is not a DB error - don't rollback, just re-raise
+        except (HTTPException, RequestValidationError):
+            # HTTPException/ValidationError is not a DB error - don't rollback, just re-raise
             raise
         except Exception as e:
             await session.rollback()
