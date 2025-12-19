@@ -839,6 +839,39 @@ class SupervisorService:
 
         return None
 
+    def _validate_sl_not_in_entry_zone(
+        self,
+        new_sl: float,
+        scenario: ScenarioSnapshot,
+        side: str
+    ) -> bool:
+        """
+        Validate that proposed SL is not inside entry zone.
+
+        For LONG: SL must be BELOW entry_zone_low
+        For SHORT: SL must be ABOVE entry_zone_high
+
+        TODO: When filled_pct is available in PositionSnapshot,
+        allow SL inside entry zone if filled_pct >= 100%
+        (meaning all entries are filled, trailing is OK).
+
+        Returns:
+            True if SL is valid (not in entry zone)
+            False if SL would be inside entry zone
+        """
+        entry_zone_low = scenario.entry_zone_low
+        entry_zone_high = scenario.entry_zone_high
+
+        if not entry_zone_low or not entry_zone_high:
+            return True  # No entry zone info, allow
+
+        if side == "Long":
+            # LONG: SL must be below entry_zone_low
+            return new_sl < entry_zone_low
+        else:
+            # SHORT: SL must be above entry_zone_high
+            return new_sl > entry_zone_high
+
     def _suggest_tighter_sl(
         self,
         position: PositionSnapshot,
@@ -867,6 +900,16 @@ class SupervisorService:
             # Must be tighter than current (lower for short)
             if new_sl >= current_sl:
                 return None
+
+        # GUARD: Don't move SL into entry zone if there might be pending entries
+        # TODO: Add filled_pct check when available in PositionSnapshot
+        # For now, prevent SL from entering entry zone entirely
+        if not self._validate_sl_not_in_entry_zone(new_sl, scenario, side):
+            logger.debug(
+                f"SL recommendation rejected: new_sl={new_sl:.2f} would be inside entry zone "
+                f"[{scenario.entry_zone_low:.2f}, {scenario.entry_zone_high:.2f}]"
+            )
+            return None
 
         return Recommendation(
             action_id=str(uuid.uuid4())[:8],

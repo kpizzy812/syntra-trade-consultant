@@ -77,10 +77,12 @@ class ValidationResult:
 # ==============================================================================
 
 STRICT_VIOLATIONS = [
-    "sl_above_entry_long",      # SL выше entry в лонге
-    "sl_below_entry_short",     # SL ниже entry в шорте
-    "targets_below_entry_long", # Targets ниже entry в лонге
-    "targets_above_entry_short", # Targets выше entry в шорте
+    "sl_above_entry_long",          # SL выше entry в лонге
+    "sl_below_entry_short",         # SL ниже entry в шорте
+    "targets_below_entry_long",     # Targets ниже entry в лонге
+    "targets_above_entry_short",    # Targets выше entry в шорте
+    "invalidation_at_entry_long",   # Invalidation >= entry_min в лонге (логическое противоречие)
+    "invalidation_at_entry_short",  # Invalidation <= entry_max в шорте (логическое противоречие)
     # "entry_level_not_exists" - REMOVED: слишком строго, AI может использовать BB/derived levels
     # "probs_sum_invalid" - REMOVED: outcome_probs часто пустые, не критичная проверка
 ]
@@ -287,6 +289,9 @@ class ScenarioValidator:
         targets = scenario.get("targets", [])
         target_prices = [t.get("price", 0) for t in targets]
 
+        # Invalidation price
+        invalidation_price = scenario.get("invalidation_price", 0)
+
         # Market context
         current_price = market_context.get("current_price", 0)
         trend = market_context.get("trend", "unknown")
@@ -304,6 +309,7 @@ SCENARIO #{scenario_id}:
 - Confidence: {confidence:.2f}
 - Entry zone: ${entry_min:.2f} - ${entry_max:.2f}
 - Stop loss: ${sl_recommended:.2f}
+- Invalidation price: ${invalidation_price:.2f}
 - Targets: {[f"${t:.2f}" for t in target_prices]}
 
 MARKET CONTEXT:
@@ -323,12 +329,15 @@ YOUR TASK:
    - sl_below_entry_short: For SHORT, SL must be ABOVE entry zone
    - targets_below_entry_long: For LONG, targets must be ABOVE entry
    - targets_above_entry_short: For SHORT, targets must be BELOW entry
+   - invalidation_at_entry_long: For LONG, invalidation must be BELOW entry_min (can't have entry=invalidation!)
+   - invalidation_at_entry_short: For SHORT, invalidation must be ABOVE entry_max
    NOTE: Do NOT reject for entry_level_not_exists - AI can use derived levels (BB, pivots, etc.)
 
 2. If no hard violations, check for ISSUES (mode="adjust"):
    - Entry zone too wide for ATR (>3x ATR)
    - Entry zone too far from current price
    - Confidence seems too high/low for setup
+   - Invalidation too close to entry (should have buffer ~0.5% min)
    - Any logical inconsistencies
    NOTE: Do NOT penalize for R:R - Python handles TP1 RR validation separately.
 
