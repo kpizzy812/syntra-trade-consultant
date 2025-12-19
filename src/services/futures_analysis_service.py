@@ -587,6 +587,9 @@ class FuturesAnalysisService:
                 market_context=market_context,
             )
 
+            # 🔧 Convert numpy types to native Python for JSON serialization
+            result = self._convert_numpy_types(result)
+
             return result
 
         except Exception as e:
@@ -1135,6 +1138,8 @@ class FuturesAnalysisService:
             return {k: self._convert_numpy_types(v) for k, v in obj.items()}
         elif isinstance(obj, list):
             return [self._convert_numpy_types(item) for item in obj]
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
         elif isinstance(obj, (np.integer, np.int64, np.int32)):
             return int(obj)
         elif isinstance(obj, (np.floating, np.float64, np.float32)):
