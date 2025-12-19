@@ -814,7 +814,10 @@ export const api = {
       language?: string;
       chat_id?: number;
     }) => {
-      const response = await apiClient.post('/api/futures-signals/analyze', params);
+      // Longer timeout for futures analysis (can take several minutes)
+      const response = await apiClient.post('/api/futures-signals/analyze', params, {
+        timeout: 300000, // 5 minutes
+      });
       return response.data;
     },
 
