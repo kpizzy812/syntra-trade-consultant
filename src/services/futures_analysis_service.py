@@ -2234,9 +2234,13 @@ Return strict JSON format."""
         for scenario in scenarios:
             try:
                 # Build candidate levels for validator
+                # Note: candidates["supports"] and ["resistances"] already include EMA/VWAP from dynamic_levels
+                all_valid_levels = list(candidates.get("supports", [])) + list(candidates.get("resistances", []))
+
                 candidate_levels = {
                     "support_near": candidates.get("supports", []),
                     "resistance_near": candidates.get("resistances", []),
+                    "all_valid": sorted(set(all_valid_levels)),  # All valid entry levels (S/R + EMA + VWAP)
                 }
 
                 # Add market context info

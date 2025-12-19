@@ -295,6 +295,7 @@ class ScenarioValidator:
         # Candidate levels (for reference)
         support_near = candidate_levels.get("support_near", [])
         resistance_near = candidate_levels.get("resistance_near", [])
+        all_valid = candidate_levels.get("all_valid", [])
 
         prompt = f"""You are a trading scenario validator. Your job is to check if a scenario is logically coherent.
 
@@ -310,16 +311,17 @@ MARKET CONTEXT:
 - Trend: {trend}
 - ATR%: {atr_pct:.2f}%
 
-AVAILABLE LEVELS:
+AVAILABLE LEVELS (entry can use ANY of these):
 - Support (near): {[f"${s:.2f}" for s in support_near[:5]]}
 - Resistance (near): {[f"${r:.2f}" for r in resistance_near[:5]]}
+- All valid levels (S/R + EMA + VWAP): {[f"${v:.2f}" for v in all_valid[:10]]}
 
 YOUR TASK:
 
 1. Check for HARD VIOLATIONS (mode="strict", is_valid=false):
    - sl_above_entry_long: For LONG, SL must be BELOW entry zone
    - sl_below_entry_short: For SHORT, SL must be ABOVE entry zone
-   - entry_level_not_exists: Entry prices should reference real levels
+   - entry_level_not_exists: Entry prices should reference levels from "All valid levels" list
    - targets_below_entry_long: For LONG, targets must be ABOVE entry
    - targets_above_entry_short: For SHORT, targets must be BELOW entry
 
