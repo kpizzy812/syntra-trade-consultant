@@ -68,6 +68,9 @@ class PositionSnapshot:
     sl_current: Optional[float]
     tp_current: Optional[List[Dict]]
     updated_at: str
+    # Ladder entry fill percentage (0-100)
+    # 100 = all entries filled, trailing SL allowed inside entry zone
+    filled_pct: float = 100.0
 
 
 @dataclass
@@ -843,7 +846,8 @@ class SupervisorService:
         self,
         new_sl: float,
         scenario: ScenarioSnapshot,
-        side: str
+        side: str,
+        filled_pct: float = 100.0
     ) -> bool:
         """
         Validate that proposed SL is not inside entry zone.
@@ -851,14 +855,23 @@ class SupervisorService:
         For LONG: SL must be BELOW entry_zone_low
         For SHORT: SL must be ABOVE entry_zone_high
 
-        TODO: When filled_pct is available in PositionSnapshot,
-        allow SL inside entry zone if filled_pct >= 100%
-        (meaning all entries are filled, trailing is OK).
+        EXCEPTION: If filled_pct >= 100%, all entries are filled,
+        so trailing SL inside entry zone is allowed.
+
+        Args:
+            new_sl: Proposed new stop loss price
+            scenario: Scenario with entry zone info
+            side: "Long" or "Short"
+            filled_pct: Percentage of ladder entries filled (0-100)
 
         Returns:
-            True if SL is valid (not in entry zone)
-            False if SL would be inside entry zone
+            True if SL is valid (not in entry zone, or trailing allowed)
+            False if SL would be inside entry zone with pending entries
         """
+        # If all entries filled, trailing is allowed anywhere
+        if filled_pct >= 100.0:
+            return True
+
         entry_zone_low = scenario.entry_zone_low
         entry_zone_high = scenario.entry_zone_high
 
@@ -866,10 +879,10 @@ class SupervisorService:
             return True  # No entry zone info, allow
 
         if side == "Long":
-            # LONG: SL must be below entry_zone_low
+            # LONG: SL must be below entry_zone_low (if pending entries exist)
             return new_sl < entry_zone_low
         else:
-            # SHORT: SL must be above entry_zone_high
+            # SHORT: SL must be above entry_zone_high (if pending entries exist)
             return new_sl > entry_zone_high
 
     def _suggest_tighter_sl(
@@ -901,13 +914,13 @@ class SupervisorService:
             if new_sl >= current_sl:
                 return None
 
-        # GUARD: Don't move SL into entry zone if there might be pending entries
-        # TODO: Add filled_pct check when available in PositionSnapshot
-        # For now, prevent SL from entering entry zone entirely
-        if not self._validate_sl_not_in_entry_zone(new_sl, scenario, side):
+        # GUARD: Don't move SL into entry zone if there are pending entries
+        # If filled_pct >= 100%, all entries filled, trailing is allowed
+        if not self._validate_sl_not_in_entry_zone(new_sl, scenario, side, position.filled_pct):
             logger.debug(
                 f"SL recommendation rejected: new_sl={new_sl:.2f} would be inside entry zone "
-                f"[{scenario.entry_zone_low:.2f}, {scenario.entry_zone_high:.2f}]"
+                f"[{scenario.entry_zone_low:.2f}, {scenario.entry_zone_high:.2f}], "
+                f"filled_pct={position.filled_pct:.1f}%"
             )
             return None
 
