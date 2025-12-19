@@ -1433,13 +1433,14 @@ class FuturesAnalysisService:
                 atr=atr
             )
 
-            # 🆕 LLM VALIDATION: Проверяем логическую coherence сценариев
-            final_scenarios = await self._llm_validate_scenarios(
-                scenarios=final_scenarios,
-                market_context=market_context,
-                candidates=candidates,
-                current_price=current_price,
-            )
+            # 🆕 LLM VALIDATION: DISABLED - Python validation is sufficient
+            # TODO: Можно включить позже для дополнительных проверок
+            # final_scenarios = await self._llm_validate_scenarios(
+            #     scenarios=final_scenarios,
+            #     market_context=market_context,
+            #     candidates=candidates,
+            #     current_price=current_price,
+            # )
 
             # 🆕 LEARNING: Калибровка confidence и SL/TP suggestions
             final_scenarios = await self._apply_learning_calibration(
