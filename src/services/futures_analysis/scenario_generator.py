@@ -677,11 +677,11 @@ Each scenario MUST specify entry_type:
 Check market_data.pre_gates BEFORE creating each scenario:
 
 **HARD GATES (scenario MUST NOT be created if violated):**
-1. If pre_gates.{bias}.entry_squeezed = true AND entry_type = "limit_pullback":
+1. If pre_gates.{{bias}}.entry_squeezed = true AND entry_type = "limit_pullback":
    → DO NOT create this scenario (opposing level too close, no room to profit)
    → Only "trigger_*" entry types allowed when squeezed
 
-2. If pre_gates.{bias}.path_blockers has 2+ levels:
+2. If pre_gates.{{bias}}.path_blockers has 2+ levels:
    → TP1 MUST be at or before FIRST blocker
    → If no valid TP1 exists → DO NOT create this scenario
 
