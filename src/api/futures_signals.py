@@ -387,9 +387,9 @@ async def analyze_futures_signal(
 
         try:
             if chat_id:
-                # Get existing chat
-                chat = await get_chat_by_id(session, chat_id)
-                if not chat or chat.user_id != user.id:
+                # Get existing chat (with user ownership check)
+                chat = await get_chat_by_id(session, chat_id, user.id)
+                if not chat:
                     # Chat not found or doesn't belong to user - create new
                     chat_id = None
 

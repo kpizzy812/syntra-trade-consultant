@@ -11,6 +11,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { useTranslations } from 'next-intl';
 import { vibrate } from '@/shared/telegram/vibration';
 import { useUserStore } from '@/shared/store/userStore';
+import { usePlatform } from '@/lib/platform';
 import { usePostHog } from '@/components/providers/PostHogProvider';
 import { useKeyboardVisible } from '@/hooks/useKeyboardVisible';
 import Image from 'next/image';
@@ -44,10 +45,24 @@ export default function ChatInput({
   const posthog = usePostHog();
   const isKeyboardVisible = useKeyboardVisible();
   const { shouldShowGuide } = useSignalsGuide();
+  const { platformType } = usePlatform();
+
+  // On mobile: Enter = new line, send only via button
+  // On desktop: Enter = send, Shift+Enter = new line
+  const isMobile = platformType === 'telegram' || platformType === 'ios' || platformType === 'android';
 
   // Check if user has premium/VIP tier (required for signals)
-  const userTier = user?.subscription?.tier?.toLowerCase() || 'free';
-  const canUseSignals = userTier === 'premium' || userTier === 'vip';
+  // tier can be: FREE, BASIC, PREMIUM, VIP (uppercase from backend)
+  const userTier = user?.subscription?.tier?.toUpperCase() || 'FREE';
+  const canUseSignals = userTier === 'PREMIUM' || userTier === 'VIP';
+
+  // Debug: log user tier info
+  console.log('🔍 Signals check:', {
+    tier: user?.subscription?.tier,
+    userTier,
+    canUseSignals,
+    subscription: user?.subscription
+  });
 
   // Auto-resize textarea
   useEffect(() => {
@@ -119,9 +134,19 @@ export default function ChatInput({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit();
+    // On mobile: Enter always creates new line, send only via button
+    // On desktop: Enter sends, Shift+Enter creates new line
+    if (e.key === 'Enter') {
+      if (isMobile) {
+        // Mobile: Enter = new line (default behavior, don't prevent)
+        return;
+      } else {
+        // Desktop: Enter = send, Shift+Enter = new line
+        if (!e.shiftKey) {
+          e.preventDefault();
+          handleSubmit();
+        }
+      }
     }
   };
 
@@ -385,12 +410,13 @@ export default function ChatInput({
                     initial={{ opacity: 0, y: 10, scale: 0.9 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.9 }}
-                    className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-3 py-2 bg-gray-900 border border-orange-500/30 rounded-xl shadow-lg whitespace-nowrap z-50"
+                    className="absolute bottom-full left-0 mb-2 px-3 py-2 bg-gray-900 border border-orange-500/30 rounded-xl shadow-lg whitespace-nowrap z-50"
                   >
                     <p className="text-xs text-orange-300 font-medium">
                       {tSignals('premium_required')}
                     </p>
-                    <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 w-2 h-2 bg-gray-900 border-r border-b border-orange-500/30 rotate-45" />
+                    {/* Arrow pointing to button */}
+                    <div className="absolute bottom-0 left-4 translate-y-1/2 w-2 h-2 bg-gray-900 border-r border-b border-orange-500/30 rotate-45" />
                   </motion.div>
                 )}
               </AnimatePresence>

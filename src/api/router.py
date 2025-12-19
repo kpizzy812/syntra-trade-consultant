@@ -197,6 +197,22 @@ async def authenticate_telegram(
         else:
             logger.warning(f"[Mini App] Invalid referral code: {referral_code}")
 
+    # Build subscription data
+    subscription_data = None
+    if user.subscription:
+        subscription_data = {
+            "tier": user.subscription.tier,
+            "is_active": user.subscription.is_active,
+            "expires_at": user.subscription.expires_at.isoformat() if user.subscription.expires_at else None,
+        }
+    else:
+        # Default FREE tier
+        subscription_data = {
+            "tier": "free",
+            "is_active": True,
+            "expires_at": None,
+        }
+
     return {
         "success": True,
         "user": {
@@ -208,6 +224,7 @@ async def authenticate_telegram(
             "language": user.language,
             "is_premium": user.is_premium,
             "balance": 0,  # TODO: реальный баланс когда будет реализован
+            "subscription": subscription_data,
         }
     }
 

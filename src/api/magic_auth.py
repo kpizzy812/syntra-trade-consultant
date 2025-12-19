@@ -474,6 +474,22 @@ async def _verify_magic_link_internal(
         log_msg += " [TRIAL BLOCKED - multi-account abuse]"
     logger.info(log_msg)
 
+    # Build subscription data
+    subscription_data = None
+    if user.subscription:
+        subscription_data = {
+            "tier": user.subscription.tier,
+            "is_active": user.subscription.is_active,
+            "expires_at": user.subscription.expires_at.isoformat() if user.subscription.expires_at else None,
+        }
+    else:
+        # Default FREE tier
+        subscription_data = {
+            "tier": "free",
+            "is_active": True,
+            "expires_at": None,
+        }
+
     return MagicLinkVerifyResponseModel(
         success=True,
         token=jwt_token,
@@ -484,6 +500,7 @@ async def _verify_magic_link_internal(
             "language": user.language,
             "is_premium": user.is_premium,
             "created_at": user.created_at.isoformat() if user.created_at else None,
+            "subscription": subscription_data,
         },
         trial_blocked=trial_blocked,
         abuse_warning=abuse_warning,

@@ -34,6 +34,7 @@ from src.bot.handlers import (
     points,
     points_admin,
     task_review,
+    futures,
 )
 from src.bot.middleware.database import DatabaseMiddleware
 from src.bot.middleware.subscription import SubscriptionMiddleware
@@ -65,6 +66,7 @@ async def setup_bot_commands(bot: Bot) -> None:
     """
     commands = [
         BotCommand(command="start", description="🚀 Start the bot"),
+        BotCommand(command="futures", description="📊 Futures Signals"),
         BotCommand(command="help", description="💡 Get help and information"),
         BotCommand(command="limits", description="⚡ Check your usage limits"),
     ]
@@ -228,6 +230,7 @@ async def main() -> None:
     dp.include_router(task_review.router)  # Task review callbacks (approve/reject)
     dp.include_router(help_cmd.router)
     dp.include_router(limits.router)  # Limits command (/limits)
+    dp.include_router(futures.router)  # Futures signals (/futures)
     dp.include_router(points.router)  # $SYNTRA points commands (/points, /level)
     dp.include_router(
         crypto.router

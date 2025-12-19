@@ -2843,7 +2843,7 @@ Return strict JSON format."""
 
             # 3. Validate targets (only TP1 - TP2/TP3 can be at distant levels)
             targets = sc.get("targets", [])
-            tp1_tolerance = tolerance * 1.5  # Tolerance только для TP1
+            tp1_tolerance = tolerance * 3.0  # TP1 может быть дальше от ближайшего уровня
 
             # Валидируем только TP1 на близость к уровню
             # TP2/TP3 могут быть на дальних целях - это нормальная торговая практика
