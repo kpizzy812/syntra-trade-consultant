@@ -47,6 +47,12 @@ from src.services.futures_request_router import (
     FuturesRequestValidation,
 )
 from src.services.futures_analysis_service import futures_analysis_service
+from src.database.crud import (
+    create_chat,
+    get_chat_by_id,
+    add_chat_message_to_chat,
+    update_chat_title,
+)
 
 
 router = APIRouter(prefix="/futures-signals", tags=["Futures Signals"])
@@ -88,6 +94,10 @@ class FuturesSignalRequest(BaseModel):
         description="Response language",
         example="ru"
     )
+    chat_id: Optional[int] = Field(
+        default=None,
+        description="Chat ID to save messages to. If not provided, new chat will be created."
+    )
 
 
 class ClarifyingResponse(BaseModel):
@@ -116,6 +126,8 @@ class SignalGeneratedResponse(BaseModel):
     data_quality: dict
     limits_remaining: int
     limit_incremented: bool = True
+    chat_id: Optional[int] = None
+    chat_title: Optional[str] = None
 
 
 class NotFuturesResponse(BaseModel):
@@ -369,7 +381,71 @@ async def analyze_futures_signal(
             f"scenarios={len(result['scenarios'])}, remaining={limits_remaining}"
         )
 
-        # 8. Build response
+        # 8. Save to chat (create if needed)
+        chat_id = request.chat_id
+        chat_title = None
+
+        try:
+            if chat_id:
+                # Get existing chat
+                chat = await get_chat_by_id(session, chat_id)
+                if not chat or chat.user_id != user.id:
+                    # Chat not found or doesn't belong to user - create new
+                    chat_id = None
+
+            if not chat_id:
+                # Create new chat with generated title
+                chat_title = f"📊 {ticker} {timeframe.upper()}"
+                chat = await create_chat(session, user.id, chat_title)
+                chat_id = chat.id
+                logger.info(f"[Futures Signals] Created chat {chat_id}: {chat_title}")
+            else:
+                chat_title = chat.title
+                # Update title if it's still "New Chat"
+                if chat_title == "New Chat":
+                    chat_title = f"📊 {ticker} {timeframe.upper()}"
+                    await update_chat_title(session, chat_id, chat_title)
+
+            # Save user message
+            await add_chat_message_to_chat(
+                session,
+                chat_id=chat_id,
+                role="user",
+                content=request.message
+            )
+
+            # Save AI response as JSON (frontend will parse and render it)
+            import json
+            ai_response = json.dumps({
+                "type": "futures_signal",
+                "analysis_id": result.get("analysis_id", ""),
+                "ticker": ticker,
+                "timeframe": timeframe,
+                "mode": mode,
+                "current_price": result.get("current_price", 0),
+                "scenarios": result.get("scenarios", []),
+                "market_context": result.get("market_context", {}),
+                "key_levels": result.get("key_levels", {}),
+                "data_quality": result.get("data_quality", {}),
+            }, ensure_ascii=False)
+
+            await add_chat_message_to_chat(
+                session,
+                chat_id=chat_id,
+                role="assistant",
+                content=ai_response,
+                model="futures-signal"
+            )
+
+            await session.commit()
+            logger.info(f"[Futures Signals] Saved messages to chat {chat_id}")
+
+        except Exception as e:
+            logger.warning(f"[Futures Signals] Failed to save chat: {e}")
+            # Don't fail the request if chat save fails
+            # Just log and continue with response
+
+        # 9. Build response
         return SignalGeneratedResponse(
             status="success",
             analysis_id=result.get("analysis_id", ""),
@@ -384,7 +460,9 @@ async def analyze_futures_signal(
             key_levels=result.get("key_levels", {}),
             data_quality=result.get("data_quality", {}),
             limits_remaining=limits_remaining,
-            limit_incremented=True
+            limit_incremented=True,
+            chat_id=chat_id,
+            chat_title=chat_title
         )
 
     except HTTPException:

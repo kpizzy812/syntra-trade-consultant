@@ -140,6 +140,124 @@ export default function ChatPage() {
     }
   }, [isChecking, isAuthenticated, platformType, router]);
 
+  // Format saved futures signal JSON to human-readable markdown
+  const formatSavedFuturesSignal = useCallback((content: string): string => {
+    try {
+      const data = JSON.parse(content);
+      if (data.type !== 'futures_signal' || !data.scenarios) {
+        return content; // Not a signal, return as-is
+      }
+
+      let responseContent = '';
+
+      data.scenarios.forEach((scenario: {
+        bias?: string;
+        name?: string;
+        mode?: string;
+        confidence?: number;
+        scenario_weight?: number;
+        entry_plan?: { orders?: Array<{ price: number; size_pct?: number; allocation?: number }> };
+        stop_loss?: { recommended?: number; aggressive?: number };
+        targets?: Array<{ level: string | number; price: number; rr: number; partial_close_pct?: number; allocation?: number }>;
+        leverage?: { recommended?: string; max_safe?: string; max?: string };
+        ev_metrics?: { ev_r?: number; ev_grade?: string };
+        outcome_probs?: { sl_early?: number; tp1_final?: number; tp2_final?: number; tp3_final?: number };
+        why?: { bullish_factors?: string[]; bearish_factors?: string[] };
+      }, scenarioIndex: number) => {
+        const biasEmoji = scenario.bias === 'long' ? '🟢' : '🔴';
+        const biasText = scenario.bias === 'long' ? 'LONG' : 'SHORT';
+
+        responseContent += `## ${biasEmoji} ${scenario.name || biasText} ${data.ticker}\n\n`;
+        responseContent += `**Timeframe:** ${data.timeframe}\n`;
+        responseContent += `**Mode:** ${scenario.mode || data.mode || 'standard'}\n`;
+        responseContent += `**Confidence:** ${Math.round((scenario.confidence || 0.7) * 100)}%\n`;
+
+        if (scenario.scenario_weight) {
+          responseContent += `**⚖️ Вес сценария:** ${Math.round(scenario.scenario_weight * 100)}%\n`;
+        }
+        responseContent += '\n';
+
+        // Entry Plan
+        if (scenario.entry_plan?.orders) {
+          responseContent += `### 📍 Entry Plan\n`;
+          scenario.entry_plan.orders.forEach((order, i: number) => {
+            const sizePct = order.size_pct || order.allocation || 0;
+            responseContent += `- **Entry ${i + 1}:** $${order.price.toLocaleString()} (${sizePct}%)\n`;
+          });
+          responseContent += '\n';
+        }
+
+        // Stop Loss
+        if (scenario.stop_loss) {
+          responseContent += `### 🛑 Stop Loss\n`;
+          responseContent += `- **Recommended:** $${scenario.stop_loss.recommended?.toLocaleString()}\n`;
+          if (scenario.stop_loss.aggressive) {
+            responseContent += `- **Aggressive:** $${scenario.stop_loss.aggressive.toLocaleString()}\n`;
+          }
+          responseContent += '\n';
+        }
+
+        // Take Profit Targets
+        if (scenario.targets && scenario.targets.length > 0) {
+          responseContent += `### 🎯 Take Profit Targets\n`;
+          scenario.targets.forEach((tp) => {
+            const closePct = tp.partial_close_pct || tp.allocation || 0;
+            responseContent += `- **TP${tp.level}:** $${tp.price.toLocaleString()} (R:R ${tp.rr}x, ${closePct}%)\n`;
+          });
+          responseContent += '\n';
+        }
+
+        // Leverage
+        if (scenario.leverage) {
+          responseContent += `### 📈 Leverage\n`;
+          responseContent += `- **Recommended:** ${scenario.leverage.recommended}\n`;
+          responseContent += '\n';
+        }
+
+        // EV Metrics
+        if (scenario.ev_metrics) {
+          const evR = scenario.ev_metrics.ev_r ?? 0;
+          const evGrade = scenario.ev_metrics.ev_grade ?? 'N/A';
+          responseContent += `### 📈 EV Metrics\n`;
+          responseContent += `- **EV:** ${evR > 0 ? '+' : ''}${evR.toFixed(2)}R (Grade: ${evGrade})\n\n`;
+        }
+
+        // Outcome Probs
+        if (scenario.outcome_probs && scenario.outcome_probs.sl_early !== undefined) {
+          const slProb = Math.round((scenario.outcome_probs.sl_early || 0) * 100);
+          const tp1Prob = Math.round((scenario.outcome_probs.tp1_final || 0) * 100);
+          const tp2Prob = Math.round((scenario.outcome_probs.tp2_final || 0) * 100);
+          const tp3Prob = Math.round((scenario.outcome_probs.tp3_final || 0) * 100);
+          responseContent += `### 📊 Outcome Probabilities\n`;
+          responseContent += `- SL: ${slProb}% | TP1: ${tp1Prob}% | TP2: ${tp2Prob}%`;
+          if (tp3Prob > 0) {
+            responseContent += ` | TP3: ${tp3Prob}%`;
+          }
+          responseContent += '\n\n';
+        }
+
+        // Rationale
+        const factors = scenario.why?.bullish_factors || scenario.why?.bearish_factors || [];
+        if (factors.length > 0) {
+          responseContent += `### 💡 Rationale\n`;
+          factors.slice(0, 3).forEach((factor: string) => {
+            responseContent += `- ${factor}\n`;
+          });
+          responseContent += '\n';
+        }
+
+        // Separator between scenarios
+        if (scenarioIndex < data.scenarios.length - 1) {
+          responseContent += '---\n\n';
+        }
+      });
+
+      return responseContent;
+    } catch {
+      return content; // Not JSON, return as-is
+    }
+  }, []);
+
   // Load chat history for specific chat - memoized to prevent race conditions
   const loadChatHistory = useCallback(async (chatId: number) => {
     try {
@@ -148,6 +266,7 @@ export default function ChatPage() {
 
       if (response.messages && response.messages.length > 0) {
         // Convert API messages to Message format
+        // Parse saved futures signals JSON to human-readable format
         const loadedMessages: Message[] = response.messages.map((msg: {
           id: number;
           role: 'user' | 'assistant';
@@ -156,7 +275,9 @@ export default function ChatPage() {
         }) => ({
           id: `msg-${msg.id}`,
           role: msg.role,
-          content: msg.content,
+          content: msg.role === 'assistant'
+            ? formatSavedFuturesSignal(msg.content)
+            : msg.content,
           timestamp: msg.timestamp,
         }));
         setMessages(loadedMessages);
@@ -171,7 +292,7 @@ export default function ChatPage() {
     } finally {
       setIsLoadingHistory(false);
     }
-  }, [t, getInitialMessages]);
+  }, [t, getInitialMessages, formatSavedFuturesSignal]);
 
   // Load chat history when chat_id changes or restore from localStorage
   useEffect(() => {
@@ -305,15 +426,25 @@ export default function ChatPage() {
           const tSignals = t;
           const userLang = user?.language || 'ru';
 
-          // Call futures signals API
+          // Call futures signals API with chat_id for persistence
           const result = await api.futuresSignals.analyze({
             message: content.trim(),
             language: userLang,
+            chat_id: currentChatId || undefined,
           });
+
+          // Update chat_id and title from response
+          if (result.chat_id && !currentChatId) {
+            setCurrentChatId(result.chat_id);
+          }
+          if (result.chat_title) {
+            // Refresh sidebar to show new chat
+            window.dispatchEvent(new CustomEvent('refreshChatList'));
+          }
 
           let responseContent = '';
 
-          if (result.success) {
+          if (result.status === 'success') {
             // Format successful scenario response
             if (result.scenarios && result.scenarios.length > 0) {
               // Format all scenarios (not just the first one)
@@ -434,9 +565,23 @@ export default function ChatPage() {
               responseContent = `> ℹ️ ${result.default_message}\n\n` + responseContent;
             }
 
+          } else if (result.status === 'clarification_needed') {
+            // Need clarification
+            responseContent = `### 🤔 ${tSignals('signals.clarification_needed')}\n\n`;
+            if (result.questions && result.questions.length > 0) {
+              result.questions.forEach((q: string) => {
+                responseContent += `- ${q}\n`;
+              });
+            }
+          } else if (result.status === 'not_futures_request') {
+            // Not a signal request
+            responseContent = `ℹ️ ${result.message || tSignals('signals.not_signal_request')}\n\n`;
+            if (result.suggestion) {
+              responseContent += `💡 ${result.suggestion}`;
+            }
           } else {
             // Error response
-            responseContent = `❌ ${result.error || tSignals('signals.error')}`;
+            responseContent = `❌ ${result.error || result.message || tSignals('signals.error')}`;
 
             // If limit issue, show remaining
             if (result.remaining !== undefined) {
@@ -456,7 +601,7 @@ export default function ChatPage() {
           // 📊 Track signals request
           if (posthog.__loaded) {
             posthog.capture('signals_request_completed', {
-              success: result.success,
+              success: result.status === 'success',
               ticker: result.ticker,
               tier: user?.subscription?.tier || 'free',
               platform: 'miniapp',

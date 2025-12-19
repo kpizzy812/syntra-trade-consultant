@@ -812,6 +812,7 @@ export const api = {
       timeframe?: string;
       mode?: 'conservative' | 'standard' | 'high_risk' | 'meme';
       language?: string;
+      chat_id?: number;
     }) => {
       const response = await apiClient.post('/api/futures-signals/analyze', params);
       return response.data;

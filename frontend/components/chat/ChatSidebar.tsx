@@ -60,6 +60,15 @@ export default function ChatSidebar({
     }
   }, [isOpen]);
 
+  // Listen for refreshChatList event (from signals mode when new chat created)
+  useEffect(() => {
+    const handleRefresh = () => {
+      loadChats();
+    };
+    window.addEventListener('refreshChatList', handleRefresh);
+    return () => window.removeEventListener('refreshChatList', handleRefresh);
+  }, []);
+
   // Handle chat selection
   const handleSelectChat = (chatId: number) => {
     vibrate('light');
