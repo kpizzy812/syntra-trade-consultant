@@ -8,7 +8,7 @@ Archetype Priors — глобальные priors по архетипам сет�
 """
 
 from enum import Enum
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Union
 from dataclasses import dataclass
 
 
@@ -41,16 +41,48 @@ class ArchetypePriors:
     typical_rr: float = 1.5      # Типичный RR для архетипа
     avg_hold_hours: float = 4.0  # Среднее время в позиции
 
-    def validate(self) -> bool:
-        """Проверить что probs валидны."""
-        total = self.prob_sl + self.prob_tp1 + self.prob_tp2 + self.prob_tp3 + self.prob_be
+    def validate(self) -> tuple:
+        """
+        Проверить что probs валидны.
+
+        Returns:
+            (is_valid: bool, errors: List[str])
+        """
+        errors = []
+        probs = [self.prob_sl, self.prob_tp1, self.prob_tp2, self.prob_tp3, self.prob_be]
+
+        # Check for None/NaN/negative
+        for i, (name, val) in enumerate([
+            ("prob_sl", self.prob_sl),
+            ("prob_tp1", self.prob_tp1),
+            ("prob_tp2", self.prob_tp2),
+            ("prob_tp3", self.prob_tp3),
+            ("prob_be", self.prob_be),
+        ]):
+            if val is None:
+                errors.append(f"{name} is None")
+            elif val != val:  # NaN check
+                errors.append(f"{name} is NaN")
+            elif val < 0:
+                errors.append(f"{name} is negative: {val}")
+            elif val > 1:
+                errors.append(f"{name} > 1.0: {val}")
+
+        if errors:
+            return False, errors
+
+        # Check sum
+        total = sum(probs)
         if abs(total - 1.0) > 0.001:
-            return False
+            errors.append(f"Sum = {total:.4f}, expected 1.0")
+
+        # Check ordering
         if self.prob_tp2 > self.prob_tp1:
-            return False
+            errors.append("prob_tp2 > prob_tp1")
         if self.prob_tp3 > self.prob_tp2:
-            return False
-        return True
+            errors.append("prob_tp3 > prob_tp2")
+
+        return len(errors) == 0, errors
 
     def to_dict(self) -> Dict:
         """Преобразовать в dict для промпта."""
@@ -228,7 +260,9 @@ ARCHETYPE_CRITERIA: Dict[ScenarioArchetype, list] = {
 }
 
 
-def get_archetype_priors(archetype: str) -> Optional[ArchetypePriors]:
+def get_archetype_priors(
+    archetype: Union[str, ScenarioArchetype]
+) -> Optional[ArchetypePriors]:
     """
     Получить priors для архетипа.
 
@@ -248,12 +282,14 @@ def get_archetype_priors(archetype: str) -> Optional[ArchetypePriors]:
         return None
 
 
-def get_archetype_criteria(archetype: str) -> list:
+def get_archetype_criteria(
+    archetype: Union[str, ScenarioArchetype]
+) -> List[str]:
     """
     Получить список критериев для архетипа.
 
     Args:
-        archetype: Название архетипа
+        archetype: Название архетипа (string или enum)
 
     Returns:
         Список критериев или пустой список
@@ -286,28 +322,79 @@ def validate_outcome_probs(probs: Dict[str, float], archetype: str) -> Dict:
     errors = []
     warnings = []
 
-    # 1. Проверка суммы = 1.0
-    total = sum(probs.values())
+    # Ожидаемые ключи (только их суммируем)
+    EXPECTED_KEYS = ["prob_sl", "prob_tp1", "prob_tp2", "prob_tp3", "prob_be"]
+
+    # Пороги отклонения по ключам (более точная настройка)
+    DEVIATION_THRESHOLDS = {
+        "prob_sl": 0.12,
+        "prob_tp1": 0.10,
+        "prob_tp2": 0.08,
+        "prob_tp3": 0.06,
+        "prob_be": 0.10,
+    }
+
+    # 1. Проверка наличия и валидности каждого ключа
+    validated_probs = {}
+    for key in EXPECTED_KEYS:
+        val = probs.get(key)
+
+        # Missing key
+        if val is None:
+            errors.append(f"{key} is missing")
+            validated_probs[key] = 0.0
+            continue
+
+        # Type check + NaN
+        try:
+            val = float(val)
+            if val != val:  # NaN check
+                errors.append(f"{key} is NaN")
+                validated_probs[key] = 0.0
+                continue
+        except (TypeError, ValueError):
+            errors.append(f"{key} not a number: {val}")
+            validated_probs[key] = 0.0
+            continue
+
+        # Range check [0..1]
+        if not (0.0 <= val <= 1.0):
+            errors.append(f"{key} out of range [0..1]: {val:.3f}")
+            validated_probs[key] = max(0.0, min(1.0, val))  # clamp for sum
+            continue
+
+        validated_probs[key] = val
+
+    # 2. Проверка суммы = 1.0 (только ожидаемые ключи)
+    total = sum(validated_probs.values())
     if abs(total - 1.0) > 0.01:
         errors.append(f"Sum of probs = {total:.3f}, expected 1.0")
 
-    # 2. Проверка ordering (tp2 <= tp1, tp3 <= tp2)
-    if probs.get("prob_tp2", 0) > probs.get("prob_tp1", 0):
+    # 3. Проверка ordering (tp2 <= tp1, tp3 <= tp2)
+    if validated_probs.get("prob_tp2", 0) > validated_probs.get("prob_tp1", 0):
         errors.append("prob_tp2 > prob_tp1 (invalid)")
-    if probs.get("prob_tp3", 0) > probs.get("prob_tp2", 0):
+    if validated_probs.get("prob_tp3", 0) > validated_probs.get("prob_tp2", 0):
         errors.append("prob_tp3 > prob_tp2 (invalid)")
 
-    # 3. Проверка отклонения от priors
+    # 4. prob_be sanity range (soft warning)
+    prob_be = validated_probs.get("prob_be", 0)
+    if prob_be < 0.05:
+        warnings.append(f"prob_be={prob_be:.2f} suspiciously low (<0.05)")
+    elif prob_be > 0.35:
+        warnings.append(f"prob_be={prob_be:.2f} suspiciously high (>0.35)")
+
+    # 5. Проверка отклонения от priors (с порогами по ключам)
     prior = get_archetype_priors(archetype)
     if prior:
         prior_dict = prior.to_dict()
         for key, prior_val in prior_dict.items():
-            llm_val = probs.get(key, 0)
+            llm_val = validated_probs.get(key, 0)
             deviation = abs(llm_val - prior_val)
-            if deviation > 0.15:
+            threshold = DEVIATION_THRESHOLDS.get(key, 0.15)
+            if deviation > threshold:
                 warnings.append(
                     f"{key}: LLM={llm_val:.2f} vs prior={prior_val:.2f} "
-                    f"(deviation {deviation:.2f} > 0.15)"
+                    f"(deviation {deviation:.2f} > {threshold})"
                 )
 
     return {
@@ -339,8 +426,10 @@ def build_priors_prompt_block(archetype: str) -> str:
 - prob_be: {prior.prob_be:.2f}
 
 ⚠️ RULES:
-1. Sum MUST = 1.0 exactly
+1. Sum MUST = 1.0 exactly (only these 5 keys)
 2. prob_tp2 <= prob_tp1
 3. prob_tp3 <= prob_tp2
-4. If deviating from priors, explain in "prob_deviation_reason"
+4. Each prob in range [0.0, 1.0]
+5. DO NOT invent extra prob keys (only sl/tp1/tp2/tp3/be)
+6. Use priors as baseline; deviations require "prob_deviation_reason"
 """

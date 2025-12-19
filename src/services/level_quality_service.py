@@ -57,7 +57,13 @@ class EntrySqueeze:
 
 @dataclass
 class LevelCandidates:
-    """Полный набор кандидатов уровней для LLM."""
+    """
+    Полный набор кандидатов уровней для LLM.
+
+    Note: path_blockers и entry_squeeze вычисляются отдельно
+    в calculate_path_blockers() и calculate_entry_squeeze()
+    после того как известны entry/stop/tp.
+    """
     support_near: List[Dict]
     resistance_near: List[Dict]
     swing_highs: List[Dict]
@@ -69,11 +75,6 @@ class LevelCandidates:
     ema_50: Optional[float]
     ema_200: Optional[float]
     vwap: Optional[float]
-    # Pre-calculated для каждого bias
-    path_blockers_long: List[Dict] = field(default_factory=list)
-    path_blockers_short: List[Dict] = field(default_factory=list)
-    entry_squeeze_long: Dict = field(default_factory=dict)
-    entry_squeeze_short: Dict = field(default_factory=dict)
 
 
 class LevelQualityService:
@@ -93,12 +94,11 @@ class LevelQualityService:
     MIN_TOUCHES = 2
     MAX_DISTANCE_ATR = 2.0
 
-    # Веса для quality_score
+    # Веса для quality_score (сумма = 1.0)
     WEIGHTS = {
-        "touches": 0.3,
-        "freshness": 0.3,
-        "distance": 0.2,
-        "has_structure": 0.2,
+        "touches": 0.40,
+        "freshness": 0.35,
+        "distance": 0.25,
     }
 
     def filter_quality_levels(
@@ -185,10 +185,17 @@ class LevelQualityService:
         return filtered[:5]  # Максимум 5 уровней
 
     def _classify_strength(self, touches: int, age_hours: int) -> str:
-        """Классифицировать силу уровня."""
-        if touches >= 4 and age_hours <= 24:
+        """
+        Классифицировать силу уровня.
+
+        Правила (relaxed для age до MAX_AGE_HOURS):
+        - strong: touches >= 4 AND age <= 48h
+        - moderate: touches >= 2 AND age <= MAX_AGE_HOURS (72h)
+        - weak: всё остальное
+        """
+        if touches >= 4 and age_hours <= 48:
             return "strong"
-        elif touches >= 2 and age_hours <= 48:
+        elif touches >= 2 and age_hours <= self.MAX_AGE_HOURS:
             return "moderate"
         else:
             return "weak"
@@ -247,10 +254,15 @@ class LevelQualityService:
                 high > data.iloc[i+1]["high"] and
                 high > data.iloc[i+2]["high"]):
                 age_candles = len(data) - 1 - i
+                rounded_price = round(high, 2)
+                # Стабильный ID по цене + age (не зависит от порядка обхода)
                 swing_highs.append({
-                    "level_id": f"swing_high_{len(swing_highs)}",
-                    "price": round(high, 2),
+                    "level_id": f"swing_high_{age_candles}_{rounded_price}",
+                    "price": rounded_price,
                     "age_candles": age_candles,
+                    "level_type": "resistance",  # для path_blockers
+                    "source": "swing",
+                    "strength": "moderate",
                 })
 
             # Swing Low: ниже 2 свечей слева и справа
@@ -259,10 +271,15 @@ class LevelQualityService:
                 low < data.iloc[i+1]["low"] and
                 low < data.iloc[i+2]["low"]):
                 age_candles = len(data) - 1 - i
+                rounded_price = round(low, 2)
+                # Стабильный ID по цене + age
                 swing_lows.append({
-                    "level_id": f"swing_low_{len(swing_lows)}",
-                    "price": round(low, 2),
+                    "level_id": f"swing_low_{age_candles}_{rounded_price}",
+                    "price": rounded_price,
                     "age_candles": age_candles,
+                    "level_type": "support",  # для path_blockers
+                    "source": "swing",
+                    "strength": "moderate",
                 })
 
         # Берём последние 3 swing high/low, ближайшие к текущей цене
@@ -493,17 +510,34 @@ class LevelQualityService:
         else:
             anchors = StructureAnchors(swing_highs=[], swing_lows=[])
 
-        # 3. Process HTF levels (добавляем level_id и strength=strong)
+        # 3. Process HTF levels (добавляем level_id + фильтруем по distance)
+        # HTF levels могут быть дальше чем near, но не бесконечно (max 4 ATR)
+        HTF_MAX_DISTANCE_ATR = 4.0
         processed_htf = []
-        for i, htf in enumerate(htf_levels[:4]):  # максимум 4 HTF
+        for i, htf in enumerate(htf_levels[:6]):  # проверяем до 6, берём до 4
+            price = htf.get("price")
+
+            # Skip invalid price
+            if not price or price <= 0:
+                continue
+
+            # Distance filter (HTF = wider range)
+            distance_atr = abs(price - current_price) / atr if atr > 0 else 999
+            if distance_atr > HTF_MAX_DISTANCE_ATR:
+                continue
+
             processed_htf.append({
                 "level_id": f"htf_{htf.get('tf', '1D')}_{i}",
-                "price": htf.get("price"),
+                "price": round(price, 2),
                 "level_type": htf.get("type", "resistance"),
                 "source": "htf",
                 "strength": "strong",  # HTF = strong по дефолту
                 "tf": htf.get("tf"),
+                "distance_atr": round(distance_atr, 2),
             })
+
+            if len(processed_htf) >= 4:  # максимум 4 HTF
+                break
 
         return LevelCandidates(
             support_near=filtered_support,
