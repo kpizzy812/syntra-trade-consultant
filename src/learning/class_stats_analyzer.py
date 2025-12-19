@@ -635,6 +635,257 @@ class ClassStatsAnalyzer:
         logger.info(f"Cleanup of old class stats (older than {window_days} days)")
         return 0  # Пока не реализован полный cleanup
 
+    # =========================================================================
+    # PAPER TRADING INTEGRATION
+    # =========================================================================
+
+    async def apply_paper_outcomes(
+        self,
+        session: AsyncSession,
+        outcomes: List[Dict[str, Any]],
+        weight: float = 0.3,
+    ) -> Dict[str, Any]:
+        """
+        Применить paper outcomes к статистике классов.
+
+        Paper trades имеют меньший вес чем real trades.
+        Gates разблокируются при достижении порогов:
+        - paper_wr_gate (N>=30): WR калибровка
+        - paper_ev_gate (N>=50): EV калибровка
+        - paper_sl_opt_gate (N>=200): SL/TP suggestions
+
+        Args:
+            session: AsyncSession
+            outcomes: List of outcome dicts with:
+                - archetype: str
+                - side: str (long/short)
+                - timeframe: str
+                - result: str (win/loss/breakeven/expired)
+                - total_r: float
+                - mae_r: Optional[float]
+                - mfe_r: Optional[float]
+            weight: Weight of paper trades vs real (default 0.3)
+
+        Returns:
+            Dict with stats: {updated: N, created: N}
+        """
+        from src.learning.class_key import ClassKey
+        from src.services.forward_test.config import get_config
+
+        config = get_config()
+        updated = 0
+        created = 0
+        now = datetime.now(UTC)
+
+        # Group outcomes by L1 class key (archetype + side + timeframe)
+        groups: Dict[str, List[Dict]] = defaultdict(list)
+        for outcome in outcomes:
+            key = f"{outcome['archetype']}|{outcome['side']}|{outcome['timeframe']}"
+            groups[key].append(outcome)
+
+        for key_str, group_outcomes in groups.items():
+            archetype, side, timeframe = key_str.split("|")
+
+            # Build L1 class key (coarse level)
+            class_key = ClassKey.create_l1(
+                archetype=archetype,
+                side=side,
+                timeframe=timeframe,
+            )
+
+            # Calculate paper metrics
+            wins = sum(1 for o in group_outcomes if o["result"] == "win")
+            losses = sum(1 for o in group_outcomes if o["result"] == "loss")
+            total_trades = len(group_outcomes)
+            total_r = sum(o["total_r"] for o in group_outcomes)
+
+            paper_entered = total_trades
+            paper_wins = wins
+            paper_losses = losses
+            paper_wr = wins / (wins + losses) if (wins + losses) > 0 else None
+            paper_ev_r = total_r / total_trades if total_trades > 0 else None
+
+            mae_values = [o["mae_r"] for o in group_outcomes if o.get("mae_r") is not None]
+            mfe_values = [o["mfe_r"] for o in group_outcomes if o.get("mfe_r") is not None]
+            paper_mae_r_avg = sum(mae_values) / len(mae_values) if mae_values else None
+            paper_mfe_r_avg = sum(mfe_values) / len(mfe_values) if mfe_values else None
+
+            # Find or create stats record
+            stmt = select(ScenarioClassStats).where(
+                ScenarioClassStats.class_key_hash == class_key.key_hash
+            )
+            result = await session.execute(stmt)
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # Accumulate paper stats
+                existing.paper_entered += paper_entered
+                existing.paper_wins += paper_wins
+                existing.paper_losses += paper_losses
+
+                # Recalculate derived metrics
+                total_paper = existing.paper_entered
+                total_wins = existing.paper_wins
+                total_losses = existing.paper_losses
+
+                if total_wins + total_losses > 0:
+                    existing.paper_wr = total_wins / (total_wins + total_losses)
+
+                # Rolling average for R and MAE/MFE
+                if paper_ev_r is not None:
+                    if existing.paper_ev_r is not None:
+                        # Weighted average
+                        old_weight = (total_paper - paper_entered) / total_paper
+                        new_weight = paper_entered / total_paper
+                        existing.paper_ev_r = (
+                            existing.paper_ev_r * old_weight +
+                            paper_ev_r * new_weight
+                        )
+                    else:
+                        existing.paper_ev_r = paper_ev_r
+
+                if paper_mae_r_avg is not None:
+                    if existing.paper_mae_r_avg is not None:
+                        old_weight = (total_paper - paper_entered) / total_paper
+                        new_weight = paper_entered / total_paper
+                        existing.paper_mae_r_avg = (
+                            existing.paper_mae_r_avg * old_weight +
+                            paper_mae_r_avg * new_weight
+                        )
+                    else:
+                        existing.paper_mae_r_avg = paper_mae_r_avg
+
+                if paper_mfe_r_avg is not None:
+                    if existing.paper_mfe_r_avg is not None:
+                        old_weight = (total_paper - paper_entered) / total_paper
+                        new_weight = paper_entered / total_paper
+                        existing.paper_mfe_r_avg = (
+                            existing.paper_mfe_r_avg * old_weight +
+                            paper_mfe_r_avg * new_weight
+                        )
+                    else:
+                        existing.paper_mfe_r_avg = paper_mfe_r_avg
+
+                existing.paper_last_updated = now
+                updated += 1
+
+                logger.info(
+                    f"[ClassStats] Updated paper stats for {archetype}|{side}|{timeframe}: "
+                    f"entered={existing.paper_entered}, wr={existing.paper_wr:.1%}"
+                )
+            else:
+                # Create new record with paper stats only
+                new_stats = ScenarioClassStats(
+                    class_key_hash=class_key.key_hash,
+                    class_key_string=class_key.key_string,
+                    archetype=archetype,
+                    side=side,
+                    timeframe=timeframe,
+                    trend_bucket=ANY_BUCKET,
+                    vol_bucket=ANY_BUCKET,
+                    funding_bucket=ANY_BUCKET,
+                    sentiment_bucket=ANY_BUCKET,
+                    # Initialize paper stats
+                    paper_entered=paper_entered,
+                    paper_wins=paper_wins,
+                    paper_losses=paper_losses,
+                    paper_wr=paper_wr,
+                    paper_ev_r=paper_ev_r,
+                    paper_mae_r_avg=paper_mae_r_avg,
+                    paper_mfe_r_avg=paper_mfe_r_avg,
+                    paper_last_updated=now,
+                    # Leave real stats at defaults
+                    created_at=now,
+                    last_state_change_at=now,
+                )
+                session.add(new_stats)
+                created += 1
+
+                logger.info(
+                    f"[ClassStats] Created paper stats for {archetype}|{side}|{timeframe}: "
+                    f"entered={paper_entered}"
+                )
+
+        await session.commit()
+
+        return {
+            "updated": updated,
+            "created": created,
+            "total_outcomes": len(outcomes),
+            "weight": weight,
+        }
+
+    def check_paper_gates(
+        self,
+        stats: ScenarioClassStats,
+    ) -> Dict[str, bool]:
+        """
+        Проверить какие gates разблокированы paper данными.
+
+        Learning Gates:
+        - paper_wr_gate (N>=30): WR калибровка
+        - paper_ev_gate (N>=50): EV калибровка
+        - paper_sl_opt_gate (N>=200): SL/TP suggestions
+
+        Args:
+            stats: ScenarioClassStats with paper_* fields
+
+        Returns:
+            Dict with gate statuses
+        """
+        from src.services.forward_test.config import get_config
+        config = get_config()
+
+        paper_entered = stats.paper_entered or 0
+
+        return {
+            "wr_gate_unlocked": paper_entered >= config.learning_gates.paper_wr_gate,
+            "ev_gate_unlocked": paper_entered >= config.learning_gates.paper_ev_gate,
+            "sl_opt_gate_unlocked": paper_entered >= config.learning_gates.paper_sl_opt_gate,
+            "paper_entered": paper_entered,
+            "wr_gate_threshold": config.learning_gates.paper_wr_gate,
+            "ev_gate_threshold": config.learning_gates.paper_ev_gate,
+            "sl_opt_gate_threshold": config.learning_gates.paper_sl_opt_gate,
+        }
+
+    def get_effective_wr(
+        self,
+        stats: ScenarioClassStats,
+        prior_wr: float = 0.5,
+    ) -> float:
+        """
+        Получить effective winrate с учётом paper данных.
+
+        Логика смешивания:
+        - Если есть real >= 10: использовать real (override)
+        - Если есть paper >= 30: paper * 0.7 + prior * 0.3
+        - Иначе: prior
+
+        Args:
+            stats: ScenarioClassStats
+            prior_wr: Prior winrate (default 0.5)
+
+        Returns:
+            Effective winrate
+        """
+        from src.services.forward_test.config import get_config
+        config = get_config()
+
+        real_entered = stats.total_trades or 0
+        paper_entered = stats.paper_entered or 0
+
+        # Real override
+        if real_entered >= config.learning_gates.real_override_gate:
+            return stats.winrate
+
+        # Paper + prior blend
+        if paper_entered >= config.learning_gates.paper_wr_gate:
+            paper_wr = stats.paper_wr or prior_wr
+            return paper_wr * 0.7 + prior_wr * 0.3
+
+        # Only prior
+        return prior_wr
+
 
 # Singleton instance
 class_stats_analyzer = ClassStatsAnalyzer()

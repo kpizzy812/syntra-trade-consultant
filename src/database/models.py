@@ -4594,6 +4594,51 @@ class ScenarioClassStats(Base):
         comment="Когда последний раз менялся is_enabled"
     )
 
+    # === PAPER TRADING (Forward Test) ===
+    paper_entered: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="Кол-во paper trades (entered)"
+    )
+    paper_wins: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="Кол-во paper wins"
+    )
+    paper_losses: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="Кол-во paper losses"
+    )
+    paper_ev_r: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Средний realized R от paper trades"
+    )
+    paper_wr: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Paper winrate"
+    )
+    paper_mae_r_avg: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Avg MAE R от paper trades"
+    )
+    paper_mfe_r_avg: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Avg MFE R от paper trades"
+    )
+    paper_last_updated: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Последнее обновление paper stats"
+    )
+
     # === META ===
     window_days: Mapped[int] = mapped_column(
         Integer,
@@ -4749,3 +4794,15 @@ class ScenarioGenerationLog(Base):
             f"analysis={self.analysis_id}, scenario={self.scenario_local_id}, "
             f"archetype={self.archetype})>"
         )
+
+
+# ===========================
+# FORWARD TEST MODELS (re-export)
+# ===========================
+# Импортируем модели из отдельного модуля для модульности
+from src.services.forward_test.models import (
+    ForwardTestSnapshot,
+    ForwardTestMonitorState,
+    ForwardTestEvent,
+    ForwardTestOutcome,
+)

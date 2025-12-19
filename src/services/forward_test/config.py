@@ -1,0 +1,102 @@
+"""
+Forward Test Configuration
+
+Defaults для forward testing системы.
+"""
+from dataclasses import dataclass, field
+from typing import List
+
+
+@dataclass
+class SlippageConfig:
+    """Конфигурация slippage и fees."""
+    entry_bps: float = 3.0      # slippage на вход (basis points)
+    exit_bps: float = 3.0       # slippage на выход
+    fees_bps: float = 2.0       # комиссии (maker/taker avg)
+    spread_buffer_bps: float = 5.0  # буфер для touch → fill
+
+
+@dataclass
+class UniverseConfig:
+    """Universe для мониторинга."""
+    symbols: List[str] = field(
+        default_factory=lambda: ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    )
+    timeframes: List[str] = field(default_factory=lambda: ["4h"])
+    modes: List[str] = field(default_factory=lambda: ["standard"])
+
+
+@dataclass
+class RetentionConfig:
+    """Настройки хранения данных."""
+    snapshots_days: int = 90    # хранение snapshots
+    events_days: int = 30       # хранение events (trace_json остаётся)
+    outcomes_days: int = 180    # хранение outcomes (для сравнения версий)
+
+
+@dataclass
+class MonitorConfig:
+    """Настройки мониторинга."""
+    interval_sec: int = 60          # интервал тика
+    candle_lag_alert_sec: int = 180  # алерт если лаг свечей > N секунд
+    lock_ttl_sec: int = 90          # TTL для distributed lock
+
+
+@dataclass
+class ScheduleConfig:
+    """Расписание jobs (UTC)."""
+    generation_hours: List[int] = field(
+        default_factory=lambda: [0, 6, 12, 18]
+    )
+    aggregation_hour: int = 23
+    aggregation_minute: int = 55
+    telegram_report_hour: int = 23
+    telegram_report_minute: int = 58
+    cleanup_hour: int = 4
+    cleanup_minute: int = 0
+
+
+@dataclass
+class LearningGatesConfig:
+    """Gates для Learning integration."""
+    paper_wr_gate: int = 30      # N для WR калибровки
+    paper_ev_gate: int = 50      # N для EV калибровки
+    paper_sl_opt_gate: int = 200  # N для SL/TP suggestions
+    real_override_gate: int = 10  # N для override paper → real
+    paper_weight: float = 0.3    # weight paper vs real
+    paper_half_life_days: int = 30   # half-life для paper decay
+    real_half_life_days: int = 90    # half-life для real decay
+
+
+@dataclass
+class ForwardTestConfig:
+    """Главная конфигурация Forward Test."""
+    slippage: SlippageConfig = field(default_factory=SlippageConfig)
+    universe: UniverseConfig = field(default_factory=UniverseConfig)
+    retention: RetentionConfig = field(default_factory=RetentionConfig)
+    monitor: MonitorConfig = field(default_factory=MonitorConfig)
+    schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
+    learning_gates: LearningGatesConfig = field(default_factory=LearningGatesConfig)
+
+    # Same-bar rule: sl_first означает SL проверяется до TP
+    same_bar_rule: str = "sl_first"
+
+    # BE логика по умолчанию
+    be_after_tp1_default: bool = True
+
+    # Partial close % при TP1 (по умолчанию)
+    tp1_partial_close_pct: float = 30.0
+
+    def get_generation_cron(self) -> str:
+        """Cron expression для генерации."""
+        hours = ",".join(str(h) for h in self.schedule.generation_hours)
+        return f"0 {hours} * * *"
+
+
+# Singleton instance
+FORWARD_TEST_CONFIG = ForwardTestConfig()
+
+
+def get_config() -> ForwardTestConfig:
+    """Получить конфигурацию."""
+    return FORWARD_TEST_CONFIG

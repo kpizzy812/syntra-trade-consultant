@@ -19,6 +19,7 @@ from config.logging import setup_logging
 from src.database.engine import dispose_engine
 from src.api.router import router as api_router
 from src.api.security import SecurityMiddleware
+from src.services.forward_test.scheduler import ForwardTestScheduler
 
 # Setup logging at module level (must run before app creation)
 # This ensures logging works when uvicorn imports the module
@@ -41,10 +42,20 @@ async def lifespan(app: FastAPI):
     # NOTE: Security cleanup отключён - очистка происходит автоматически
     # при каждом запросе в SecurityStorage.add_request() и is_banned()
 
+    # Start Forward Test Scheduler (paper trading monitoring)
+    forward_test_scheduler = ForwardTestScheduler()
+    forward_test_scheduler.start()
+    logger.info("Forward Test Scheduler started (generation/monitor/aggregation)")
+
     yield
 
     # Shutdown
     logger.info("Shutting down Syntra API Server...")
+
+    # Stop Forward Test Scheduler
+    forward_test_scheduler.stop()
+    logger.info("Forward Test Scheduler stopped")
+
     await dispose_engine()
     logger.info("Database connections closed")
 
