@@ -1687,12 +1687,20 @@ class FuturesAnalysisService:
 - SHORT scenarios: stop_loss MUST be ABOVE entry_max (stop > max(entry_plan.orders[].price))
 - DO NOT calculate RR - Python will compute it from your levels. Just provide prices.
 
-🎯 **CRITICAL TARGET RULES (TP1 minimum distance)**:
-- TP1 MUST be at least 1x ATR away from average entry price for adequate RR!
-- For LONG: TP1 >= avg_entry + ATR (e.g., entry 120, ATR 2 → TP1 >= 122)
-- For SHORT: TP1 <= avg_entry - ATR (e.g., entry 120, ATR 2 → TP1 <= 118)
-- If nearest target level is too close to entry, use the NEXT level further away
-- Never place TP1 at practically the same price as entry (RR < 0.5 is unacceptable)
+🎯 **CRITICAL TARGET RULES (TP1 minimum R:R)**:
+TP1 is about risk reduction, partial profit, and giving trade a chance to reach TP2/TP3.
+
+**Minimum TP1 distance in terms of Risk (R = |entry - SL|):**
+- Standard/Swing mode: TP1 >= 0.8R (healthy minimum)
+- Aggressive/Intraday mode: TP1 >= 0.6R (acceptable for high winrate setups)
+- Absolute minimum: 0.7R (below this = garbage, will be rejected)
+- Ideal if setup allows: 1.0-1.2R+
+
+**Example (LONG, entry=100, SL=98, Risk=2):**
+- Minimum TP1 = 100 + (2 * 0.8) = 101.60
+- If nearest level is 100.50 (only 0.25R) → use NEXT level further away
+
+**If TP1 < 0.7R and user moves SL to breakeven → EV dies. Don't create such scenarios!**
 
 📋 **ENTRY PLAN STRUCTURE** (instead of simple entry zone):
 Each scenario MUST have an `entry_plan` with:
@@ -2415,20 +2423,30 @@ Return strict JSON format."""
                         llm_probs=sc.get("outcome_probs_raw"),  # если LLM предоставил
                     )
 
-                    # Gate: TP1 RR < 1.0 при BE
+                    # Gate: TP1 RR minimum thresholds (depends on timeframe)
+                    # Aggressive (15m, 1h): min 0.6R, penalty below 0.8R
+                    # Standard (4h, 1d): min 0.7R, penalty below 0.8R
                     tp1_rr = targets[0].get("rr", 0) if targets else 0
                     ev_multiplier = 1.0
                     ev_flags = list(metrics.flags)
 
-                    if tp1_rr < 0.8:
-                        # Hard reject - помечаем как мусорный
+                    is_aggressive_tf = timeframe in ["15m", "1h"]
+                    min_rr = 0.6 if is_aggressive_tf else 0.7  # Absolute minimum
+                    healthy_rr = 0.8  # Healthy minimum for all modes
+
+                    if tp1_rr < min_rr:
+                        # Hard reject - below absolute minimum
                         ev_flags.append("tp1_rr_too_low_reject")
                         sc["rejected"] = True
-                        sc["reject_reason"] = f"TP1 RR {tp1_rr:.2f} < 0.8 (BE enabled)"
-                    elif tp1_rr < 1.0:
-                        # Penalty zone
+                        sc["reject_reason"] = f"TP1 RR {tp1_rr:.2f} < {min_rr} (min for {timeframe})"
+                    elif tp1_rr < healthy_rr:
+                        # Penalty zone (0.6-0.8 for aggressive, 0.7-0.8 for standard)
                         ev_flags.append("tp1_rr_penalty_zone")
-                        ev_multiplier = 0.7  # -30% к EV
+                        ev_multiplier = 0.8  # -20% к EV
+                    elif tp1_rr < 1.0:
+                        # Acceptable but not ideal
+                        ev_flags.append("tp1_rr_acceptable")
+                        ev_multiplier = 0.9  # -10% к EV
 
                     # Применяем penalty
                     adjusted_ev = (metrics.ev_r or 0) * ev_multiplier
