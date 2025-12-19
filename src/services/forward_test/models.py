@@ -15,7 +15,6 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     func,
-    Enum as SQLEnum,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.dialects.postgresql import JSONB
@@ -93,7 +92,7 @@ class ForwardTestSnapshot(Base):
         comment="Локальный ID в batch (1,2,3...)"
     )
     bias: Mapped[str] = mapped_column(
-        SQLEnum(Bias, name="bias_enum", create_type=False),
+        String(10),
         nullable=False,
         comment="LONG/SHORT"
     )
@@ -249,7 +248,7 @@ class ForwardTestMonitorState(Base):
 
     # === STATE MACHINE ===
     state: Mapped[str] = mapped_column(
-        SQLEnum(ScenarioState, name="scenario_state_enum", create_type=False),
+        String(20),
         nullable=False,
         default=ScenarioState.ARMED.value,
         comment="Текущее состояние"
@@ -262,7 +261,7 @@ class ForwardTestMonitorState(Base):
 
     # === BIAS (финальный после валидации) ===
     bias_final: Mapped[str] = mapped_column(
-        SQLEnum(Bias, name="bias_enum", create_type=False),
+        String(10),
         nullable=False,
         comment="Финальный bias после валидации"
     )
@@ -334,7 +333,7 @@ class ForwardTestMonitorState(Base):
 
     # === FILL MODEL ===
     fill_model: Mapped[str] = mapped_column(
-        SQLEnum(FillModel, name="fill_model_enum", create_type=False),
+        String(20),
         nullable=False,
         default=FillModel.TOUCH_FILL.value,
         comment="touch_fill | prob_fill_by_vol"
@@ -459,7 +458,7 @@ class ForwardTestEvent(Base):
         comment="Timestamp события"
     )
     event_type: Mapped[str] = mapped_column(
-        SQLEnum(EventType, name="event_type_enum", create_type=False),
+        String(20),
         nullable=False,
         comment="Тип события"
     )
@@ -508,12 +507,12 @@ class ForwardTestOutcome(Base):
 
     # === RESULT ===
     result: Mapped[str] = mapped_column(
-        SQLEnum(OutcomeResult, name="outcome_result_enum", create_type=False),
+        String(20),
         nullable=False,
         comment="win/loss/breakeven/expired"
     )
     terminal_state: Mapped[str] = mapped_column(
-        SQLEnum(TerminalState, name="terminal_state_enum", create_type=False),
+        String(20),
         nullable=False,
         comment="tp2/tp3/sl/be/expired (НЕ tp1!)"
     )
@@ -525,7 +524,7 @@ class ForwardTestOutcome(Base):
         comment="total_r > 0"
     )
     pnl_class: Mapped[str] = mapped_column(
-        SQLEnum(PnLClass, name="pnl_class_enum", create_type=False),
+        String(10),
         nullable=False,
         comment="win/loss/flat для фильтрации"
     )
@@ -590,7 +589,7 @@ class ForwardTestOutcome(Base):
 
     # === FILL MODEL ===
     fill_model: Mapped[str] = mapped_column(
-        SQLEnum(FillModel, name="fill_model_enum", create_type=False),
+        String(20),
         nullable=False,
         default=FillModel.TOUCH_FILL.value
     )
