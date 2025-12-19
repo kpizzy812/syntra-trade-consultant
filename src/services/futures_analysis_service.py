@@ -1441,10 +1441,8 @@ class FuturesAnalysisService:
 
             # 📊 Нормализуем веса сценариев (Python > LLM)
             final_scenarios = scenario_metrics_service.normalize_weights(final_scenarios)
-            logger.info(
-                f"📊 Weights normalized: "
-                f"{[f'{s.get(\"id\")}={s.get(\"scenario_weight\", 0):.2f}' for s in final_scenarios]}"
-            )
+            weights_info = [f"{s.get('id')}={s.get('scenario_weight', 0):.2f}" for s in final_scenarios]
+            logger.info(f"📊 Weights normalized: {weights_info}")
 
             # 🆕 LLM VALIDATION: DISABLED - Python validation is sufficient
             # TODO: Можно включить позже для дополнительных проверок
