@@ -706,8 +706,9 @@ class FuturesAnalysisService:
             context["sentiment"] = "unknown"
 
         # === VOLATILITY ===
-        _atr_pct = indicators.get("atr_percent", 2.0)  # Reserved for future use
+        atr_pct = indicators.get("atr_percent", 2.0)
         context["volatility"] = indicators.get("volatility", "medium")
+        context["atr_percent"] = atr_pct  # Числовое значение для LLM валидатора
 
         # === BIAS CALCULATION с CAPS и LOGGING ===
         # 🔧 IMPROVED: Каждый фактор ограничен cap'ом для предотвращения перекоса
@@ -1686,6 +1687,13 @@ class FuturesAnalysisService:
 - SHORT scenarios: stop_loss MUST be ABOVE entry_max (stop > max(entry_plan.orders[].price))
 - DO NOT calculate RR - Python will compute it from your levels. Just provide prices.
 
+🎯 **CRITICAL TARGET RULES (TP1 minimum distance)**:
+- TP1 MUST be at least 1x ATR away from average entry price for adequate RR!
+- For LONG: TP1 >= avg_entry + ATR (e.g., entry 120, ATR 2 → TP1 >= 122)
+- For SHORT: TP1 <= avg_entry - ATR (e.g., entry 120, ATR 2 → TP1 <= 118)
+- If nearest target level is too close to entry, use the NEXT level further away
+- Never place TP1 at practically the same price as entry (RR < 0.5 is unacceptable)
+
 📋 **ENTRY PLAN STRUCTURE** (instead of simple entry zone):
 Each scenario MUST have an `entry_plan` with:
 
@@ -2235,7 +2243,7 @@ Return strict JSON format."""
                 validation_context = {
                     "current_price": current_price,
                     "trend": market_context.get("trend", "unknown"),
-                    "atr_percent": market_context.get("volatility_atr_pct", 0),
+                    "atr_percent": market_context.get("atr_percent", 2.0),
                 }
 
                 # Validate with LLM
