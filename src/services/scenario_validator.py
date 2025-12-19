@@ -79,9 +79,9 @@ class ValidationResult:
 STRICT_VIOLATIONS = [
     "sl_above_entry_long",      # SL выше entry в лонге
     "sl_below_entry_short",     # SL ниже entry в шорте
-    "entry_level_not_exists",   # Entry на уровне которого нет в данных
     "targets_below_entry_long", # Targets ниже entry в лонге
     "targets_above_entry_short", # Targets выше entry в шорте
+    # "entry_level_not_exists" - REMOVED: слишком строго, AI может использовать BB/derived levels
     # "probs_sum_invalid" - REMOVED: outcome_probs часто пустые, не критичная проверка
 ]
 
@@ -321,9 +321,9 @@ YOUR TASK:
 1. Check for HARD VIOLATIONS (mode="strict", is_valid=false):
    - sl_above_entry_long: For LONG, SL must be BELOW entry zone
    - sl_below_entry_short: For SHORT, SL must be ABOVE entry zone
-   - entry_level_not_exists: Entry prices should reference levels from "All valid levels" list
    - targets_below_entry_long: For LONG, targets must be ABOVE entry
    - targets_above_entry_short: For SHORT, targets must be BELOW entry
+   NOTE: Do NOT reject for entry_level_not_exists - AI can use derived levels (BB, pivots, etc.)
 
 2. If no hard violations, check for ISSUES (mode="adjust"):
    - Entry zone too wide for ATR (>3x ATR)
