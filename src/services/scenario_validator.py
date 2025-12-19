@@ -181,6 +181,20 @@ class ScenarioValidator:
                 scenario, market_context, candidate_levels
             )
 
+            # Debug: log scenario data being validated
+            entry_plan = scenario.get("entry_plan", {})
+            orders = entry_plan.get("orders", [])
+            entry_prices = [o.get("price", 0) for o in orders]
+            targets = scenario.get("targets", [])
+            target_prices = [t.get("price", 0) for t in targets]
+            logger.debug(
+                f"🔍 Validating scenario #{scenario.get('id')}: "
+                f"bias={scenario.get('bias')}, "
+                f"entry={entry_prices}, "
+                f"targets={target_prices}, "
+                f"sl={scenario.get('stop_loss', {}).get('recommended')}"
+            )
+
             # Call LLM with structured output
             response = await self.openai.structured_completion(
                 prompt=prompt,
@@ -197,6 +211,14 @@ class ScenarioValidator:
                     issues=["Validator returned empty response"],
                     reasoning="Fallback to valid due to empty response"
                 )
+
+            # Debug: log raw LLM response
+            logger.debug(
+                f"🔍 Validator LLM response for #{scenario.get('id')}: "
+                f"mode={response.get('mode')}, is_valid={response.get('is_valid')}, "
+                f"hard_violation={response.get('hard_violation')}, "
+                f"reasoning={response.get('reasoning', '')[:100]}"
+            )
 
             # Parse response into ValidationResult
             result = ValidationResult(
