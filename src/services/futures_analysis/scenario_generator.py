@@ -872,7 +872,7 @@ Return strict JSON format."""
                                         "allowed_reason": {"type": ["string", "null"]},
                                         "action": {"type": "string", "enum": ["ALLOWED", "REJECTED"]}
                                     },
-                                    "required": ["chase_distance_R", "is_chase", "action"],
+                                    "required": ["chase_distance_R", "is_chase", "allowed_reason", "action"],
                                     "additionalProperties": False
                                 },
                                 "weight_factors": {
