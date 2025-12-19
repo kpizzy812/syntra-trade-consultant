@@ -40,6 +40,9 @@ from src.services.trading_modes import (
     get_mode_notes_schema,
 )
 from src.services.market_data_enricher import market_data_enricher
+from src.services.level_quality_service import level_quality_service
+from src.services.scenario_metrics_service import scenario_metrics_service
+from config.archetype_priors import validate_outcome_probs, ScenarioArchetype
 
 # Learning system integration
 from src.learning import confidence_calibrator, sltp_optimizer, ev_calculator
@@ -529,7 +532,8 @@ class FuturesAnalysisService:
                 price_structure=price_structure,
                 liquidation_clusters=liquidation_clusters,
                 mode=mode,
-                enriched_data=enriched_data  # 🆕 Enriched market data
+                enriched_data=enriched_data,
+                klines_df=klines_df,  # 🆕 For level quality service
             )
 
             # ====================================================================
@@ -1344,7 +1348,8 @@ class FuturesAnalysisService:
         price_structure: Optional[Dict] = None,
         liquidation_clusters: Optional[Dict] = None,
         mode: str = "standard",
-        enriched_data: Optional[Dict] = None  # 🆕 Enriched market data
+        enriched_data: Optional[Dict] = None,
+        klines_df: Optional[pd.DataFrame] = None,  # 🆕 For level quality service
     ) -> List[Dict[str, Any]]:
         """
         🤖 AI-DRIVEN: LLM генерирует торговые сценарии с анализом полного контекста
@@ -1376,7 +1381,8 @@ class FuturesAnalysisService:
                 price_structure=price_structure,
                 liquidation_clusters=liquidation_clusters,
                 mode=mode,
-                enriched_data=enriched_data  # 🆕 Enriched market data
+                enriched_data=enriched_data,
+                klines_df=klines_df,  # 🆕 For level quality service
             )
 
             logger.info(f"✅ AI generated {len(scenarios)} scenarios")
@@ -1433,6 +1439,13 @@ class FuturesAnalysisService:
                 atr=atr
             )
 
+            # 📊 Нормализуем веса сценариев (Python > LLM)
+            final_scenarios = scenario_metrics_service.normalize_weights(final_scenarios)
+            logger.info(
+                f"📊 Weights normalized: "
+                f"{[f'{s.get(\"id\")}={s.get(\"scenario_weight\", 0):.2f}' for s in final_scenarios]}"
+            )
+
             # 🆕 LLM VALIDATION: DISABLED - Python validation is sufficient
             # TODO: Можно включить позже для дополнительных проверок
             # final_scenarios = await self._llm_validate_scenarios(
@@ -1486,7 +1499,8 @@ class FuturesAnalysisService:
         price_structure: Optional[Dict] = None,
         liquidation_clusters: Optional[Dict] = None,
         mode: str = "standard",
-        enriched_data: Optional[Dict] = None  # 🆕 Enriched market data
+        enriched_data: Optional[Dict] = None,  # 🆕 Enriched market data
+        klines_df: Optional[pd.DataFrame] = None,  # 🆕 For level quality service
     ) -> List[Dict]:
         """
         🤖 **MAIN AI ENGINE**: LLM анализирует рынок и генерирует торговые сценарии
@@ -1576,6 +1590,38 @@ class FuturesAnalysisService:
             f"S_near={len(support_near)}, S_macro={len(support_macro)}"
         )
 
+        # 🆕 Build quality-filtered level candidates with level_id
+        levels_meta = enriched_data.get("levels_meta", {}) if enriched_data else {}
+        support_meta = levels_meta.get("support", []) if isinstance(levels_meta.get("support"), list) else []
+        resistance_meta = levels_meta.get("resistance", []) if isinstance(levels_meta.get("resistance"), list) else []
+
+        level_candidates = level_quality_service.build_level_candidates(
+            support_near=support_near,
+            resistance_near=resistance_near,
+            support_meta=support_meta,
+            resistance_meta=resistance_meta,
+            htf_levels=key_levels.get("htf_levels", []),
+            current_price=current_price,
+            atr=atr if atr else 0,
+            klines=klines_df,
+            ema_20=ema_levels.get("ema_20", {}).get("price") if ema_levels else None,
+            ema_50=ema_levels.get("ema_50", {}).get("price") if ema_levels else None,
+            ema_200=ema_levels.get("ema_200", {}).get("price") if ema_levels else None,
+            vwap=vwap.get("price") if vwap else None,
+        )
+
+        # 🆕 Build pre-calculated metrics for prompt
+        base_metrics = scenario_metrics_service.build_metrics_for_prompt(
+            current_price=current_price,
+            atr=atr if atr else 0,
+        )
+
+        logger.debug(
+            f"📊 Level candidates: support={len(level_candidates.support_near)}, "
+            f"resistance={len(level_candidates.resistance_near)}, "
+            f"swings={len(level_candidates.swing_highs) + len(level_candidates.swing_lows)}"
+        )
+
         # Собираем все данные в один JSON объект
         market_data = {
             "symbol": symbol,
@@ -1648,7 +1694,21 @@ class FuturesAnalysisService:
             "microstructure": enriched_data.get("microstructure") if enriched_data else None,
             "volatility_context": enriched_data.get("volatility_context") if enriched_data else None,
             "levels_meta": enriched_data.get("levels_meta") if enriched_data else None,
-            "oi": enriched_data.get("oi") if enriched_data else None
+            "oi": enriched_data.get("oi") if enriched_data else None,
+
+            # 🆕 Quality-filtered level candidates with level_id (for structured references)
+            "level_candidates": {
+                "support_near": level_candidates.support_near,
+                "resistance_near": level_candidates.resistance_near,
+                "swing_highs": level_candidates.swing_highs,
+                "swing_lows": level_candidates.swing_lows,
+                "htf_levels": level_candidates.htf_levels,
+                "range_high": level_candidates.range_high,
+                "range_low": level_candidates.range_low,
+            },
+
+            # 🆕 Pre-calculated metrics (LLM should NOT recalculate these)
+            "metrics": base_metrics,
         }
 
         # 🆕 Get mode configuration and build MODE PROFILE block
@@ -1749,24 +1809,71 @@ Each scenario MUST have an `entry_plan` with:
 5. Adapt time_valid_hours to timeframe {timeframe}
 6. Account for contradictions (e.g., bullish trend + RSI 80 + high funding = overheated)
 
-📊 **SCENARIO WEIGHT** (scenario_weight):
-Assign probability weight to each scenario based on how likely it is to play out:
-- scenario_weight: Float 0.10-0.90 (probability this scenario plays out vs others)
-- All scenario_weights across all scenarios MUST sum to exactly 1.0!
-- Example: 2 scenarios (LONG 60%, SHORT 40%) = weights [0.60, 0.40]
-- Example: 3 scenarios (LONG 50%, SHORT 30%, Range 20%) = weights [0.50, 0.30, 0.20]
-- Base this on: trend alignment, support/resistance proximity, market structure, momentum
+🎯 **ARCHETYPE SELECTION** (REQUIRED):
+Each scenario MUST select exactly ONE archetype:
+1. "range_reclaim" — Mean reversion после ложного пробоя рейнджа
+2. "breakout_retest" — Пробой + ретест уровня как новой поддержки/сопротивления
+3. "sweep_reclaim" — Sweep ликвидности + возврат в структуру
+4. "trend_pullback" — Откат к EMA/VWAP в трендовом рынке
+5. "failed_breakdown" — Ложный пробой вниз → разворот
+6. "failed_breakout" — Ложный пробой вверх → разворот
+7. "momentum_continuation" — Продолжение после консолидации
+8. "liquidity_grab" — Захват ликвидности перед движением
 
-📊 **OUTCOME PROBABILITIES** (outcome_probs_raw):
-Estimate terminal outcome probabilities for EV calculation. These are TERMINAL outcomes = MAX TP level reached, NOT exit reason!
-- sl: P(price hits SL before ANY TP) — typical 0.30-0.50
-- tp1: P(reaches TP1 but NOT TP2) — typical 0.20-0.35
-- tp2: P(reaches TP2 but NOT TP3) — typical 0.10-0.25 (set 0 if only 1-2 targets)
-- tp3: P(reaches TP3) — typical 0.05-0.15 (set 0 if less than 3 targets)
-- other: P(manual exit/timeout BEFORE any TP) — typical 0.02-0.10
+Output:
+- archetype: "sweep_reclaim"
+- archetype_criteria_met: ["sweep_below_swing", "reclaim_above", "volume_spike"]
 
-⚠️ CRITICAL: sl + tp1 + tp2 + tp3 + other = 1.0 EXACTLY!
-Base estimates on: trend strength, entry quality, volatility, support/resistance proximity.
+📌 **ENTRY TYPE RULES**:
+Each scenario MUST specify entry_type:
+1. "limit_pullback" — Limit order on pullback to level
+   ✓ ALLOWED only if: reclaim/confirmation ALREADY happened
+   ✓ Example: "Price reclaimed 94000, waiting pullback to 93800"
+   ✗ NOT allowed: limit near current price without prior confirmation
+2. "trigger_breakout" — Stop-limit on breakout above/below level
+   ✓ ALLOWED: waiting for break to confirm direction
+3. "trigger_reclaim" — Stop-limit on reclaim back into structure
+   ✓ ALLOWED: waiting for reclaim after sweep/breakdown
+
+🚫 **NO-CHASE RULE**:
+chase_distance_R = |entry - current_price| / R (where R = |entry - stop|)
+- If chase_distance_R < 0.25 AND entry_type = "limit_pullback" without confirmation → REJECT
+- Acceptable: trigger_breakout, trigger_reclaim, limit_pullback with prior confirmation
+
+🎯 **CONFLUENCE BUDGET** (max 3 reasons):
+Each reason MUST reference a specific ID from market_data.level_candidates:
+- {"type": "structure", "reason": "Reclaim above swing low", "evidence_ref": "swing_low_0"}
+- {"type": "momentum", "reason": "Price above EMA20", "evidence_ref": "ema_20"}
+- {"type": "context", "reason": "Negative funding = shorts crowded", "evidence_ref": "funding_rate"}
+
+📊 **OUTCOME PROBS PRIORS** (baseline by archetype):
+| Archetype          | prob_sl | prob_tp1 | prob_tp2 | prob_tp3 | prob_be |
+|--------------------|---------|----------|----------|----------|---------|
+| sweep_reclaim      | 0.32    | 0.28     | 0.18     | 0.10     | 0.12    |
+| breakout_retest    | 0.38    | 0.25     | 0.16     | 0.08     | 0.13    |
+| trend_pullback     | 0.30    | 0.30     | 0.20     | 0.10     | 0.10    |
+| failed_breakdown   | 0.35    | 0.28     | 0.17     | 0.08     | 0.12    |
+| (others similar)   | ~0.33   | ~0.28    | ~0.18    | ~0.09    | ~0.12   |
+
+⚠️ CRITICAL RULES for outcome_probs_raw:
+1. sl + tp1 + tp2 + tp3 + be = 1.0 EXACTLY
+2. tp2 <= tp1 (fewer trades reach TP2 than TP1)
+3. tp3 <= tp2 (even fewer reach TP3)
+4. be = probability of breakeven exit / chop / manual close
+
+📊 **WEIGHT FACTORS** (discrete, verifiable):
+Provide these factors in weight_factors:
+- confluence_count: 0-3 (number of valid confluence reasons)
+- htf_alignment: -1 (against), 0 (neutral), +1 (aligned)
+- path_clear: true/false (no strong blockers between entry and TP1)
+- invalidation_distance_R: |entry - invalidation| / R
+- tp1_rr: TP1 distance in R
+
+⚠️ **CONFLICT RESOLUTION**:
+If BOTH long AND short scenarios are equally valid:
+- Choose ONE as primary (scenario_weight >= 0.55)
+- Mark other as alt (scenario_weight <= 0.35)
+DO NOT return two equally-weighted opposing scenarios.
 
 🚫 **NO-TRADE SIGNAL** (optional but IMPORTANT):
 If market conditions are UNFAVORABLE, add `no_trade` object with:
@@ -1804,6 +1911,33 @@ Return strict JSON format."""
                                 "id": {"type": "integer"},
                                 "name": {"type": "string"},
                                 "bias": {"type": "string", "enum": ["long", "short"]},
+                                # 🆕 Archetype selection (REQUIRED)
+                                "archetype": {
+                                    "type": "string",
+                                    "enum": [
+                                        "range_reclaim", "breakout_retest", "sweep_reclaim",
+                                        "trend_pullback", "failed_breakdown", "failed_breakout",
+                                        "momentum_continuation", "liquidity_grab"
+                                    ],
+                                    "description": "Scenario archetype - must select exactly one"
+                                },
+                                "archetype_criteria_met": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "minItems": 2,
+                                    "maxItems": 5,
+                                    "description": "Which criteria are met for this archetype"
+                                },
+                                # 🆕 Entry type enforcement
+                                "entry_type": {
+                                    "type": "string",
+                                    "enum": ["limit_pullback", "trigger_breakout", "trigger_reclaim"],
+                                    "description": "Entry order type"
+                                },
+                                "entry_type_justification": {
+                                    "type": "string",
+                                    "description": "Why this entry type is appropriate"
+                                },
                                 # 🔥 NEW: Entry Plan (execution plan with ladder orders)
                                 "entry_plan": {
                                     "type": "object",
@@ -1899,22 +2033,64 @@ Return strict JSON format."""
                                     "type": "array",
                                     "items": {"type": "string"}
                                 },
-                                # 🆕 EV: Terminal outcome probabilities (optional, LLM estimate)
+                                # 🆕 EV: Terminal outcome probabilities (must sum to 1.0)
                                 "outcome_probs_raw": {
                                     "type": "object",
-                                    "description": "Terminal outcome probabilities (must sum to 1.0)",
+                                    "description": "Terminal outcome probabilities. MUST sum to 1.0. tp2<=tp1, tp3<=tp2.",
                                     "properties": {
-                                        "sl": {"type": "number", "minimum": 0.01, "maximum": 0.95, "description": "P(hit SL before any TP)"},
-                                        "tp1": {"type": "number", "minimum": 0.01, "maximum": 0.95, "description": "P(reach TP1 but not TP2)"},
-                                        "tp2": {"type": "number", "minimum": 0, "maximum": 0.95, "description": "P(reach TP2 but not TP3)"},
+                                        "sl": {"type": "number", "minimum": 0.01, "maximum": 0.95, "description": "P(hit SL)"},
+                                        "tp1": {"type": "number", "minimum": 0.01, "maximum": 0.95, "description": "P(reach TP1)"},
+                                        "tp2": {"type": "number", "minimum": 0, "maximum": 0.95, "description": "P(reach TP2)"},
                                         "tp3": {"type": "number", "minimum": 0, "maximum": 0.95, "description": "P(reach TP3)"},
-                                        "other": {"type": "number", "minimum": 0.01, "maximum": 0.35, "description": "P(manual/timeout before any TP)"}
+                                        "be": {"type": "number", "minimum": 0.01, "maximum": 0.35, "description": "P(breakeven/manual close)"}
                                     },
-                                    "required": ["sl", "tp1", "tp2", "tp3", "other"],
+                                    "required": ["sl", "tp1", "tp2", "tp3", "be"],
                                     "additionalProperties": False
                                 },
                                 # 🆕 Trading mode notes (how LLM applied mode params)
                                 "mode_notes": get_mode_notes_schema(),
+                                # 🆕 Confluence budget (max 3 reasons with evidence refs)
+                                "confluence": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "type": {"type": "string", "enum": ["structure", "momentum", "context"]},
+                                            "reason": {"type": "string"},
+                                            "evidence_ref": {"type": "string", "description": "Reference to level_id or indicator"}
+                                        },
+                                        "required": ["type", "reason", "evidence_ref"],
+                                        "additionalProperties": False
+                                    },
+                                    "minItems": 1,
+                                    "maxItems": 3,
+                                    "description": "Max 3 entry reasons with evidence references"
+                                },
+                                # 🆕 Chase check result
+                                "chase_check": {
+                                    "type": "object",
+                                    "properties": {
+                                        "chase_distance_R": {"type": "number", "description": "|entry - current| / R"},
+                                        "is_chase": {"type": "boolean"},
+                                        "allowed_reason": {"type": ["string", "null"]},
+                                        "action": {"type": "string", "enum": ["ALLOWED", "REJECTED"]}
+                                    },
+                                    "required": ["chase_distance_R", "is_chase", "action"],
+                                    "additionalProperties": False
+                                },
+                                # 🆕 Weight factors (discrete, verifiable)
+                                "weight_factors": {
+                                    "type": "object",
+                                    "properties": {
+                                        "confluence_count": {"type": "integer", "minimum": 0, "maximum": 3},
+                                        "htf_alignment": {"type": "integer", "enum": [-1, 0, 1]},
+                                        "path_clear": {"type": "boolean"},
+                                        "invalidation_distance_R": {"type": "number"},
+                                        "tp1_rr": {"type": "number"}
+                                    },
+                                    "required": ["confluence_count", "htf_alignment", "path_clear", "invalidation_distance_R", "tp1_rr"],
+                                    "additionalProperties": False
+                                },
                                 # 🆕 Scenario weight - probability this scenario plays out vs others
                                 "scenario_weight": {
                                     "type": "number",
@@ -1923,7 +2099,7 @@ Return strict JSON format."""
                                     "description": "Probability weight (0.10-0.90). All weights across scenarios must sum to 1.0"
                                 }
                             },
-                            "required": ["id", "name", "bias", "entry_plan", "stop_loss", "targets", "confidence", "confidence_factors", "risks", "leverage", "invalidation_price", "conditions", "outcome_probs_raw", "mode_notes", "scenario_weight"],
+                            "required": ["id", "name", "bias", "archetype", "archetype_criteria_met", "entry_type", "entry_type_justification", "entry_plan", "stop_loss", "targets", "confidence", "confidence_factors", "risks", "leverage", "invalidation_price", "conditions", "outcome_probs_raw", "mode_notes", "confluence", "chase_check", "weight_factors", "scenario_weight"],
                             "additionalProperties": False
                         }
                     },
@@ -3091,7 +3267,33 @@ Return strict JSON format."""
                 "risk_pct": round((risk_per_unit / entry_ref) * 100, 2) if entry_ref > 0 else 0
             }
 
-            # === 7. Итоговый статус ===
+            # === 7. Валидация outcome_probs ===
+            outcome_probs = sc.get("outcome_probs_raw", {})
+            archetype = sc.get("archetype", "")
+
+            if outcome_probs:
+                # Преобразуем к нужному формату для validate_outcome_probs
+                probs_dict = {
+                    "prob_sl": outcome_probs.get("sl", 0),
+                    "prob_tp1": outcome_probs.get("tp1", 0),
+                    "prob_tp2": outcome_probs.get("tp2", 0),
+                    "prob_tp3": outcome_probs.get("tp3", 0),
+                    "prob_be": outcome_probs.get("be", 0),
+                }
+
+                probs_validation = validate_outcome_probs(probs_dict, archetype)
+                sc["probs_validation"] = probs_validation
+
+                # Hard errors → добавляем в issues
+                if not probs_validation["is_valid"]:
+                    for err in probs_validation["errors"]:
+                        issues.append(f"probs_error: {err}")
+
+                # Warnings → сохраняем отдельно (soft penalty)
+                if probs_validation["warnings"]:
+                    sc["probs_warnings"] = probs_validation["warnings"]
+
+            # === 8. Итоговый статус ===
             if not issues:
                 sc["rr_validation"] = "valid"
             elif rr_outlier:
