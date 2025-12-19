@@ -689,6 +689,7 @@
     "remaining": "Remaining: {count}/{limit}",
     "limit_reached": "Limit reached",
     "generating": "Generating scenarios...",
+    "analyzing_message": "🔍 **Syntra AI is analyzing the market...**\n\n📊 Gathering data from exchanges and indicators\n📈 Analyzing technical patterns\n🎯 Building entry scenarios\n\n⏳ This may take a few minutes",
     "clarification_needed": "Please clarify your request",
     "error": "Generation error"
   },

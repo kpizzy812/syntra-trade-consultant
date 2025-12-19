@@ -413,7 +413,8 @@ export default function ChatPage() {
       const aiMessage: Message = {
         id: aiMessageId,
         role: 'assistant',
-        content: '',
+        // Show analyzing message for signals mode
+        content: signalsMode ? t('signals.analyzing_message') : '',
         timestamp: new Date().toISOString(),
         isStreaming: true,
       };
