@@ -77,6 +77,7 @@ def format_scenario_message(scenario: dict, idx: int, language: str) -> str:
     bias_text = "LONG" if scenario.get("bias") == "long" else "SHORT"
 
     confidence = scenario.get("confidence", 0) * 100
+    scenario_weight = scenario.get("scenario_weight", 0) * 100  # 🆕
 
     # Entry plan
     entry_plan = scenario.get("entry_plan", {})
@@ -91,14 +92,29 @@ def format_scenario_message(scenario: dict, idx: int, language: str) -> str:
     # Leverage
     leverage = scenario.get("leverage", {})
 
+    # EV Metrics
+    ev_metrics = scenario.get("ev_metrics", {})
+    ev_grade = ev_metrics.get("ev_grade", "N/A")
+    ev_r = ev_metrics.get("ev_r", 0)
+
+    # Outcome Probs
+    outcome_probs = scenario.get("outcome_probs", {})
+
     # Build message
     lines = [
         f"\n{bias_emoji} <b>Сценарий {idx}: {scenario.get('name', bias_text)}</b>",
         f"📊 Направление: <b>{bias_text}</b>",
         f"🎯 Уверенность: <b>{confidence:.0f}%</b>",
+    ]
+
+    # 🆕 Scenario weight (probability)
+    if scenario_weight > 0:
+        lines.append(f"⚖️ Вес сценария: <b>{scenario_weight:.0f}%</b>")
+
+    lines.extend([
         "",
         "<b>📍 Точки входа:</b>",
-    ]
+    ])
 
     for order in orders[:3]:
         lines.append(f"  • ${order.get('price', 0):,.2f} ({order.get('size_pct', 0)}%)")
@@ -120,6 +136,24 @@ def format_scenario_message(scenario: dict, idx: int, language: str) -> str:
         "",
         f"<b>📈 Плечо:</b> {leverage.get('recommended', 'N/A')}",
     ])
+
+    # 🆕 EV Metrics section
+    if ev_metrics:
+        lines.extend([
+            "",
+            f"<b>📈 EV:</b> {ev_r:+.2f}R (Grade: {ev_grade})",
+        ])
+
+    # 🆕 Outcome probabilities section
+    if outcome_probs and outcome_probs.get("sl_early"):
+        sl_prob = outcome_probs.get("sl_early", 0) * 100
+        tp1_prob = outcome_probs.get("tp1_final", 0) * 100
+        tp2_prob = outcome_probs.get("tp2_final", 0) * 100
+        tp3_prob = outcome_probs.get("tp3_final", 0) * 100 if outcome_probs.get("tp3_final") else 0
+
+        lines.append("")
+        lines.append("<b>📊 Вероятности исходов:</b>")
+        lines.append(f"  • SL: {sl_prob:.0f}% | TP1: {tp1_prob:.0f}% | TP2: {tp2_prob:.0f}%{f' | TP3: {tp3_prob:.0f}%' if tp3_prob > 0 else ''}")
 
     # Why section
     why = scenario.get("why", {})

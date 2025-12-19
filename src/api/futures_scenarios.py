@@ -485,6 +485,14 @@ class TradingScenario(BaseModel):
         description="Warning from class stats (disabled / preliminary negative)"
     )
 
+    # 🆕 Scenario Weight - probability this scenario plays out vs others
+    scenario_weight: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Probability weight (0.10-0.90). All weights across scenarios sum to 1.0"
+    )
+
 
 class MarketContext(BaseModel):
     """Market context model"""

@@ -55,7 +55,7 @@ export default function ChatPage() {
   const [showPremiumModal, setShowPremiumModal] = useState(false);
   const [referralDiscount, setReferralDiscount] = useState(0);
   const [signalsMode, setSignalsMode] = useState(false);
-  const { user } = useUserStore();
+  const { user, updateUser } = useUserStore();
   const { updateBalance, setBalance } = usePointsStore();
   const { platformType } = usePlatform();
   const searchParams = useSearchParams();
@@ -115,6 +115,22 @@ export default function ChatPage() {
     }
     setShowPremiumModal(true);
   }, []);
+
+  // Sync subscription data from profile API (ensures fresh tier info)
+  useEffect(() => {
+    const syncSubscription = async () => {
+      if (!user) return;
+      try {
+        const profile = await api.profile.getProfile();
+        if (profile?.subscription) {
+          updateUser({ subscription: profile.subscription });
+        }
+      } catch (e) {
+        console.warn('Failed to sync subscription:', e);
+      }
+    };
+    syncSubscription();
+  }, [user?.id, updateUser]);
 
   // Redirect unauthenticated web users to auth flow
   useEffect(() => {
@@ -300,52 +316,110 @@ export default function ChatPage() {
           if (result.success) {
             // Format successful scenario response
             if (result.scenarios && result.scenarios.length > 0) {
-              const scenario = result.scenarios[0]; // Primary scenario
+              // Format all scenarios (not just the first one)
+              result.scenarios.forEach((scenario: {
+                bias?: string;
+                name?: string;
+                mode?: string;
+                confidence?: number;
+                scenario_weight?: number;
+                entry_plan?: { orders?: Array<{ price: number; size_pct?: number; allocation?: number }> };
+                stop_loss?: { recommended?: number; aggressive?: number };
+                targets?: Array<{ level: string | number; price: number; rr: number; partial_close_pct?: number; allocation?: number }>;
+                leverage?: { recommended?: string; max_safe?: string; max?: string };
+                ev_metrics?: { ev_r?: number; ev_grade?: string };
+                outcome_probs?: { sl_early?: number; tp1_final?: number; tp2_final?: number; tp3_final?: number };
+                why?: { bullish_factors?: string[]; bearish_factors?: string[] };
+              }, scenarioIndex: number) => {
+                const biasEmoji = scenario.bias === 'long' ? '🟢' : '🔴';
+                const biasText = scenario.bias === 'long' ? 'LONG' : 'SHORT';
 
-              responseContent = `## 📊 ${scenario.direction === 'long' ? '🟢 LONG' : '🔴 SHORT'} ${result.ticker}\n\n`;
-              responseContent += `**Timeframe:** ${result.timeframe}\n`;
-              responseContent += `**Mode:** ${scenario.mode}\n`;
-              responseContent += `**Confidence:** ${Math.round((scenario.confidence || 0.7) * 100)}%\n\n`;
+                responseContent += `## ${biasEmoji} ${scenario.name || biasText} ${result.ticker}\n\n`;
+                responseContent += `**Timeframe:** ${result.timeframe}\n`;
+                responseContent += `**Mode:** ${scenario.mode || 'standard'}\n`;
+                responseContent += `**Confidence:** ${Math.round((scenario.confidence || 0.7) * 100)}%\n`;
 
-              // Entry Plan
-              if (scenario.entry_plan?.orders) {
-                responseContent += `### 📍 Entry Plan\n`;
-                scenario.entry_plan.orders.forEach((order: { price: number; allocation: number }, i: number) => {
-                  responseContent += `- **Entry ${i + 1}:** $${order.price.toLocaleString()} (${order.allocation}%)\n`;
-                });
-                responseContent += '\n';
-              }
-
-              // Stop Loss
-              if (scenario.stop_loss) {
-                responseContent += `### 🛑 Stop Loss\n`;
-                responseContent += `- **Recommended:** $${scenario.stop_loss.recommended?.toLocaleString()}\n`;
-                if (scenario.stop_loss.aggressive) {
-                  responseContent += `- **Aggressive:** $${scenario.stop_loss.aggressive.toLocaleString()}\n`;
+                // 🆕 Scenario Weight
+                if (scenario.scenario_weight) {
+                  responseContent += `**⚖️ Вес сценария:** ${Math.round(scenario.scenario_weight * 100)}%\n`;
                 }
                 responseContent += '\n';
-              }
 
-              // Take Profit Targets
-              if (scenario.targets && scenario.targets.length > 0) {
-                responseContent += `### 🎯 Take Profit Targets\n`;
-                scenario.targets.forEach((tp: { level: string; price: number; rr: number; allocation: number }) => {
-                  responseContent += `- **${tp.level}:** $${tp.price.toLocaleString()} (R:R ${tp.rr}x, ${tp.allocation}%)\n`;
-                });
-                responseContent += '\n';
-              }
+                // Entry Plan
+                if (scenario.entry_plan?.orders) {
+                  responseContent += `### 📍 Entry Plan\n`;
+                  scenario.entry_plan.orders.forEach((order, i: number) => {
+                    const sizePct = order.size_pct || order.allocation || 0;
+                    responseContent += `- **Entry ${i + 1}:** $${order.price.toLocaleString()} (${sizePct}%)\n`;
+                  });
+                  responseContent += '\n';
+                }
 
-              // Leverage
-              if (scenario.leverage) {
-                responseContent += `### ⚡ Leverage\n`;
-                responseContent += `- **Recommended:** ${scenario.leverage.recommended}x\n`;
-                responseContent += `- **Max:** ${scenario.leverage.max}x\n\n`;
-              }
+                // Stop Loss
+                if (scenario.stop_loss) {
+                  responseContent += `### 🛑 Stop Loss\n`;
+                  responseContent += `- **Recommended:** $${scenario.stop_loss.recommended?.toLocaleString()}\n`;
+                  if (scenario.stop_loss.aggressive) {
+                    responseContent += `- **Aggressive:** $${scenario.stop_loss.aggressive.toLocaleString()}\n`;
+                  }
+                  responseContent += '\n';
+                }
 
-              // Rationale
-              if (scenario.rationale) {
-                responseContent += `### 💡 Rationale\n${scenario.rationale}\n`;
-              }
+                // Take Profit Targets
+                if (scenario.targets && scenario.targets.length > 0) {
+                  responseContent += `### 🎯 Take Profit Targets\n`;
+                  scenario.targets.forEach((tp) => {
+                    const closePct = tp.partial_close_pct || tp.allocation || 0;
+                    responseContent += `- **TP${tp.level}:** $${tp.price.toLocaleString()} (R:R ${tp.rr}x, ${closePct}%)\n`;
+                  });
+                  responseContent += '\n';
+                }
+
+                // Leverage
+                if (scenario.leverage) {
+                  responseContent += `### ⚡ Leverage\n`;
+                  responseContent += `- **Recommended:** ${scenario.leverage.recommended}\n`;
+                  responseContent += `- **Max:** ${scenario.leverage.max_safe || scenario.leverage.max}\n\n`;
+                }
+
+                // 🆕 EV Metrics
+                if (scenario.ev_metrics) {
+                  const evR = scenario.ev_metrics.ev_r || 0;
+                  const evGrade = scenario.ev_metrics.ev_grade || 'N/A';
+                  responseContent += `### 📈 Expected Value\n`;
+                  responseContent += `- **EV:** ${evR > 0 ? '+' : ''}${evR.toFixed(2)}R (Grade: ${evGrade})\n\n`;
+                }
+
+                // 🆕 Outcome Probabilities
+                if (scenario.outcome_probs && scenario.outcome_probs.sl_early) {
+                  const slProb = Math.round((scenario.outcome_probs.sl_early || 0) * 100);
+                  const tp1Prob = Math.round((scenario.outcome_probs.tp1_final || 0) * 100);
+                  const tp2Prob = Math.round((scenario.outcome_probs.tp2_final || 0) * 100);
+                  const tp3Prob = scenario.outcome_probs.tp3_final ? Math.round(scenario.outcome_probs.tp3_final * 100) : 0;
+
+                  responseContent += `### 📊 Outcome Probabilities\n`;
+                  responseContent += `- SL: ${slProb}% | TP1: ${tp1Prob}% | TP2: ${tp2Prob}%`;
+                  if (tp3Prob > 0) {
+                    responseContent += ` | TP3: ${tp3Prob}%`;
+                  }
+                  responseContent += '\n\n';
+                }
+
+                // Rationale / Why
+                const factors = scenario.why?.bullish_factors || scenario.why?.bearish_factors || [];
+                if (factors.length > 0) {
+                  responseContent += `### 💡 Rationale\n`;
+                  factors.slice(0, 3).forEach((factor: string) => {
+                    responseContent += `- ${factor}\n`;
+                  });
+                  responseContent += '\n';
+                }
+
+                // Add separator between scenarios
+                if (scenarioIndex < result.scenarios.length - 1) {
+                  responseContent += '---\n\n';
+                }
+              });
 
             } else if (result.clarifying_questions && result.clarifying_questions.length > 0) {
               // Need clarification

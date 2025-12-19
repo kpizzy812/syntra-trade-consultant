@@ -1727,6 +1727,14 @@ Each scenario MUST have an `entry_plan` with:
 5. Adapt time_valid_hours to timeframe {timeframe}
 6. Account for contradictions (e.g., bullish trend + RSI 80 + high funding = overheated)
 
+📊 **SCENARIO WEIGHT** (scenario_weight):
+Assign probability weight to each scenario based on how likely it is to play out:
+- scenario_weight: Float 0.10-0.90 (probability this scenario plays out vs others)
+- All scenario_weights across all scenarios MUST sum to exactly 1.0!
+- Example: 2 scenarios (LONG 60%, SHORT 40%) = weights [0.60, 0.40]
+- Example: 3 scenarios (LONG 50%, SHORT 30%, Range 20%) = weights [0.50, 0.30, 0.20]
+- Base this on: trend alignment, support/resistance proximity, market structure, momentum
+
 📊 **OUTCOME PROBABILITIES** (outcome_probs_raw):
 Estimate terminal outcome probabilities for EV calculation. These are TERMINAL outcomes = MAX TP level reached, NOT exit reason!
 - sl: P(price hits SL before ANY TP) — typical 0.30-0.50
@@ -1884,9 +1892,16 @@ Return strict JSON format."""
                                     "additionalProperties": False
                                 },
                                 # 🆕 Trading mode notes (how LLM applied mode params)
-                                "mode_notes": get_mode_notes_schema()
+                                "mode_notes": get_mode_notes_schema(),
+                                # 🆕 Scenario weight - probability this scenario plays out vs others
+                                "scenario_weight": {
+                                    "type": "number",
+                                    "minimum": 0.10,
+                                    "maximum": 0.90,
+                                    "description": "Probability weight (0.10-0.90). All weights across scenarios must sum to 1.0"
+                                }
                             },
-                            "required": ["id", "name", "bias", "entry_plan", "stop_loss", "targets", "confidence", "confidence_factors", "risks", "leverage", "invalidation_price", "conditions", "outcome_probs_raw", "mode_notes"],
+                            "required": ["id", "name", "bias", "entry_plan", "stop_loss", "targets", "confidence", "confidence_factors", "risks", "leverage", "invalidation_price", "conditions", "outcome_probs_raw", "mode_notes", "scenario_weight"],
                             "additionalProperties": False
                         }
                     },
@@ -2088,6 +2103,9 @@ Return strict JSON format."""
 
                 # 🆕 Trading mode notes
                 "mode_notes": sc.get("mode_notes", []),
+
+                # 🆕 Scenario weight - probability this scenario plays out vs others
+                "scenario_weight": sc.get("scenario_weight", 0),
             }
 
             adapted_scenarios.append(adapted_sc)
