@@ -150,10 +150,13 @@ class ScenarioGenerator:
             else:
                 final_scenarios = scenarios
 
-            # Нормализуем веса сценариев (Python > LLM)
+            # Нормализуем веса и вычисляем final_score (Python > LLM)
             final_scenarios = scenario_metrics_service.normalize_weights(final_scenarios)
-            weights_info = [f"{s.get('id')}={s.get('scenario_weight', 0):.2f}" for s in final_scenarios]
-            logger.info(f"Weights normalized: {weights_info}")
+            scores_info = [
+                f"#{s.get('id')}:score={s.get('final_score', 0):.2f}(w={s.get('weight_raw', 0):.2f},c={s.get('confidence', 0):.2f})"
+                for s in final_scenarios
+            ]
+            logger.info(f"Final scores: {scores_info}")
 
             # Learning calibration (если доступен calibrator)
             if calibrator:

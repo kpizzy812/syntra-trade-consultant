@@ -393,37 +393,94 @@ class ScenarioMetricsService:
 
         return warnings
 
-    def normalize_weights(self, scenarios: List[Dict]) -> List[Dict]:
+    def calculate_final_score(
+        self,
+        weight_raw: float,
+        confidence: float,
+        validation_penalties: float = 0.0,
+    ) -> float:
         """
-        Нормализовать веса сценариев (сумма = 1.0).
+        Рассчитать unified final_score для сценария.
+
+        Formula:
+            final_score = (0.6 * weight_raw + 0.4 * confidence) * (1 - validation_penalties)
 
         Args:
-            scenarios: Список сценариев с weight_factors
+            weight_raw: Объективный score из weight_factors [0.05-0.85]
+            confidence: Confidence от LLM после penalties [0.1-0.95]
+            validation_penalties: Сумма penalties от validation [0-0.5]
 
         Returns:
-            Сценарии с пересчитанными scenario_weight
+            final_score [0.0-1.0]
+        """
+        # Normalize confidence to [0-1] range (already should be)
+        conf_normalized = max(0.0, min(1.0, confidence))
+
+        # Weighted combination
+        base_score = 0.6 * weight_raw + 0.4 * conf_normalized
+
+        # Apply validation penalties (multiplicative)
+        penalty_factor = max(0.5, 1.0 - validation_penalties)
+
+        return round(base_score * penalty_factor, 3)
+
+    def normalize_weights(self, scenarios: List[Dict]) -> List[Dict]:
+        """
+        Нормализовать веса сценариев и вычислить final_score.
+
+        Args:
+            scenarios: Список сценариев с weight_factors и confidence
+
+        Returns:
+            Сценарии с weight_raw, scenario_weight, final_score
         """
         if not scenarios:
             return scenarios
 
-        # Рассчитываем weight_raw для каждого сценария
+        # Рассчитываем weight_raw и final_score для каждого сценария
         weights_raw = []
+        final_scores = []
+
         for sc in scenarios:
             factors = sc.get("weight_factors", {})
             weight_raw = self.calculate_weight_raw(factors)
             weights_raw.append(weight_raw)
             sc["weight_raw"] = round(weight_raw, 3)
 
-        # Нормализуем
+            # Get confidence (after validation penalties)
+            confidence = sc.get("confidence", 0.5)
+
+            # Collect validation penalties
+            validation_penalties = 0.0
+            if sc.get("confidence_adjustment_probs"):
+                validation_penalties += abs(sc.get("confidence_adjustment_probs", 0))
+            if sc.get("rr_validation") == "warning_outlier":
+                validation_penalties += 0.10
+            if sc.get("validation_status", "").startswith("fixed"):
+                validation_penalties += 0.05
+
+            # Calculate final_score
+            final_score = self.calculate_final_score(
+                weight_raw=weight_raw,
+                confidence=confidence,
+                validation_penalties=validation_penalties,
+            )
+            final_scores.append(final_score)
+            sc["final_score"] = final_score
+            sc["validation_penalties"] = round(validation_penalties, 2)
+
+        # Нормализуем weights (для legacy compatibility)
         total = sum(weights_raw)
         if total > 0:
             for i, sc in enumerate(scenarios):
                 sc["scenario_weight"] = round(weights_raw[i] / total, 3)
         else:
-            # Равный вес если все = 0
             equal_weight = round(1.0 / len(scenarios), 3)
             for sc in scenarios:
                 sc["scenario_weight"] = equal_weight
+
+        # Sort by final_score (highest first)
+        scenarios.sort(key=lambda x: x.get("final_score", 0), reverse=True)
 
         return scenarios
 
