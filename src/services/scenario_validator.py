@@ -328,9 +328,9 @@ YOUR TASK:
 2. If no hard violations, check for ISSUES (mode="adjust"):
    - Entry zone too wide for ATR (>3x ATR)
    - Entry zone too far from current price
-   - Risk/reward seems off
    - Confidence seems too high/low for setup
    - Any logical inconsistencies
+   NOTE: Do NOT penalize for R:R - Python handles TP1 RR validation separately.
 
 3. Suggest confidence_adjustment:
    - Negative (-0.15 to 0): If issues reduce reliability
