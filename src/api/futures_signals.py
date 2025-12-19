@@ -404,7 +404,7 @@ async def analyze_futures_signal(
                 # Update title if it's still "New Chat"
                 if chat_title == "New Chat":
                     chat_title = f"📊 {ticker} {timeframe.upper()}"
-                    await update_chat_title(session, chat_id, chat_title)
+                    await update_chat_title(session, chat_id, user.id, chat_title)
 
             # Save user message
             await add_chat_message_to_chat(
