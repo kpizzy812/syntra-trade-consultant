@@ -122,7 +122,21 @@
 ---
 
 ## Phase 7: Cache Invalidation
-**Status:** PENDING
+**Status:** COMPLETED
+
+### Tasks:
+- [x] В handler submit_feedback добавить вызов cache invalidation
+- [x] Инвалидировать affected keys при получении TradeOutcome
+
+### Modified Files:
+- `src/api/feedback.py` - добавлен вызов on_trade_outcome_received после submit
+
+### Key Features:
+- Инвалидация при получении outcome данных (финальный submit)
+- Пропуск duplicate requests
+- Fire-and-forget pattern (не блокирует основной запрос)
+- Graceful degradation (если Redis недоступен — просто логируем)
+- Инвалидируются: overview, outcomes, archetypes (если есть)
 
 ---
 
@@ -136,8 +150,24 @@
 | 2025-12-20 | 4 | Phase 4 COMPLETED - Stats API endpoints |
 | 2025-12-20 | 5 | Phase 5 COMPLETED - StatsClient in Futures Bot |
 | 2025-12-20 | 6 | Phase 6 COMPLETED - Telegram Inline UI |
+| 2025-12-20 | 7 | Phase 7 COMPLETED - Cache Invalidation |
 
 ---
 
-## Next Steps
-1. Phase 7: Cache Invalidation
+## Summary
+
+All 7 phases of the Trading Statistics System have been completed:
+
+1. ✅ Phase 1: Core Types и Enums
+2. ✅ Phase 2: Database Indexes
+3. ✅ Phase 3: Stats Service в SyntraAI
+4. ✅ Phase 4: Stats API Endpoints
+5. ✅ Phase 5: Stats Client в Futures Bot
+6. ✅ Phase 6: Telegram Inline UI
+7. ✅ Phase 7: Cache Invalidation
+
+**Architecture:** Push Outcomes (Variant A)
+- Futures Bot PUSH TradeOutcome в SyntraAI через `/api/feedback/submit`
+- SyntraAI = единственный источник истины для статистики
+- Futures Bot GET статистику через Stats API
+- Versioned cache keys (INCR вместо wildcard DELETE)

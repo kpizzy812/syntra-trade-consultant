@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.database.engine import get_session
 from src.api.api_key_auth import verify_api_key
 from src.services.feedback_service import feedback_service
+from src.cache.redis_manager import get_redis_manager
+from src.services.stats.cache import StatsCacheLayer, on_trade_outcome_received
 
 
 router = APIRouter(prefix="/feedback", tags=["Feedback"])
@@ -231,6 +233,25 @@ async def submit_feedback(
             f"duplicate={result.get('duplicate', False)}, "
             f"fields={result.get('fields_updated', [])}"
         )
+
+        # Cache invalidation (Phase 7)
+        # Инвалидируем кеш если это outcome данные (финальный submit)
+        if request.outcome and not result.get("duplicate", False):
+            try:
+                redis_mgr = get_redis_manager()
+                if redis_mgr.is_available():
+                    cache = StatsCacheLayer(redis_mgr._client)
+                    # Создаем простой объект для on_trade_outcome_received
+                    class OutcomeContext:
+                        primary_archetype = (
+                            request.attribution.primary_archetype
+                            if request.attribution else None
+                        )
+                    await on_trade_outcome_received(OutcomeContext(), cache)
+                    logger.debug(f"Stats cache invalidated for trade {request.trade_id}")
+            except Exception as e:
+                # Fire-and-forget: не блокируем основной запрос
+                logger.warning(f"Cache invalidation failed: {e}")
 
         return FeedbackSubmitResponse(
             success=True,
