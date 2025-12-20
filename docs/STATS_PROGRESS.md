@@ -57,18 +57,22 @@
 ---
 
 ## Phase 4: Stats API Endpoints
-**Status:** PENDING
+**Status:** COMPLETED
 
-### Endpoints to create:
-- GET /api/stats/trading/overview
-- GET /api/stats/trading/outcomes
-- GET /api/stats/trading/symbols
-- GET /api/stats/learning/archetypes
-- GET /api/stats/learning/archetypes/{archetype}
-- GET /api/stats/learning/gates
-- GET /api/stats/paper/overview
-- GET /api/stats/paper/archetypes
-- GET /api/stats/conversion
+### Endpoints created:
+- [x] GET /api/stats/trading/overview
+- [x] GET /api/stats/trading/outcomes
+- [x] GET /api/stats/trading/symbols
+- [x] GET /api/stats/learning/archetypes
+- [x] GET /api/stats/learning/archetypes/{archetype}
+- [x] GET /api/stats/learning/gates
+- [x] GET /api/stats/paper/overview
+- [x] GET /api/stats/paper/archetypes
+- [x] GET /api/stats/conversion
+
+### Created Files:
+- `src/api/stats.py` - Stats API router с X-API-Key auth
+- Updated `src/api/router.py` - зарегистрирован stats_router
 
 ---
 
@@ -102,9 +106,11 @@
 | 2025-12-20 | 1 | Phase 1 COMPLETED - enums, fields, migration |
 | 2025-12-20 | 2 | Phase 2 COMPLETED - indexes applied |
 | 2025-12-20 | 3 | Phase 3 COMPLETED - Stats Service module |
+| 2025-12-20 | 4 | Phase 4 COMPLETED - Stats API endpoints |
 
 ---
 
 ## Next Steps
-1. Phase 4: Создать Stats API endpoints в `src/api/stats.py`
-2. Phase 5: Создать StatsClient в Futures Bot
+1. Phase 5: Создать StatsClient в Futures Bot
+2. Phase 6: Telegram Inline UI
+3. Phase 7: Cache Invalidation
