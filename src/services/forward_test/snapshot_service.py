@@ -178,7 +178,12 @@ class SnapshotService:
                 tp2_price = float(take_profits[1].get("price", 0)) if len(take_profits) > 1 else None
                 tp3_price = float(take_profits[2].get("price", 0)) if len(take_profits) > 2 else None
 
-                stop_loss = float(scenario.get("stop_loss", 0))
+                # stop_loss может быть dict или float
+                stop_loss_data = scenario.get("stop_loss", 0)
+                if isinstance(stop_loss_data, dict):
+                    stop_loss = float(stop_loss_data.get("recommended", 0))
+                else:
+                    stop_loss = float(stop_loss_data) if stop_loss_data else 0.0
 
                 # Confidence и EV
                 confidence = float(scenario.get("confidence", 0.5))
@@ -230,6 +235,7 @@ class SnapshotService:
                     time_valid_hours=time_valid_hours
                 )
                 session.add(snapshot)
+                await session.flush()  # Гарантирует INSERT snapshot до monitor_state (FK)
 
                 # Создать monitor state
                 monitor_state = ForwardTestMonitorState(

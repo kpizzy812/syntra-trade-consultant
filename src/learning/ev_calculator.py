@@ -251,14 +251,16 @@ class EVCalculator:
         flags: List[str],
     ) -> OutcomeProbs:
         """Создать OutcomeProbs из dict."""
+        # Используем `or 0.0` для защиты от явных None значений
+        # (dict.get возвращает None если ключ есть, но значение None)
         return OutcomeProbs(
-            sl_early=probs.get("sl_early", 0.0),
-            be_after_tp1=probs.get("be_after_tp1", 0.0),
-            stop_in_profit=probs.get("stop_in_profit", 0.0),
-            tp1_final=probs.get("tp1_final", 0.0),
-            tp2_final=probs.get("tp2_final", 0.0),
-            tp3_final=probs.get("tp3_final"),
-            other=probs.get("other", 0.05),
+            sl_early=probs.get("sl_early") or 0.0,
+            be_after_tp1=probs.get("be_after_tp1") or 0.0,
+            stop_in_profit=probs.get("stop_in_profit") or 0.0,
+            tp1_final=probs.get("tp1_final") or 0.0,
+            tp2_final=probs.get("tp2_final") or 0.0,
+            tp3_final=probs.get("tp3_final"),  # Optional - None допустим
+            other=probs.get("other") or 0.05,
             source=source,
             sample_size=sample_size,
             n_targets=n_targets,
