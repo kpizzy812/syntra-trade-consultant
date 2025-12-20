@@ -27,6 +27,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import JSONB
 
+# Core enums for Stats System
+from src.core.enums import TradeOrigin
+
 
 class Base(DeclarativeBase):
     """Base class for all models"""
@@ -3981,11 +3984,130 @@ class TradeOutcome(Base):
         nullable=False
     )
 
+    # === STATS SYSTEM FIELDS (Phase 1) ===
+    # Origin & Context
+    origin: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        index=True,
+        nullable=True,
+        comment="ai_scenario | manual | copy_trade | forward_test"
+    )
+    exchange: Mapped[Optional[str]] = mapped_column(
+        String(20),
+        index=True,
+        nullable=True,
+        comment="bybit, binance — для фильтров"
+    )
+    account_id: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        comment="Account ID на бирже"
+    )
+
+    # Position Size
+    qty: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Количество контрактов/монет"
+    )
+    notional_usd: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Размер позиции в USD (qty * entry_price)"
+    )
+
+    # Timing
+    opened_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="Время открытия позиции"
+    )
+    closed_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        index=True,
+        nullable=True,
+        comment="Время закрытия позиции (для сортировки)"
+    )
+
+    # Fees
+    fees_usd: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Комиссии в USD"
+    )
+
+    # TP Prices (для валидации hit_tp!)
+    tp1_price: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Цена TP1 на момент входа"
+    )
+    tp2_price: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Цена TP2 на момент входа"
+    )
+    tp3_price: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Цена TP3 на момент входа"
+    )
+
+    # TP Hit Tracking (КРИТИЧНО для hit_rates!)
+    hit_tp1: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        comment="Цена дошла до TP1"
+    )
+    hit_tp2: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        comment="Цена дошла до TP2"
+    )
+    hit_tp3: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        comment="Цена дошла до TP3"
+    )
+
+    # Idempotency & Payload Hash
+    payload_hash: Mapped[Optional[str]] = mapped_column(
+        String(32),
+        nullable=True,
+        comment="sha256[:32] канонического payload для детекции рассинхрона"
+    )
+
+    # Audit & Invalidation
+    invalidated: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        comment="Soft delete flag"
+    )
+    replaced_by_id: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        ForeignKey("trade_outcomes.id"),
+        nullable=True,
+        comment="FK для audit trail при замене записей"
+    )
+    invalidation_reason: Mapped[Optional[str]] = mapped_column(
+        String(50),
+        nullable=True,
+        comment="correction, duplicate_detected, etc."
+    )
+
     # === INDEXES ===
     __table_args__ = (
         Index('ix_outcomes_user_created', 'user_id', 'created_at'),
         Index('ix_outcomes_symbol_tf', 'symbol', 'timeframe', 'created_at'),
         Index('ix_outcomes_archetype_created', 'primary_archetype', 'created_at'),
+        # New indexes for Stats System
+        Index('ix_outcomes_closed_at', 'closed_at'),
+        Index('ix_outcomes_origin_closed', 'origin', 'closed_at'),
+        Index('ix_outcomes_exchange_closed', 'exchange', 'closed_at'),
     )
 
     def __repr__(self) -> str:
