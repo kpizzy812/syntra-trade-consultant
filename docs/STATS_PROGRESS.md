@@ -77,11 +77,19 @@
 ---
 
 ## Phase 5: Stats Client в Futures Bot
-**Status:** PENDING
+**Status:** COMPLETED
 
-### Files:
-- `services/stats_client.py`
-- Update `config.py`
+### Created Files:
+- [x] `services/stats_client.py` - StatsClient с production-ready features
+- [x] Updated `config.py` - SYNTRA_STATS_* настройки
+
+### Key Features:
+- Lazy session init (connection pooling)
+- Half-open circuit breaker
+- Exponential backoff + jitter
+- Graceful degradation (_safe методы)
+- Singleton pattern (get_stats_client)
+- Lifecycle management (close, context manager)
 
 ---
 
@@ -107,10 +115,10 @@
 | 2025-12-20 | 2 | Phase 2 COMPLETED - indexes applied |
 | 2025-12-20 | 3 | Phase 3 COMPLETED - Stats Service module |
 | 2025-12-20 | 4 | Phase 4 COMPLETED - Stats API endpoints |
+| 2025-12-20 | 5 | Phase 5 COMPLETED - StatsClient in Futures Bot |
 
 ---
 
 ## Next Steps
-1. Phase 5: Создать StatsClient в Futures Bot
-2. Phase 6: Telegram Inline UI
-3. Phase 7: Cache Invalidation
+1. Phase 6: Telegram Inline UI
+2. Phase 7: Cache Invalidation
