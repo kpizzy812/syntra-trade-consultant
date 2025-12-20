@@ -94,11 +94,30 @@
 ---
 
 ## Phase 6: Telegram Inline UI
-**Status:** PENDING
+**Status:** COMPLETED
 
-### Files:
-- `bot/handlers/stats.py`
-- `bot/keyboards/stats_kb.py`
+### Created Files:
+- [x] `bot/keyboards/stats_kb.py` - Stats keyboards (menu, period, pagination)
+- [x] `bot/handlers/stats.py` - Stats handlers (overview, outcomes, archetypes, funnel, gates)
+- [x] Updated `main.py` - registered stats_handler.router
+- [x] Updated `bot/keyboards/settings_kb.py` - added Stats button
+
+### Callback Handlers:
+- `show_stats_menu` / `stats:menu` - главное меню
+- `stats:overview` - trading overview
+- `stats:outcomes` - exit distribution
+- `stats:arch:page:{n}` - archetypes list (paginated)
+- `stats:arch:detail:{name}` - archetype drilldown
+- `stats:funnel` - conversion funnel
+- `stats:gates` - EV gates status
+- `stats:period:{period}` - period switcher (7d, 30d, 90d, 180d)
+
+### Key Features:
+- Period state per user (in-memory)
+- Pagination for archetypes (5 per page)
+- Graceful error handling (StatsServiceUnavailable)
+- HTML formatting with emojis
+- Lifecycle: close_stats_client() on shutdown
 
 ---
 
@@ -116,9 +135,9 @@
 | 2025-12-20 | 3 | Phase 3 COMPLETED - Stats Service module |
 | 2025-12-20 | 4 | Phase 4 COMPLETED - Stats API endpoints |
 | 2025-12-20 | 5 | Phase 5 COMPLETED - StatsClient in Futures Bot |
+| 2025-12-20 | 6 | Phase 6 COMPLETED - Telegram Inline UI |
 
 ---
 
 ## Next Steps
-1. Phase 6: Telegram Inline UI
-2. Phase 7: Cache Invalidation
+1. Phase 7: Cache Invalidation
