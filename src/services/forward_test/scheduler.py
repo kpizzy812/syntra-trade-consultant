@@ -15,7 +15,7 @@ from loguru import logger
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
-from sqlalchemy import delete, and_
+from sqlalchemy import delete, and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.database.engine import get_session_maker
@@ -27,6 +27,8 @@ from src.services.forward_test.models import (
 )
 from src.services.forward_test.snapshot_service import snapshot_service
 from src.services.forward_test.monitor_service import monitor_service
+from src.services.forward_test.telegram_reporter import TelegramReporter
+from src.learning.class_stats_analyzer import ClassStatsAnalyzer
 
 
 class ForwardTestScheduler:
@@ -139,6 +141,18 @@ class ForwardTestScheduler:
         transitions = await self._job_monitor()
         return {"transitions": len(transitions)}
 
+    async def trigger_aggregate_now(self) -> dict:
+        """Ручной запуск агрегации."""
+        logger.info("Manual aggregation triggered")
+        await self._job_aggregate()
+        return {"status": "completed"}
+
+    async def trigger_telegram_now(self) -> dict:
+        """Ручной запуск Telegram report."""
+        logger.info("Manual telegram report triggered")
+        await self._job_telegram_report()
+        return {"status": "completed"}
+
     async def _job_generate(self) -> dict:
         """Job: генерация batch."""
         try:
@@ -171,18 +185,66 @@ class ForwardTestScheduler:
             return []
 
     async def _job_aggregate(self):
-        """Job: агрегация метрик."""
+        """Job: агрегация метрик + apply paper outcomes к learning."""
         try:
-            # TODO: Implement metrics aggregation
-            logger.info("Aggregation job running (not implemented)")
+            async with get_session_maker()() as session:
+                from datetime import date
+
+                today = date.today()
+                start_dt = datetime.combine(today, datetime.min.time())
+                end_dt = datetime.combine(today, datetime.max.time())
+
+                # Получить outcomes за сегодня
+                outcomes_q = select(ForwardTestOutcome, ForwardTestSnapshot).join(
+                    ForwardTestSnapshot,
+                    ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
+                ).where(
+                    and_(
+                        ForwardTestSnapshot.generated_at >= start_dt,
+                        ForwardTestSnapshot.generated_at <= end_dt
+                    )
+                )
+                result = await session.execute(outcomes_q)
+                rows = result.all()
+
+                if rows:
+                    # Подготовить данные для apply_paper_outcomes
+                    outcomes_data = []
+                    for outcome, snapshot in rows:
+                        outcomes_data.append({
+                            "archetype": snapshot.archetype,
+                            "side": snapshot.bias,
+                            "timeframe": snapshot.timeframe,
+                            "result": outcome.result,
+                            "total_r": outcome.total_r,
+                            "mae_r": outcome.mae_r,
+                            "mfe_r": outcome.mfe_r,
+                        })
+
+                    # Apply к learning
+                    analyzer = ClassStatsAnalyzer(session)
+                    await analyzer.apply_paper_outcomes(outcomes_data, weight=0.3)
+
+                    logger.info(f"Aggregation complete: {len(rows)} outcomes applied to learning")
+                else:
+                    logger.info("Aggregation: no outcomes for today")
+
         except Exception as e:
             logger.error(f"Aggregation job failed: {e}")
 
     async def _job_telegram_report(self):
-        """Job: Telegram report."""
+        """Job: Telegram daily report."""
         try:
-            # TODO: Implement Telegram report
-            logger.info("Telegram report job running (not implemented)")
+            reporter = TelegramReporter()
+            try:
+                async with get_session_maker()() as session:
+                    result = await reporter.send_daily_report(session)
+                    logger.info(
+                        f"Telegram report sent: {result['sent']} success, "
+                        f"{result['failed']} failed"
+                    )
+            finally:
+                await reporter.close()
         except Exception as e:
             logger.error(f"Telegram report job failed: {e}")
 
