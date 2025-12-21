@@ -157,7 +157,6 @@ class BybitService:
         try:
             cached = await self.redis.get(cache_key)
             if cached:
-                logger.debug(f"Redis cache HIT: {cache_key}")
                 df = pd.DataFrame(cached)
                 for col in ['open', 'high', 'low', 'close', 'volume']:
                     if col in df.columns:
@@ -213,11 +212,9 @@ class BybitService:
                     ttl = self._get_klines_ttl(interval)
                     try:
                         await self.redis.set(cache_key, rows, ttl=ttl)
-                        logger.debug(f"Redis cache SET: {cache_key} (TTL={ttl}s)")
                     except Exception as e:
                         logger.warning(f"Redis cache set error: {e}")
 
-                    logger.info(f"Fetched {len(df)} klines for {symbol} ({interval}) from Bybit")
                     return df
 
         except Exception as e:
