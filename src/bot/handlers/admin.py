@@ -6082,6 +6082,7 @@ async def admin_portfolio_menu(callback: CallbackQuery, session: AsyncSession):
             PortfolioCandidate,
             PortfolioPosition,
             PortfolioEquitySnapshot,
+            ForwardTestMonitorState,
         )
 
         config = get_config()
@@ -6114,26 +6115,54 @@ async def admin_portfolio_menu(callback: CallbackQuery, session: AsyncSession):
         )
         active_candidates = (await session.execute(active_candidates_q)).scalar() or 0
 
-        # Count open positions
-        open_positions_q = select(func.count()).select_from(PortfolioPosition).where(
+        # Get open positions with monitors for unrealized stats
+        open_positions_q = select(PortfolioPosition).where(
             PortfolioPosition.status == "open"
         )
-        open_positions = (await session.execute(open_positions_q)).scalar() or 0
+        open_result = await session.execute(open_positions_q)
+        open_positions_list = open_result.scalars().all()
+        open_positions = len(open_positions_list)
+
+        # Calculate unrealized stats
+        total_risk = 0.0
+        total_mfe = 0.0
+        total_mae = 0.0
+        total_unrealized_r = 0.0
+        longs = 0
+        shorts = 0
+
+        for p in open_positions_list:
+            total_risk += p.risk_r_filled
+            if p.side == "long":
+                longs += 1
+            else:
+                shorts += 1
+
+            monitor_q = select(ForwardTestMonitorState).where(
+                ForwardTestMonitorState.snapshot_id == p.snapshot_id
+            )
+            monitor_result = await session.execute(monitor_q)
+            monitor = monitor_result.scalar_one_or_none()
+            if monitor:
+                total_mfe += (monitor.mfe_r or 0)
+                total_mae += (monitor.mae_r or 0)
+                total_unrealized_r += (monitor.realized_r_so_far or 0)
 
         # Build response
         response = "📊 <b>Portfolio Mode</b>\n\n"
 
-        # Config summary
-        response += f"⚙️ <b>Config:</b>\n"
-        response += f"├ Max Positions: {portfolio_cfg.max_open_positions}\n"
-        response += f"├ Max Risk: {portfolio_cfg.max_total_risk_r}R\n"
-        response += f"├ Max Candidates: {portfolio_cfg.max_active_candidates}\n"
-        response += f"└ 1R = {portfolio_cfg.r_to_pct * 100:.1f}%\n\n"
+        # Current state with unrealized
+        response += f"📈 <b>Open Positions</b> ({open_positions}/{portfolio_cfg.max_open_positions})\n"
+        if open_positions > 0:
+            response += f"├ Long/Short: {longs}/{shorts}\n"
+            response += f"├ Risk: {total_risk:.2f}R / {portfolio_cfg.max_total_risk_r:.1f}R\n"
+            response += f"├ Σ MFE: <b>{total_mfe:+.2f}R</b>\n"
+            response += f"├ Σ MAE: {total_mae:.2f}R\n"
+            response += f"└ <b>Unrealized: {total_unrealized_r:+.2f}R</b>\n\n"
+        else:
+            response += f"└ <i>No open positions</i>\n\n"
 
-        # Current state
-        response += f"📈 <b>Current State:</b>\n"
-        response += f"├ Active Candidates: {active_candidates}/{portfolio_cfg.max_active_candidates}\n"
-        response += f"└ Open Positions: {open_positions}/{portfolio_cfg.max_open_positions}\n\n"
+        response += f"📋 <b>Candidates:</b> {active_candidates}/{portfolio_cfg.max_active_candidates}\n\n"
 
         if last_equity:
             equity_change = last_equity.equity_pct_from_initial
@@ -6149,15 +6178,19 @@ async def admin_portfolio_menu(callback: CallbackQuery, session: AsyncSession):
             # Cumulative stats
             if last_equity.total_trades > 0:
                 win_rate = (last_equity.win_count / last_equity.total_trades) * 100
-                response += f"📊 <b>Stats:</b>\n"
+                avg_r = last_equity.total_r_realized / last_equity.total_trades
+                response += f"📊 <b>Performance:</b>\n"
                 response += f"├ Trades: {last_equity.total_trades}\n"
-                response += f"├ Win/Loss: {last_equity.win_count}/{last_equity.loss_count}\n"
-                response += f"├ Win Rate: {win_rate:.1f}%\n"
-                response += f"└ Total R: {last_equity.total_r_realized:+.2f}R\n"
+                response += f"├ Win/Loss: {last_equity.win_count}/{last_equity.loss_count} ({win_rate:.0f}%)\n"
+                response += f"├ Total R: <b>{last_equity.total_r_realized:+.2f}R</b>\n"
+                response += f"└ Avg R/trade: {avg_r:+.2f}R\n"
         else:
             response += f"💰 <b>Equity:</b>\n"
             response += f"└ Initial: ${portfolio_cfg.initial_capital:,.2f}\n"
             response += "\n📭 <i>Нет данных equity</i>"
+
+        # Config at bottom (compact)
+        response += f"\n\n<i>Config: {portfolio_cfg.max_open_positions} pos, {portfolio_cfg.max_total_risk_r}R risk, 1R={portfolio_cfg.r_to_pct*100:.0f}%</i>"
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -6284,39 +6317,65 @@ async def admin_portfolio_positions(callback: CallbackQuery, session: AsyncSessi
     """Show open portfolio positions with pagination"""
     try:
         from src.services.forward_test.models import PortfolioPosition, ForwardTestMonitorState
+        from src.services.forward_test.config import get_config
 
+        config = get_config()
         page = int(callback.data.split("_")[-1])
-        per_page = 10
+        per_page = 8
         offset = page * per_page
 
-        # Get open positions
-        positions_q = (
+        # Get ALL open positions for summary
+        all_positions_q = (
             select(PortfolioPosition)
             .where(PortfolioPosition.status == "open")
-            .order_by(PortfolioPosition.filled_at.desc())
-            .offset(offset)
-            .limit(per_page + 1)
         )
-        result = await session.execute(positions_q)
-        positions = result.scalars().all()
+        all_result = await session.execute(all_positions_q)
+        all_positions = all_result.scalars().all()
 
-        has_more = len(positions) > per_page
-        positions = positions[:per_page]
+        total = len(all_positions)
+        total_risk = sum(p.risk_r_filled for p in all_positions)
 
-        # Total count
-        total_q = select(func.count()).select_from(PortfolioPosition).where(
-            PortfolioPosition.status == "open"
-        )
-        total = (await session.execute(total_q)).scalar() or 0
+        # Get monitors for all positions to calculate unrealized stats
+        total_mfe = 0.0
+        total_mae = 0.0
+        total_unrealized_r = 0.0
+        longs = 0
+        shorts = 0
 
-        # Total risk
-        total_risk_q = select(func.sum(PortfolioPosition.risk_r_filled)).where(
-            PortfolioPosition.status == "open"
-        )
-        total_risk = (await session.execute(total_risk_q)).scalar() or 0.0
+        position_monitors = {}
+        for p in all_positions:
+            monitor_q = select(ForwardTestMonitorState).where(
+                ForwardTestMonitorState.snapshot_id == p.snapshot_id
+            )
+            monitor_result = await session.execute(monitor_q)
+            monitor = monitor_result.scalar_one_or_none()
+            position_monitors[p.snapshot_id] = monitor
 
-        response = f"📈 <b>Open Positions</b> ({total})\n"
-        response += f"Total Risk: {total_risk:.2f}R\n"
+            if monitor:
+                total_mfe += (monitor.mfe_r or 0)
+                total_mae += (monitor.mae_r or 0)
+                total_unrealized_r += (monitor.realized_r_so_far or 0)
+
+            if p.side == "long":
+                longs += 1
+            else:
+                shorts += 1
+
+        # Paginate
+        positions = all_positions[offset:offset + per_page]
+        has_more = len(all_positions) > offset + per_page
+
+        response = f"📈 <b>Open Positions</b> ({total}/{config.portfolio.max_open_positions})\n\n"
+
+        # Summary stats
+        if total > 0:
+            response += f"<b>Summary:</b>\n"
+            response += f"├ Long/Short: {longs}/{shorts}\n"
+            response += f"├ Risk: {total_risk:.2f}R / {config.portfolio.max_total_risk_r:.1f}R\n"
+            response += f"├ Σ MFE: <b>{total_mfe:+.2f}R</b>\n"
+            response += f"├ Σ MAE: {total_mae:.2f}R\n"
+            response += f"└ Unrealized: <b>{total_unrealized_r:+.2f}R</b>\n\n"
+
         response += f"<i>Page {page + 1}</i>\n\n"
 
         if not positions:
@@ -6325,17 +6384,9 @@ async def admin_portfolio_positions(callback: CallbackQuery, session: AsyncSessi
             for p in positions:
                 side_emoji = "🟢" if p.side == "long" else "🔴"
                 symbol_short = p.symbol.replace("USDT", "")
+                monitor = position_monitors.get(p.snapshot_id)
 
-                response += f"{side_emoji} <b>{symbol_short}</b>\n"
-                response += f"   Entry: ${p.avg_fill_price:.4f}\n"
-                response += f"   Risk: {p.risk_r_filled:.3f}R ({p.risk_pct_filled*100:.2f}%)\n"
-
-                # Get current state from monitor
-                monitor_q = select(ForwardTestMonitorState).where(
-                    ForwardTestMonitorState.snapshot_id == p.snapshot_id
-                )
-                monitor_result = await session.execute(monitor_q)
-                monitor = monitor_result.scalar_one_or_none()
+                response += f"{side_emoji} <b>{symbol_short}</b>"
 
                 if monitor:
                     state_emoji = "⏳"
@@ -6343,11 +6394,18 @@ async def admin_portfolio_positions(callback: CallbackQuery, session: AsyncSessi
                         state_emoji = "✅1"
                     elif monitor.state == "TP2":
                         state_emoji = "✅2"
+                    response += f" {state_emoji}\n"
 
                     mfe = monitor.mfe_r or 0
                     mae = monitor.mae_r or 0
-                    response += f"   State: {state_emoji} {monitor.state}\n"
+                    unrealized = monitor.realized_r_so_far or 0
+
+                    response += f"   Entry: ${p.avg_fill_price:.4f} | Risk: {p.risk_r_filled:.2f}R\n"
                     response += f"   MFE: {mfe:+.2f}R | MAE: {mae:.2f}R\n"
+                    response += f"   <b>Unrealized: {unrealized:+.2f}R</b>\n"
+                else:
+                    response += "\n"
+                    response += f"   Entry: ${p.avg_fill_price:.4f} | Risk: {p.risk_r_filled:.2f}R\n"
 
                 filled_str = p.filled_at.strftime("%m/%d %H:%M") if p.filled_at else "?"
                 response += f"   Filled: {filled_str}\n\n"
