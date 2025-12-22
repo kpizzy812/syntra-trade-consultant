@@ -5537,8 +5537,11 @@ async def admin_ft_alltime(callback: CallbackQuery, session: AsyncSession):
         from src.services.forward_test.models import ForwardTestOutcome, ForwardTestSnapshot
         from src.services.forward_test.enums import OutcomeResult
 
-        # All-time stats
-        outcomes_q = select(ForwardTestOutcome)
+        # All-time stats (filter by epoch=1)
+        outcomes_q = select(ForwardTestOutcome).join(
+            ForwardTestSnapshot,
+            ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
+        ).where(ForwardTestSnapshot.epoch == 1)
         result = await session.execute(outcomes_q)
         outcomes = result.scalars().all()
 
@@ -6183,6 +6186,7 @@ async def admin_ft_history(callback: CallbackQuery, session: AsyncSession):
                 ForwardTestSnapshot,
                 ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
             )
+            .where(ForwardTestSnapshot.epoch == 1)
             .order_by(ForwardTestOutcome.created_at.desc())
             .offset(offset)
             .limit(per_page + 1)
