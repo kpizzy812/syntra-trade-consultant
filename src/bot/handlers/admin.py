@@ -5328,9 +5328,15 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             ScenarioState.TP1.value,
         ]
 
-        # Count ALL active trades first
-        active_count_q = select(func.count()).select_from(ForwardTestMonitorState).where(
-            ForwardTestMonitorState.state.in_(active_states)
+        # Count ALL active trades first (filter by epoch=1)
+        active_count_q = select(func.count()).select_from(ForwardTestMonitorState).join(
+            ForwardTestSnapshot,
+            ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
+        ).where(
+            and_(
+                ForwardTestSnapshot.epoch == 1,
+                ForwardTestMonitorState.state.in_(active_states)
+            )
         )
         active_count = (await session.execute(active_count_q)).scalar() or 0
 
@@ -5341,7 +5347,12 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
                 ForwardTestSnapshot,
                 ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
             )
-            .where(ForwardTestMonitorState.state.in_(active_states))
+            .where(
+                and_(
+                    ForwardTestSnapshot.epoch == 1,
+                    ForwardTestMonitorState.state.in_(active_states)
+                )
+            )
             .order_by(ForwardTestMonitorState.entered_at.desc())
             .limit(25)
         )
@@ -5368,8 +5379,14 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             ScenarioState.ARMED.value,
             ScenarioState.TRIGGERED.value,
         ]
-        waiting_q = select(func.count()).select_from(ForwardTestMonitorState).where(
-            ForwardTestMonitorState.state.in_(waiting_entry_states)
+        waiting_q = select(func.count()).select_from(ForwardTestMonitorState).join(
+            ForwardTestSnapshot,
+            ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
+        ).where(
+            and_(
+                ForwardTestSnapshot.epoch == 1,
+                ForwardTestMonitorState.state.in_(waiting_entry_states)
+            )
         )
         waiting_count = (await session.execute(waiting_q)).scalar() or 0
 
@@ -5606,14 +5623,19 @@ async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
             ScenarioState.TP1.value,
         ]
 
-        # Get ALL active trades
+        # Get ALL active trades (filter by epoch=1)
         all_active_q = (
             select(ForwardTestMonitorState, ForwardTestSnapshot)
             .join(
                 ForwardTestSnapshot,
                 ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
             )
-            .where(ForwardTestMonitorState.state.in_(active_states))
+            .where(
+                and_(
+                    ForwardTestSnapshot.epoch == 1,
+                    ForwardTestMonitorState.state.in_(active_states)
+                )
+            )
             .order_by(ForwardTestMonitorState.entered_at.desc())
         )
         all_result = await session.execute(all_active_q)
@@ -5780,7 +5802,7 @@ async def admin_ft_symbol_trades(callback: CallbackQuery, session: AsyncSession)
             ScenarioState.TP1.value,
         ]
 
-        # Get all trades for this symbol
+        # Get all trades for this symbol (filter by epoch=1)
         trades_q = (
             select(ForwardTestMonitorState, ForwardTestSnapshot)
             .join(
@@ -5789,6 +5811,7 @@ async def admin_ft_symbol_trades(callback: CallbackQuery, session: AsyncSession)
             )
             .where(
                 and_(
+                    ForwardTestSnapshot.epoch == 1,
                     ForwardTestMonitorState.state.in_(active_states),
                     ForwardTestSnapshot.symbol == symbol
                 )
