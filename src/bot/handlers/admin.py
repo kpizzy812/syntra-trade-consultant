@@ -5493,13 +5493,13 @@ async def admin_ft_alltime(callback: CallbackQuery, session: AsyncSession):
             avg_r = total_r / len(outcomes)
             winrate = wins / (wins + losses) * 100 if (wins + losses) > 0 else 0
 
-            # By terminal state
-            tp1_count = sum(1 for o in outcomes if o.terminal_state == "TP1")
-            tp2_count = sum(1 for o in outcomes if o.terminal_state == "TP2")
-            tp3_count = sum(1 for o in outcomes if o.terminal_state == "TP3")
-            sl_count = sum(1 for o in outcomes if o.terminal_state == "SL")
-            be_count = sum(1 for o in outcomes if o.terminal_state == "BE")
-            expired_count = sum(1 for o in outcomes if o.terminal_state == "EXPIRED")
+            # By terminal state (values are lowercase in enum)
+            tp1_count = sum(1 for o in outcomes if o.terminal_state == "tp1")
+            tp2_count = sum(1 for o in outcomes if o.terminal_state == "tp2")
+            tp3_count = sum(1 for o in outcomes if o.terminal_state == "tp3")
+            sl_count = sum(1 for o in outcomes if o.terminal_state == "sl")
+            be_count = sum(1 for o in outcomes if o.terminal_state == "be")
+            expired_count = sum(1 for o in outcomes if o.terminal_state == "expired")
 
             # Average MAE/MFE
             avg_mae = sum(o.mae_r or 0 for o in outcomes) / len(outcomes)
