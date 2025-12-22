@@ -69,6 +69,46 @@ class LearningGatesConfig:
 
 
 @dataclass
+class PortfolioConfig:
+    """
+    Конфигурация Portfolio Mode.
+
+    Реалистичная симуляция портфеля с лимитами позиций и риска.
+    """
+    enabled: bool = True
+
+    # Position limits
+    max_open_positions: int = 3
+    max_total_risk_r: float = 1.0          # Максимальный суммарный риск в R
+
+    # Risk mapping: 1R = r_to_pct % депозита
+    r_to_pct: float = 0.01                 # 1R = 1% (НЕ /100, явно!)
+
+    # Candidate pool
+    max_active_candidates: int = 20
+    candidate_ttl_hours: int = 24
+
+    # Anti-duplication
+    max_per_symbol: int = 1                # Макс позиций на символ (любой side)
+    max_per_symbol_side: int = 1           # Макс позиций на (symbol, side)
+
+    # Scoring weights (сумма = 1.0)
+    ev_weight: float = 0.55
+    confidence_weight: float = 0.30
+    quality_weight: float = 0.15
+
+    # Filters
+    min_ev_r: float = 0.0                  # Минимальный EV для попадания в пул
+    min_confidence: float = 0.4            # Минимальный confidence
+
+    # Equity
+    initial_capital: float = 10000.0
+
+    # Fill attempt throttle (FIX #4)
+    fill_attempt_throttle_sec: int = 300   # 5 минут между обновлениями attempt
+
+
+@dataclass
 class ForwardTestConfig:
     """Главная конфигурация Forward Test."""
     # Master switch - можно отключить через админку
@@ -80,6 +120,7 @@ class ForwardTestConfig:
     monitor: MonitorConfig = field(default_factory=MonitorConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     learning_gates: LearningGatesConfig = field(default_factory=LearningGatesConfig)
+    portfolio: PortfolioConfig = field(default_factory=PortfolioConfig)
 
     # Same-bar rule: sl_first означает SL проверяется до TP
     same_bar_rule: str = "sl_first"

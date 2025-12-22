@@ -20,6 +20,7 @@ from src.services.forward_test.models import (
     ForwardTestSnapshot,
     ForwardTestMonitorState,
 )
+from src.services.forward_test.portfolio_manager import portfolio_manager
 from src.services.futures_analysis_service import FuturesAnalysisService
 
 
@@ -249,9 +250,25 @@ class SnapshotService:
                     fill_model=FillModel.TOUCH_FILL,
                     tp_progress=0,
                     realized_r_so_far=0.0,
-                    remaining_position_pct=100.0
+                    remaining_position_pct=100.0,
+                    entry_was_hit=False,  # FIX #15: явно False
                 )
                 session.add(monitor_state)
+
+                # === PORTFOLIO MODE: добавить кандидата в пул ===
+                if self.config.portfolio.enabled:
+                    try:
+                        candidate, status = await portfolio_manager.add_candidate_to_pool(
+                            session=session,
+                            snapshot=snapshot,
+                            rank_in_batch=idx + 1,
+                        )
+                        logger.debug(
+                            f"Portfolio candidate {candidate.candidate_id}: "
+                            f"{symbol} {bias_str} → {status}"
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to add portfolio candidate: {e}")
 
                 count += 1
 

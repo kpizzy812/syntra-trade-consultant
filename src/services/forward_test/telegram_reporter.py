@@ -19,8 +19,12 @@ from src.services.forward_test.models import (
     ForwardTestSnapshot,
     ForwardTestMonitorState,
     ForwardTestOutcome,
+    PortfolioCandidate,
+    PortfolioPosition,
+    PortfolioEquitySnapshot,
 )
 from src.services.forward_test.enums import OutcomeResult, ScenarioState
+from src.services.forward_test.portfolio_manager import portfolio_manager
 from src.services.forward_test.config import get_config
 from config.config import BOT_TOKEN, ADMIN_IDS
 
@@ -229,6 +233,19 @@ class TelegramReporter:
             for alert in alerts:
                 icon = "" if alert['severity'] == 'critical' else ""
                 lines.append(f"{icon} {alert['message']}")
+            lines.append("")
+
+        # Portfolio Mode
+        if config.portfolio.enabled:
+            portfolio = await self._get_portfolio_stats(session)
+            lines.append("<b>Portfolio Mode</b>")
+            lines.append(f"• Equity: <b>${portfolio['equity_usd']:,.0f}</b> ({portfolio['equity_pct_change']:+.1f}%)")
+            lines.append(f"• Positions: <b>{portfolio['open_positions']}/{config.portfolio.max_open_positions}</b>")
+            lines.append(f"• Risk: <b>{portfolio['total_risk_r']:.2f}R</b> / {config.portfolio.max_total_risk_r:.1f}R")
+            lines.append(f"• Candidates: <b>{portfolio['active_candidates']}/{config.portfolio.max_active_candidates}</b>")
+            if portfolio['total_trades'] > 0:
+                lines.append(f"• P&L: <b>{portfolio['total_r_realized']:+.2f}R</b> (W{portfolio['win_count']}/L{portfolio['loss_count']})")
+                lines.append(f"• Max DD: <b>{portfolio['max_drawdown_pct']:.1f}%</b>")
             lines.append("")
 
         # Learning
@@ -466,14 +483,69 @@ class TelegramReporter:
 
         return alerts
 
+    async def _get_portfolio_stats(
+        self,
+        session: AsyncSession
+    ) -> Dict[str, Any]:
+        """Получить portfolio статистику."""
+        config = get_config()
+
+        # Get last equity snapshot
+        last_equity = await session.scalar(
+            select(PortfolioEquitySnapshot)
+            .order_by(desc(PortfolioEquitySnapshot.ts))
+            .limit(1)
+        )
+
+        if last_equity:
+            return {
+                "equity_usd": last_equity.equity_usd,
+                "equity_pct_change": last_equity.equity_pct_from_initial,
+                "open_positions": last_equity.open_positions_count,
+                "total_risk_r": last_equity.total_risk_r,
+                "active_candidates": last_equity.active_candidates_count,
+                "total_trades": last_equity.total_trades,
+                "win_count": last_equity.win_count,
+                "loss_count": last_equity.loss_count,
+                "total_r_realized": last_equity.total_r_realized,
+                "max_drawdown_pct": last_equity.max_drawdown_pct,
+            }
+
+        # Fallback: calculate from scratch
+        open_count = await session.scalar(
+            select(func.count()).select_from(PortfolioPosition).where(
+                PortfolioPosition.status == "open"
+            )
+        ) or 0
+
+        active_count = await session.scalar(
+            select(func.count()).select_from(PortfolioCandidate).where(
+                PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
+            )
+        ) or 0
+
+        return {
+            "equity_usd": config.portfolio.initial_capital,
+            "equity_pct_change": 0.0,
+            "open_positions": open_count,
+            "total_risk_r": 0.0,
+            "active_candidates": active_count,
+            "total_trades": 0,
+            "win_count": 0,
+            "loss_count": 0,
+            "total_r_realized": 0.0,
+            "max_drawdown_pct": 0.0,
+        }
+
     def _build_inline_keyboard(self) -> InlineKeyboardMarkup:
         """
         Построить inline keyboard.
 
         Row 1: [7d] [Funnel]
         Row 2: [Best/Worst] [Alerts]
-        Row 3: [Last batch] [Scenarios]
-        Row 4: [Settings]
+        Row 3: [Portfolio] [Candidates]
+        Row 4: [Last batch] [Scenarios]
+        Row 5: [Settings]
         """
         return InlineKeyboardMarkup(inline_keyboard=[
             [
@@ -483,6 +555,10 @@ class TelegramReporter:
             [
                 InlineKeyboardButton(text="Best/Worst", callback_data="ft:archetypes"),
                 InlineKeyboardButton(text="Alerts", callback_data="ft:alerts"),
+            ],
+            [
+                InlineKeyboardButton(text="Portfolio", callback_data="ft:portfolio"),
+                InlineKeyboardButton(text="Candidates", callback_data="ft:candidates"),
             ],
             [
                 InlineKeyboardButton(text="Last batch", callback_data="ft:batch:last"),
@@ -559,6 +635,18 @@ class ForwardTestCommandHandler:
 
         if subcommand == "symbols":
             await self._send_symbols_breakdown(session, bot, chat_id)
+            return True
+
+        if subcommand == "portfolio":
+            await self._send_portfolio_report(session, bot, chat_id)
+            return True
+
+        if subcommand == "candidates":
+            await self._send_candidates_report(session, bot, chat_id)
+            return True
+
+        if subcommand == "positions":
+            await self._send_positions_report(session, bot, chat_id)
             return True
 
         return False
@@ -790,5 +878,170 @@ class ForwardTestCommandHandler:
 
         if not rows:
             lines.append("No data yet")
+
+        await bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode=ParseMode.HTML)
+
+    async def _send_portfolio_report(
+        self,
+        session: AsyncSession,
+        bot: Bot,
+        chat_id: int
+    ):
+        """Portfolio Mode детальный отчёт."""
+        config = get_config()
+
+        if not config.portfolio.enabled:
+            await bot.send_message(
+                chat_id=chat_id,
+                text="Portfolio Mode is disabled",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        stats = await self.reporter._get_portfolio_stats(session)
+
+        # Get open positions details
+        positions_q = select(PortfolioPosition).where(
+            PortfolioPosition.status == "open"
+        ).order_by(desc(PortfolioPosition.filled_at))
+        positions_result = await session.execute(positions_q)
+        positions = positions_result.scalars().all()
+
+        lines = [
+            "<b>Portfolio Mode</b>",
+            "",
+            f"<b>Equity:</b> ${stats['equity_usd']:,.2f} ({stats['equity_pct_change']:+.1f}%)",
+            f"<b>Risk:</b> {stats['total_risk_r']:.2f}R / {config.portfolio.max_total_risk_r:.1f}R ({stats['total_risk_r']/config.portfolio.max_total_risk_r*100:.0f}%)",
+            f"<b>Max DD:</b> {stats['max_drawdown_pct']:.1f}%",
+            "",
+            f"<b>Performance</b>",
+            f"• Trades: {stats['total_trades']}",
+            f"• Win/Loss: {stats['win_count']}/{stats['loss_count']}",
+            f"• Total R: {stats['total_r_realized']:+.2f}R",
+        ]
+
+        if stats['total_trades'] > 0:
+            wr = stats['win_count'] / stats['total_trades'] * 100
+            lines.append(f"• Winrate: {wr:.0f}%")
+
+        lines.append("")
+        lines.append(f"<b>Open Positions ({len(positions)}/{config.portfolio.max_open_positions})</b>")
+
+        if positions:
+            for pos in positions:
+                symbol = pos.symbol.replace("USDT", "")
+                side_emoji = "🟢" if pos.side == "long" else "🔴"
+                lines.append(f"{side_emoji} {symbol} @ {pos.avg_fill_price:.2f} ({pos.risk_r_filled:.2f}R)")
+        else:
+            lines.append("No open positions")
+
+        await bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode=ParseMode.HTML)
+
+    async def _send_candidates_report(
+        self,
+        session: AsyncSession,
+        bot: Bot,
+        chat_id: int
+    ):
+        """Активные кандидаты в портфель."""
+        config = get_config()
+
+        if not config.portfolio.enabled:
+            await bot.send_message(
+                chat_id=chat_id,
+                text="Portfolio Mode is disabled",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        # Get active candidates
+        candidates_q = select(PortfolioCandidate).where(
+            PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
+        ).order_by(desc(PortfolioCandidate.priority_score)).limit(10)
+
+        result = await session.execute(candidates_q)
+        candidates = result.scalars().all()
+
+        # Get counts
+        active_count = await session.scalar(
+            select(func.count()).select_from(PortfolioCandidate).where(
+                PortfolioCandidate.status == "active"
+            )
+        ) or 0
+
+        waiting_count = await session.scalar(
+            select(func.count()).select_from(PortfolioCandidate).where(
+                PortfolioCandidate.status == "active_waiting_slot"
+            )
+        ) or 0
+
+        lines = [
+            "<b>Portfolio Candidates</b>",
+            "",
+            f"<b>Active:</b> {active_count} | <b>Waiting slot:</b> {waiting_count}",
+            f"<b>Max:</b> {config.portfolio.max_active_candidates}",
+            "",
+            "<b>Top 10 by score:</b>",
+        ]
+
+        if candidates:
+            for i, cand in enumerate(candidates, 1):
+                symbol = cand.symbol.replace("USDT", "")
+                side_emoji = "🟢" if cand.side == "long" else "🔴"
+                status_mark = "⏳" if cand.status == "active_waiting_slot" else ""
+                lines.append(
+                    f"{i}. {side_emoji} {symbol} {cand.archetype or ''} "
+                    f"<b>{cand.priority_score:.2f}</b> {status_mark}"
+                )
+        else:
+            lines.append("No active candidates")
+
+        await bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode=ParseMode.HTML)
+
+    async def _send_positions_report(
+        self,
+        session: AsyncSession,
+        bot: Bot,
+        chat_id: int
+    ):
+        """Детальный отчёт по позициям."""
+        config = get_config()
+
+        if not config.portfolio.enabled:
+            await bot.send_message(
+                chat_id=chat_id,
+                text="Portfolio Mode is disabled",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        # Get all positions (last 20)
+        positions_q = select(PortfolioPosition).order_by(
+            desc(PortfolioPosition.filled_at)
+        ).limit(20)
+
+        result = await session.execute(positions_q)
+        positions = result.scalars().all()
+
+        lines = ["<b>Recent Positions</b>", ""]
+
+        if positions:
+            for pos in positions:
+                symbol = pos.symbol.replace("USDT", "")
+                side_emoji = "🟢" if pos.side == "long" else "🔴"
+
+                if pos.status == "open":
+                    status = "OPEN"
+                    r_text = f"risk {pos.risk_r_filled:.2f}R"
+                else:
+                    status = "CLOSED"
+                    r_text = f"{pos.r_mult_realized:+.2f}R" if pos.r_mult_realized else "N/A"
+
+                lines.append(
+                    f"{side_emoji} {symbol} @ {pos.avg_fill_price:.2f} | "
+                    f"{status} | {r_text}"
+                )
+        else:
+            lines.append("No positions yet")
 
         await bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode=ParseMode.HTML)

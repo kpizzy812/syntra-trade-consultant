@@ -10,7 +10,8 @@ from typing import List, Optional, Dict, Any, Tuple
 
 import redis.asyncio as redis
 from loguru import logger
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.services.forward_test.config import get_config
@@ -27,6 +28,9 @@ from src.services.forward_test.models import (
     ForwardTestMonitorState,
     ForwardTestEvent,
     ForwardTestOutcome,
+    PortfolioCandidate,
+    PortfolioPosition,
+    PortfolioEquitySnapshot,
 )
 from src.services.forward_test.fill_simulator import (
     FillSimulator,
@@ -36,6 +40,7 @@ from src.services.forward_test.fill_simulator import (
     fill_simulator,
 )
 from src.services.bybit_service import BybitService
+from src.services.forward_test.portfolio_manager import portfolio_manager, log_data_anomaly
 
 
 @dataclass
@@ -107,6 +112,14 @@ class MonitorService:
                     transitions.extend(symbol_transitions)
                 except Exception as e:
                     logger.error(f"Error processing {symbol}: {e}")
+
+            # === PORTFOLIO MODE: Check fills ===
+            try:
+                filled_count = await self.check_portfolio_fills(session)
+                if filled_count > 0:
+                    logger.info(f"Portfolio: {filled_count} positions filled")
+            except Exception as e:
+                logger.error(f"Portfolio fill check failed: {e}")
 
             await session.commit()
             return transitions
@@ -327,6 +340,10 @@ class MonitorService:
             state.state = ScenarioState.ENTERED
             state.state_updated_at = candle.ts
             state.entered_at = candle.ts
+
+            # FIX #15+#24: Монотонный флаг entry_was_hit (только False→True!)
+            if not state.entry_was_hit:
+                state.entry_was_hit = True
 
             # Зафиксировать initial_sl и initial_risk
             state.initial_sl = snapshot.stop_loss
@@ -733,6 +750,9 @@ class MonitorService:
         )
         session.add(outcome)
 
+        # === PORTFOLIO MODE: Close position ===
+        await self.close_portfolio_position(session, snapshot.snapshot_id, outcome)
+
     def _get_entry_orders(self, snapshot: ForwardTestSnapshot) -> List[EntryOrder]:
         """Извлечь entry orders из snapshot."""
         normalized = snapshot.normalized_json or {}
@@ -820,6 +840,374 @@ class MonitorService:
                 await self._redis.delete(self.LOCK_KEY)
         except Exception:
             pass
+
+    # =========================================================================
+    # PORTFOLIO MODE: Fill Engine
+    # =========================================================================
+
+    async def check_portfolio_fills(self, session: AsyncSession) -> int:
+        """
+        Check active candidates for fills.
+
+        FIX #5: MVP filled_weight=1.0.
+        FIX #20: Двухшаговый FOR UPDATE.
+        FIX #14: Savepoint вокруг insert position.
+        FIX #26: active_waiting_slot для кандидатов с entry но без слота.
+
+        Returns:
+            Количество filled позиций
+        """
+        if not self.config.portfolio.enabled:
+            return 0
+
+        now = datetime.now(UTC)
+        filled_count = 0
+
+        # Expire stale candidates
+        await portfolio_manager.expire_stale_candidates(session)
+
+        # FIX #20: Двухшаговый подход — сначала лочим только candidate_ids
+        candidate_ids_result = await session.execute(
+            select(PortfolioCandidate.candidate_id)
+            .where(PortfolioCandidate.status.in_(["active", "active_waiting_slot"]))
+            .with_for_update(skip_locked=True)
+        )
+        candidate_ids = [row[0] for row in candidate_ids_result.all()]
+
+        if not candidate_ids:
+            return 0
+
+        # Шаг 2: Подтянуть join-данные (без FOR UPDATE)
+        candidates_result = await session.execute(
+            select(PortfolioCandidate, ForwardTestSnapshot, ForwardTestMonitorState)
+            .join(
+                ForwardTestSnapshot,
+                PortfolioCandidate.snapshot_id == ForwardTestSnapshot.snapshot_id
+            )
+            .join(
+                ForwardTestMonitorState,
+                ForwardTestSnapshot.snapshot_id == ForwardTestMonitorState.snapshot_id
+            )
+            .where(PortfolioCandidate.candidate_id.in_(candidate_ids))
+        )
+        candidates = candidates_result.all()
+
+        # Get current state
+        current_equity = await self._get_current_equity(session)
+        open_positions = await self._get_open_positions(session)
+        current_total_risk = sum(p.risk_r_filled for p in open_positions)
+
+        portfolio_cfg = self.config.portfolio
+
+        for candidate, snapshot, monitor in candidates:
+            # FIX #13: Double-check status
+            if candidate.status not in ("active", "active_waiting_slot"):
+                continue
+
+            # 1. Check expiration
+            if now > candidate.expires_at:
+                candidate.status = "expired"
+                continue
+
+            # 2. FIX #15: Использовать entry_was_hit
+            if monitor.state in ("EXPIRED",) and not monitor.entry_was_hit:
+                candidate.status = "rejected"
+                candidate.reject_reason = "scenario_closed_no_entry"
+                continue
+
+            # FIX #19: Guardrail — SL/BE без entry_was_hit
+            if monitor.state in ("SL", "BE") and not monitor.entry_was_hit:
+                await log_data_anomaly(
+                    session,
+                    "sl_be_without_entry",
+                    snapshot.snapshot_id,
+                    {"state": monitor.state}
+                )
+                # НЕ reject — пусть естественно expired
+
+            # 3. Check if entry happened
+            if not monitor.entry_was_hit:
+                continue
+
+            # 4. Track fill attempt
+            candidate.had_fill_attempt = True
+            # FIX #25: Два timestamp
+            if candidate.entry_seen_at is None:
+                candidate.entry_seen_at = now
+                candidate.entry_market_at = monitor.entered_at
+
+            # 5. Check slots
+            new_reject_reason = None
+            if len(open_positions) >= portfolio_cfg.max_open_positions:
+                new_reject_reason = "fill_no_slot"
+
+            # 6. Check anti-dup
+            if not new_reject_reason:
+                has_dup = any(
+                    p.symbol == candidate.symbol and p.side == candidate.side
+                    for p in open_positions
+                )
+                if has_dup:
+                    candidate.status = "rejected"
+                    candidate.reject_reason = "duplicate_symbol"
+                    continue
+
+            # 7. Check risk budget
+            # FIX #5: MVP filled_weight = 1.0
+            filled_weight = 1.0
+            base_risk = portfolio_cfg.max_total_risk_r / portfolio_cfg.max_open_positions
+            risk_r_filled = base_risk * filled_weight
+
+            if not new_reject_reason and current_total_risk + risk_r_filled > portfolio_cfg.max_total_risk_r:
+                new_reject_reason = "fill_no_risk_budget"
+
+            # FIX #4+#26: Anti-spam + active_waiting_slot
+            if new_reject_reason:
+                reason_changed = new_reject_reason != candidate.last_fill_reject_reason
+                throttle_passed = (
+                    candidate.last_fill_attempt_at is None or
+                    (now - candidate.last_fill_attempt_at).total_seconds() > portfolio_cfg.fill_attempt_throttle_sec
+                )
+
+                if reason_changed:
+                    candidate.fill_attempt_count += 1
+
+                if reason_changed or throttle_passed:
+                    candidate.last_fill_attempt_at = now
+                    candidate.last_fill_attempt_price = monitor.avg_entry_price
+
+                candidate.last_fill_reject_reason = new_reject_reason
+
+                # FIX #26: Переводим в active_waiting_slot
+                if candidate.status == "active":
+                    candidate.status = "active_waiting_slot"
+
+                continue
+
+            # 8. FIX #14: CREATE POSITION с SAVEPOINT
+            position = PortfolioPosition(
+                snapshot_id=snapshot.snapshot_id,
+                candidate_id=candidate.candidate_id,
+                symbol=candidate.symbol,
+                side=candidate.side,
+                filled_at=now,
+                filled_weight=filled_weight,
+                avg_fill_price=monitor.avg_entry_price or snapshot.entry_price_avg,
+                equity_at_fill=current_equity,
+                base_risk_r=base_risk,
+                risk_r_filled=risk_r_filled,
+                risk_pct_filled=risk_r_filled * portfolio_cfg.r_to_pct,
+                status="open",
+            )
+
+            try:
+                async with session.begin_nested():
+                    session.add(position)
+                    await session.flush()
+            except IntegrityError:
+                logger.warning(f"Position already exists for snapshot {snapshot.snapshot_id}")
+                existing_pos = await session.scalar(
+                    select(PortfolioPosition).where(
+                        PortfolioPosition.snapshot_id == snapshot.snapshot_id
+                    )
+                )
+                if existing_pos:
+                    candidate.status = "filled"
+                    candidate.position_id = existing_pos.position_id
+                continue
+
+            candidate.status = "filled"
+            candidate.filled_at = now
+            candidate.position_id = position.position_id
+            candidate.last_fill_reject_reason = None
+
+            open_positions.append(position)
+            current_total_risk += risk_r_filled
+            filled_count += 1
+
+            logger.info(
+                f"Portfolio: filled position {position.position_id} "
+                f"for {candidate.symbol} {candidate.side} "
+                f"(risk={risk_r_filled:.2f}R, total={current_total_risk:.2f}R)"
+            )
+
+        return filled_count
+
+    async def close_portfolio_position(
+        self,
+        session: AsyncSession,
+        snapshot_id: str,
+        outcome: ForwardTestOutcome
+    ):
+        """
+        Закрыть portfolio position при terminal state.
+
+        Обновляет:
+        - PortfolioPosition status/P&L
+        - PortfolioEquitySnapshot
+        - PortfolioCandidate counterfactual (для rejected)
+        """
+        if not self.config.portfolio.enabled:
+            return
+
+        portfolio_cfg = self.config.portfolio
+
+        # Find position
+        position = await session.scalar(
+            select(PortfolioPosition).where(
+                PortfolioPosition.snapshot_id == snapshot_id,
+                PortfolioPosition.status == "open"
+            )
+        )
+
+        if position:
+            # Close position
+            position.status = "closed"
+            position.closed_at = datetime.now(UTC)
+            position.r_mult_realized = outcome.total_r
+            position.pnl_pct_realized = outcome.total_r * position.risk_pct_filled
+            position.pnl_usd_realized = position.equity_at_fill * position.pnl_pct_realized
+
+            # Update equity
+            r_contribution = outcome.total_r * position.risk_r_filled
+            is_win = outcome.total_r > 0
+
+            await self._save_equity_snapshot(
+                session=session,
+                trigger="position_closed",
+                r_contribution=r_contribution,
+                is_win=is_win,
+            )
+
+            logger.info(
+                f"Portfolio: closed position {position.position_id} "
+                f"with {outcome.total_r:+.2f}R "
+                f"(P&L: ${position.pnl_usd_realized:+.2f})"
+            )
+
+        # Update counterfactual for rejected candidates (FIX #18+#27)
+        await self._update_counterfactual(session, outcome)
+
+    async def _update_counterfactual(
+        self,
+        session: AsyncSession,
+        outcome: ForwardTestOutcome
+    ):
+        """
+        Обновить counterfactual для rejected/expired кандидатов.
+
+        FIX #10: НЕ писать counterfactual для scenario_closed_no_entry/expired.
+        FIX #18: requires_replacement flag.
+        FIX #27: assumes_entry flag.
+        """
+        NO_COUNTERFACTUAL_REASONS = ("scenario_closed_no_entry", "expired")
+
+        candidate = await session.scalar(
+            select(PortfolioCandidate).where(
+                PortfolioCandidate.snapshot_id == outcome.snapshot_id,
+                PortfolioCandidate.status.in_(["rejected", "expired"])
+            )
+        )
+
+        if candidate:
+            # FIX #10: НЕ писать counterfactual если entry не случился
+            if candidate.reject_reason in NO_COUNTERFACTUAL_REASONS:
+                return
+
+            # FIX #27: assumes_entry = True ТОЛЬКО если entry реально случился
+            candidate.counterfactual_assumes_entry = candidate.had_fill_attempt
+
+            # Unconstrained — "если бы взяли без ограничений"
+            candidate.counterfactual_r_mult_unconstrained = outcome.total_r
+
+            # Fill-based — только если был реальный fill attempt
+            if candidate.had_fill_attempt:
+                candidate.counterfactual_r_mult_fill_based = outcome.total_r
+
+    async def _get_current_equity(self, session: AsyncSession) -> float:
+        """Получить текущий equity."""
+        last_snapshot = await session.scalar(
+            select(PortfolioEquitySnapshot)
+            .order_by(PortfolioEquitySnapshot.ts.desc())
+            .limit(1)
+        )
+        if last_snapshot:
+            return last_snapshot.equity_usd
+        return self.config.portfolio.initial_capital
+
+    async def _get_open_positions(self, session: AsyncSession) -> List[PortfolioPosition]:
+        """Получить все open positions."""
+        result = await session.execute(
+            select(PortfolioPosition).where(PortfolioPosition.status == "open")
+        )
+        return list(result.scalars().all())
+
+    async def _save_equity_snapshot(
+        self,
+        session: AsyncSession,
+        trigger: str,
+        r_contribution: float = 0.0,
+        is_win: Optional[bool] = None,
+    ):
+        """
+        Сохранить equity snapshot.
+
+        FIX #9: явные параметры.
+        """
+        portfolio_cfg = self.config.portfolio
+
+        # Get last snapshot
+        last = await session.scalar(
+            select(PortfolioEquitySnapshot)
+            .order_by(PortfolioEquitySnapshot.ts.desc())
+            .limit(1)
+        )
+
+        # Calculate current state
+        open_positions = await self._get_open_positions(session)
+        total_risk_r = sum(p.risk_r_filled for p in open_positions)
+
+        active_count = await session.scalar(
+            select(func.count()).select_from(PortfolioCandidate).where(
+                PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
+            )
+        ) or 0
+
+        # Calculate equity
+        if last:
+            equity_usd = last.equity_usd + (r_contribution * portfolio_cfg.r_to_pct * last.equity_usd)
+        else:
+            equity_usd = portfolio_cfg.initial_capital
+
+        # Peak and DD
+        peak = max(equity_usd, last.equity_peak_usd if last else portfolio_cfg.initial_capital)
+        current_dd = (peak - equity_usd) / peak if peak > 0 else 0
+        max_dd = max(current_dd, last.max_drawdown_pct if last else 0)
+
+        # Cumulative stats
+        total_trades = (last.total_trades if last else 0) + (1 if is_win is not None else 0)
+        win_count = (last.win_count if last else 0) + (1 if is_win is True else 0)
+        loss_count = (last.loss_count if last else 0) + (1 if is_win is False else 0)
+        total_r_realized = (last.total_r_realized if last else 0) + r_contribution
+
+        snapshot = PortfolioEquitySnapshot(
+            trigger=trigger,
+            equity_usd=equity_usd,
+            equity_pct_from_initial=(equity_usd / portfolio_cfg.initial_capital - 1) * 100,
+            open_positions_count=len(open_positions),
+            total_risk_r=total_risk_r,
+            active_candidates_count=active_count,
+            risk_utilization_pct=(total_risk_r / portfolio_cfg.max_total_risk_r * 100)
+            if portfolio_cfg.max_total_risk_r > 0 else 0,
+            equity_peak_usd=peak,
+            current_drawdown_pct=current_dd * 100,
+            total_trades=total_trades,
+            win_count=win_count,
+            loss_count=loss_count,
+            total_r_realized=total_r_realized,
+            max_drawdown_pct=max_dd * 100,
+        )
+        session.add(snapshot)
 
 
 # Singleton
