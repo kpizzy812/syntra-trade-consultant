@@ -21,6 +21,7 @@ from src.services.forward_test.models import (
     ForwardTestMonitorState,
 )
 from src.services.forward_test.portfolio_manager import portfolio_manager
+from src.services.forward_test.epoch_manager import get_current_epoch
 from src.services.futures_analysis_service import FuturesAnalysisService
 
 
@@ -138,6 +139,9 @@ class SnapshotService:
         market_context = analysis.get("market_context", {})
         current_price = float(analysis.get("current_price", 0))
 
+        # Get current epoch for new snapshots
+        current_epoch = await get_current_epoch()
+
         count = 0
         for idx, scenario in enumerate(scenarios):
             try:
@@ -233,7 +237,8 @@ class SnapshotService:
                     ev_r=ev_r,
                     generated_at=batch_ts,
                     expires_at=expires_at,
-                    time_valid_hours=time_valid_hours
+                    time_valid_hours=time_valid_hours,
+                    epoch=current_epoch,
                 )
                 session.add(snapshot)
                 await session.flush()  # Гарантирует INSERT snapshot до monitor_state (FK)

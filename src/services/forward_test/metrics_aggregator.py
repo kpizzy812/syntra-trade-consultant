@@ -18,6 +18,7 @@ from src.services.forward_test.models import (
     ForwardTestMonitorState,
     ForwardTestOutcome,
 )
+from src.services.forward_test.epoch_manager import get_current_epoch
 
 
 @dataclass
@@ -150,13 +151,14 @@ class MetricsAggregator:
         if target_date is None:
             target_date = (datetime.now(UTC) - timedelta(days=1)).date()
 
+        current_epoch = await get_current_epoch()
         start_dt = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=UTC)
         end_dt = start_dt + timedelta(days=1)
 
-        # Получить snapshots за день (epoch=1 = active data)
+        # Получить snapshots за день (filter by current epoch)
         snapshots_query = select(ForwardTestSnapshot).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at < end_dt
             )

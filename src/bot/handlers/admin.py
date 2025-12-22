@@ -5302,6 +5302,10 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
         )
         from src.services.forward_test.enums import ScenarioState, OutcomeResult
         from src.services.forward_test.scheduler import forward_test_scheduler
+        from src.services.forward_test.epoch_manager import get_current_epoch
+
+        # Get current epoch
+        current_epoch = await get_current_epoch()
 
         # Scheduler status
         status = forward_test_scheduler.get_status()
@@ -5312,10 +5316,10 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
         start_dt = datetime.combine(today, datetime.min.time())
         end_dt = datetime.combine(today, datetime.max.time())
 
-        # Funnel stats for today (epoch=1 = active data)
+        # Funnel stats for today
         gen_q = select(func.count()).select_from(ForwardTestSnapshot).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -5328,13 +5332,13 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             ScenarioState.TP1.value,
         ]
 
-        # Count ALL active trades first (filter by epoch=1)
+        # Count ALL active trades first
         active_count_q = select(func.count()).select_from(ForwardTestMonitorState).join(
             ForwardTestSnapshot,
             ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestMonitorState.state.in_(active_states)
             )
         )
@@ -5349,7 +5353,7 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             )
             .where(
                 and_(
-                    ForwardTestSnapshot.epoch == 1,
+                    ForwardTestSnapshot.epoch == current_epoch,
                     ForwardTestMonitorState.state.in_(active_states)
                 )
             )
@@ -5365,7 +5369,7 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt,
                 ForwardTestMonitorState.state == ScenarioState.EXPIRED.value,
@@ -5384,7 +5388,7 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestMonitorState.state.in_(waiting_entry_states)
             )
         )
@@ -5396,7 +5400,7 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -5536,12 +5540,15 @@ async def admin_ft_alltime(callback: CallbackQuery, session: AsyncSession):
     try:
         from src.services.forward_test.models import ForwardTestOutcome, ForwardTestSnapshot
         from src.services.forward_test.enums import OutcomeResult
+        from src.services.forward_test.epoch_manager import get_current_epoch
 
-        # All-time stats (filter by epoch=1)
+        current_epoch = await get_current_epoch()
+
+        # All-time stats
         outcomes_q = select(ForwardTestOutcome).join(
             ForwardTestSnapshot,
             ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
-        ).where(ForwardTestSnapshot.epoch == 1)
+        ).where(ForwardTestSnapshot.epoch == current_epoch)
         result = await session.execute(outcomes_q)
         outcomes = result.scalars().all()
 
@@ -5618,15 +5625,18 @@ async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
             ForwardTestMonitorState,
         )
         from src.services.forward_test.enums import ScenarioState
+        from src.services.forward_test.epoch_manager import get_current_epoch
         from src.services.bybit_service import BybitService
         from collections import defaultdict
+
+        current_epoch = await get_current_epoch()
 
         active_states = [
             ScenarioState.ENTERED.value,
             ScenarioState.TP1.value,
         ]
 
-        # Get ALL active trades (filter by epoch=1)
+        # Get ALL active trades
         all_active_q = (
             select(ForwardTestMonitorState, ForwardTestSnapshot)
             .join(
@@ -5635,7 +5645,7 @@ async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
             )
             .where(
                 and_(
-                    ForwardTestSnapshot.epoch == 1,
+                    ForwardTestSnapshot.epoch == current_epoch,
                     ForwardTestMonitorState.state.in_(active_states)
                 )
             )
@@ -5796,8 +5806,10 @@ async def admin_ft_symbol_trades(callback: CallbackQuery, session: AsyncSession)
         )
         from src.services.forward_test.enums import ScenarioState
         from src.services.bybit_service import BybitService
+        from src.services.forward_test.epoch_manager import get_current_epoch
 
         symbol = callback.data.replace("admin_ft_sym_", "")
+        current_epoch = await get_current_epoch()
         symbol_short = symbol.replace("USDT", "")
 
         active_states = [
@@ -5805,7 +5817,7 @@ async def admin_ft_symbol_trades(callback: CallbackQuery, session: AsyncSession)
             ScenarioState.TP1.value,
         ]
 
-        # Get all trades for this symbol (filter by epoch=1)
+        # Get all trades for this symbol (filter by current epoch)
         trades_q = (
             select(ForwardTestMonitorState, ForwardTestSnapshot)
             .join(
@@ -5814,7 +5826,7 @@ async def admin_ft_symbol_trades(callback: CallbackQuery, session: AsyncSession)
             )
             .where(
                 and_(
-                    ForwardTestSnapshot.epoch == 1,
+                    ForwardTestSnapshot.epoch == current_epoch,
                     ForwardTestMonitorState.state.in_(active_states),
                     ForwardTestSnapshot.symbol == symbol
                 )
@@ -6055,17 +6067,19 @@ async def admin_ft_7d_report(callback: CallbackQuery, session: AsyncSession):
     try:
         from src.services.forward_test.models import ForwardTestOutcome, ForwardTestSnapshot
         from src.services.forward_test.enums import OutcomeResult
+        from src.services.forward_test.epoch_manager import get_current_epoch
 
+        current_epoch = await get_current_epoch()
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=7)
 
-        # Get outcomes (epoch=1 = active data)
+        # Get outcomes (filter by current epoch)
         outcomes_q = select(ForwardTestOutcome).join(
             ForwardTestSnapshot,
             ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestSnapshot.generated_at >= start_dt
             )
         )
@@ -6111,7 +6125,9 @@ async def admin_ft_archetypes(callback: CallbackQuery, session: AsyncSession):
     """Show best and worst archetypes"""
     try:
         from src.services.forward_test.models import ForwardTestOutcome, ForwardTestSnapshot
+        from src.services.forward_test.epoch_manager import get_current_epoch
 
+        current_epoch = await get_current_epoch()
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=30)
 
@@ -6125,7 +6141,7 @@ async def admin_ft_archetypes(callback: CallbackQuery, session: AsyncSession):
             ForwardTestSnapshot.snapshot_id == ForwardTestOutcome.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestSnapshot.generated_at >= start_dt
             )
         ).group_by(ForwardTestSnapshot.archetype).having(func.count() >= 3)
@@ -6175,7 +6191,9 @@ async def admin_ft_history(callback: CallbackQuery, session: AsyncSession):
     """Show finished trades history with pagination"""
     try:
         from src.services.forward_test.models import ForwardTestOutcome, ForwardTestSnapshot
+        from src.services.forward_test.epoch_manager import get_current_epoch
 
+        current_epoch = await get_current_epoch()
         page = int(callback.data.split("_")[-1])
         per_page = 10
         offset = page * per_page
@@ -6186,7 +6204,7 @@ async def admin_ft_history(callback: CallbackQuery, session: AsyncSession):
                 ForwardTestSnapshot,
                 ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
             )
-            .where(ForwardTestSnapshot.epoch == 1)
+            .where(ForwardTestSnapshot.epoch == current_epoch)
             .order_by(ForwardTestOutcome.created_at.desc())
             .offset(offset)
             .limit(per_page + 1)
@@ -6245,18 +6263,22 @@ async def admin_ft_reset_confirm(callback: CallbackQuery, session: AsyncSession)
     """Show confirmation for Forward Test data reset"""
     try:
         from src.services.forward_test.models import ForwardTestSnapshot
+        from src.services.forward_test.epoch_manager import get_current_epoch
 
-        # Count current epoch=1 records
+        current_epoch = await get_current_epoch()
+
+        # Count current epoch records
         count_q = select(func.count()).select_from(ForwardTestSnapshot).where(
-            ForwardTestSnapshot.epoch == 1
+            ForwardTestSnapshot.epoch == current_epoch
         )
         count = (await session.execute(count_q)).scalar() or 0
 
         response = (
             "⚠️ <b>Очистить Forward Test данные?</b>\n\n"
+            f"Текущая эпоха: <b>{current_epoch}</b>\n"
             f"Будет скрыто <b>{count}</b> сценариев.\n"
-            "Данные не удаляются, только помечаются epoch=0.\n\n"
-            "Это действие нельзя отменить."
+            f"Новая эпоха: <b>{current_epoch + 1}</b>\n\n"
+            "Данные не удаляются, начинается новая эпоха."
         )
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -6276,22 +6298,14 @@ async def admin_ft_reset_confirm(callback: CallbackQuery, session: AsyncSession)
 
 @router.callback_query(F.data == "admin_ft_reset_execute")
 async def admin_ft_reset_execute(callback: CallbackQuery, session: AsyncSession):
-    """Execute Forward Test data reset (set epoch=0)"""
+    """Execute Forward Test data reset (increment epoch)"""
     try:
-        from src.services.forward_test.models import ForwardTestSnapshot
-        from sqlalchemy import update
+        from src.services.forward_test.epoch_manager import get_current_epoch, increment_epoch
 
-        # Set epoch=0 for all current epoch=1 records
-        stmt = update(ForwardTestSnapshot).where(
-            ForwardTestSnapshot.epoch == 1
-        ).values(epoch=0)
+        old_epoch = await get_current_epoch()
+        new_epoch = await increment_epoch()
 
-        result = await session.execute(stmt)
-        await session.commit()
-
-        affected = result.rowcount
-
-        await callback.answer(f"✅ Очищено {affected} сценариев", show_alert=True)
+        await callback.answer(f"✅ Эпоха {old_epoch} → {new_epoch}", show_alert=True)
 
         # Return to FT menu
         callback.data = "admin_forward_test"
@@ -6388,8 +6402,11 @@ async def admin_portfolio_menu(callback: CallbackQuery, session: AsyncSession):
             PortfolioPosition,
             PortfolioEquitySnapshot,
             ForwardTestMonitorState,
+            ForwardTestSnapshot,
         )
+        from src.services.forward_test.epoch_manager import get_current_epoch
 
+        current_epoch = await get_current_epoch()
         config = get_config()
         portfolio_cfg = config.portfolio
 
@@ -6414,25 +6431,25 @@ async def admin_portfolio_menu(callback: CallbackQuery, session: AsyncSession):
         last_equity_result = await session.execute(last_equity_q)
         last_equity = last_equity_result.scalar_one_or_none()
 
-        # Count active candidates (filter by epoch=1)
+        # Count active candidates (filter by current epoch)
         active_candidates_q = select(func.count()).select_from(PortfolioCandidate).join(
             ForwardTestSnapshot,
             PortfolioCandidate.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
             )
         )
         active_candidates = (await session.execute(active_candidates_q)).scalar() or 0
 
-        # Get open positions with monitors for unrealized stats (filter by epoch=1)
+        # Get open positions with monitors for unrealized stats (filter by current epoch)
         open_positions_q = select(PortfolioPosition).join(
             ForwardTestSnapshot,
             PortfolioPosition.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 PortfolioPosition.status == "open"
             )
         )
@@ -6550,18 +6567,20 @@ async def admin_portfolio_candidates(callback: CallbackQuery, session: AsyncSess
     """Show active portfolio candidates with pagination"""
     try:
         from src.services.forward_test.models import PortfolioCandidate, ForwardTestSnapshot
+        from src.services.forward_test.epoch_manager import get_current_epoch
 
+        current_epoch = await get_current_epoch()
         page = int(callback.data.split("_")[-1])
         per_page = 10
         offset = page * per_page
 
-        # Get active candidates (filter by epoch=1)
+        # Get active candidates (filter by current epoch)
         candidates_q = (
             select(PortfolioCandidate)
             .join(ForwardTestSnapshot, PortfolioCandidate.snapshot_id == ForwardTestSnapshot.snapshot_id)
             .where(
                 and_(
-                    ForwardTestSnapshot.epoch == 1,
+                    ForwardTestSnapshot.epoch == current_epoch,
                     PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
                 )
             )
@@ -6575,12 +6594,12 @@ async def admin_portfolio_candidates(callback: CallbackQuery, session: AsyncSess
         has_more = len(candidates) > per_page
         candidates = candidates[:per_page]
 
-        # Total count (filter by epoch=1)
+        # Total count (filter by current epoch)
         total_q = select(func.count()).select_from(PortfolioCandidate).join(
             ForwardTestSnapshot, PortfolioCandidate.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
             )
         )
@@ -6647,19 +6666,21 @@ async def admin_portfolio_positions(callback: CallbackQuery, session: AsyncSessi
     try:
         from src.services.forward_test.models import PortfolioPosition, ForwardTestMonitorState, ForwardTestSnapshot
         from src.services.forward_test.config import get_config
+        from src.services.forward_test.epoch_manager import get_current_epoch
 
+        current_epoch = await get_current_epoch()
         config = get_config()
         page = int(callback.data.split("_")[-1])
         per_page = 8
         offset = page * per_page
 
-        # Get ALL open positions for summary (filter by epoch=1)
+        # Get ALL open positions for summary (filter by current epoch)
         all_positions_q = (
             select(PortfolioPosition)
             .join(ForwardTestSnapshot, PortfolioPosition.snapshot_id == ForwardTestSnapshot.snapshot_id)
             .where(
                 and_(
-                    ForwardTestSnapshot.epoch == 1,
+                    ForwardTestSnapshot.epoch == current_epoch,
                     PortfolioPosition.status == "open"
                 )
             )
@@ -6777,18 +6798,20 @@ async def admin_portfolio_history(callback: CallbackQuery, session: AsyncSession
     """Show closed portfolio positions history"""
     try:
         from src.services.forward_test.models import PortfolioPosition, ForwardTestSnapshot
+        from src.services.forward_test.epoch_manager import get_current_epoch
 
+        current_epoch = await get_current_epoch()
         page = int(callback.data.split("_")[-1])
         per_page = 10
         offset = page * per_page
 
-        # Get closed positions (filter by epoch=1)
+        # Get closed positions (filter by current epoch)
         positions_q = (
             select(PortfolioPosition)
             .join(ForwardTestSnapshot, PortfolioPosition.snapshot_id == ForwardTestSnapshot.snapshot_id)
             .where(
                 and_(
-                    ForwardTestSnapshot.epoch == 1,
+                    ForwardTestSnapshot.epoch == current_epoch,
                     PortfolioPosition.status == "closed"
                 )
             )
@@ -6802,12 +6825,12 @@ async def admin_portfolio_history(callback: CallbackQuery, session: AsyncSession
         has_more = len(positions) > per_page
         positions = positions[:per_page]
 
-        # Total count (filter by epoch=1)
+        # Total count (filter by current epoch)
         total_q = select(func.count()).select_from(PortfolioPosition).join(
             ForwardTestSnapshot, PortfolioPosition.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 PortfolioPosition.status == "closed"
             )
         )

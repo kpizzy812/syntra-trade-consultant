@@ -26,6 +26,7 @@ from src.services.forward_test.models import (
 from src.services.forward_test.enums import OutcomeResult, ScenarioState
 from src.services.forward_test.portfolio_manager import portfolio_manager
 from src.services.forward_test.config import get_config
+from src.services.forward_test.epoch_manager import get_current_epoch
 from config.config import BOT_TOKEN, ADMIN_IDS
 
 
@@ -143,20 +144,21 @@ class TelegramReporter:
         - Learning queue
         """
         config = get_config()
+        current_epoch = await get_current_epoch()
         start_dt = datetime.combine(target_date, datetime.min.time())
         end_dt = datetime.combine(target_date, datetime.max.time())
 
         # === Collect metrics ===
 
         # Funnel
-        funnel = await self._get_funnel(session, start_dt, end_dt)
+        funnel = await self._get_funnel(session, start_dt, end_dt, current_epoch)
 
         # Performance
-        perf = await self._get_performance(session, start_dt, end_dt)
+        perf = await self._get_performance(session, start_dt, end_dt, current_epoch)
 
         # Best/Worst archetypes
-        best_arch = await self._get_archetype_stats(session, start_dt, end_dt, best=True)
-        worst_arch = await self._get_archetype_stats(session, start_dt, end_dt, best=False)
+        best_arch = await self._get_archetype_stats(session, start_dt, end_dt, best=True, epoch=current_epoch)
+        worst_arch = await self._get_archetype_stats(session, start_dt, end_dt, best=False, epoch=current_epoch)
 
         # Alerts
         alerts = self._generate_alerts(funnel, perf)
@@ -164,7 +166,7 @@ class TelegramReporter:
         # Batches count
         batches_q = select(func.count(func.distinct(ForwardTestSnapshot.batch_id))).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -259,13 +261,14 @@ class TelegramReporter:
         self,
         session: AsyncSession,
         start_dt: datetime,
-        end_dt: datetime
+        end_dt: datetime,
+        epoch: int
     ) -> Dict[str, Any]:
         """Получить funnel метрики."""
-        # Generated (epoch == 1 = active data)
+        # Generated (filter by current epoch)
         gen_q = select(func.count()).select_from(ForwardTestSnapshot).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -278,7 +281,7 @@ class TelegramReporter:
             ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt,
                 ForwardTestMonitorState.triggered_at.isnot(None)
@@ -292,7 +295,7 @@ class TelegramReporter:
             ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt,
                 ForwardTestMonitorState.entered_at.isnot(None)
@@ -306,7 +309,7 @@ class TelegramReporter:
             ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -327,7 +330,8 @@ class TelegramReporter:
         self,
         session: AsyncSession,
         start_dt: datetime,
-        end_dt: datetime
+        end_dt: datetime,
+        epoch: int
     ) -> Dict[str, Any]:
         """Получить performance метрики."""
         # Get outcomes
@@ -336,7 +340,7 @@ class TelegramReporter:
             ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -409,7 +413,8 @@ class TelegramReporter:
         session: AsyncSession,
         start_dt: datetime,
         end_dt: datetime,
-        best: bool = True
+        best: bool = True,
+        epoch: int = 1
     ) -> Optional[Dict[str, Any]]:
         """Получить best/worst archetype."""
         q = select(
@@ -421,7 +426,7 @@ class TelegramReporter:
             ForwardTestSnapshot.snapshot_id == ForwardTestOutcome.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -691,6 +696,7 @@ class ForwardTestCommandHandler:
         chat_id: int
     ):
         """Топ-10 худших архетипов."""
+        current_epoch = await get_current_epoch()
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=30)
 
@@ -703,7 +709,7 @@ class ForwardTestCommandHandler:
             ForwardTestSnapshot.snapshot_id == ForwardTestOutcome.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -731,6 +737,7 @@ class ForwardTestCommandHandler:
         archetype: str
     ):
         """Stats по конкретному архетипу."""
+        current_epoch = await get_current_epoch()
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=30)
 
@@ -739,7 +746,7 @@ class ForwardTestCommandHandler:
             ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt,
                 ForwardTestSnapshot.archetype == archetype
@@ -860,6 +867,7 @@ class ForwardTestCommandHandler:
         chat_id: int
     ):
         """Breakdown по символам."""
+        current_epoch = await get_current_epoch()
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=7)
 
@@ -872,7 +880,7 @@ class ForwardTestCommandHandler:
             ForwardTestSnapshot.snapshot_id == ForwardTestOutcome.snapshot_id
         ).where(
             and_(
-                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.epoch == current_epoch,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
