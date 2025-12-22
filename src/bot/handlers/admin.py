@@ -5407,11 +5407,14 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
         )
         finished = (await session.execute(finished_q)).scalar() or 0
 
-        # All-time stats (quick)
+        # All-time stats (filter by current epoch)
         alltime_q = select(
             func.count(),
             func.sum(ForwardTestOutcome.total_r),
-        ).select_from(ForwardTestOutcome)
+        ).select_from(ForwardTestOutcome).join(
+            ForwardTestSnapshot,
+            ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
+        ).where(ForwardTestSnapshot.epoch == current_epoch)
         alltime_result = await session.execute(alltime_q)
         alltime_row = alltime_result.one()
         alltime_count = alltime_row[0] or 0
