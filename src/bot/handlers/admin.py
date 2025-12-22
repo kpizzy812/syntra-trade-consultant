@@ -6414,15 +6414,27 @@ async def admin_portfolio_menu(callback: CallbackQuery, session: AsyncSession):
         last_equity_result = await session.execute(last_equity_q)
         last_equity = last_equity_result.scalar_one_or_none()
 
-        # Count active candidates
-        active_candidates_q = select(func.count()).select_from(PortfolioCandidate).where(
-            PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
+        # Count active candidates (filter by epoch=1)
+        active_candidates_q = select(func.count()).select_from(PortfolioCandidate).join(
+            ForwardTestSnapshot,
+            PortfolioCandidate.snapshot_id == ForwardTestSnapshot.snapshot_id
+        ).where(
+            and_(
+                ForwardTestSnapshot.epoch == 1,
+                PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
+            )
         )
         active_candidates = (await session.execute(active_candidates_q)).scalar() or 0
 
-        # Get open positions with monitors for unrealized stats
-        open_positions_q = select(PortfolioPosition).where(
-            PortfolioPosition.status == "open"
+        # Get open positions with monitors for unrealized stats (filter by epoch=1)
+        open_positions_q = select(PortfolioPosition).join(
+            ForwardTestSnapshot,
+            PortfolioPosition.snapshot_id == ForwardTestSnapshot.snapshot_id
+        ).where(
+            and_(
+                ForwardTestSnapshot.epoch == 1,
+                PortfolioPosition.status == "open"
+            )
         )
         open_result = await session.execute(open_positions_q)
         open_positions_list = open_result.scalars().all()
@@ -6537,16 +6549,22 @@ async def admin_portfolio_menu(callback: CallbackQuery, session: AsyncSession):
 async def admin_portfolio_candidates(callback: CallbackQuery, session: AsyncSession):
     """Show active portfolio candidates with pagination"""
     try:
-        from src.services.forward_test.models import PortfolioCandidate
+        from src.services.forward_test.models import PortfolioCandidate, ForwardTestSnapshot
 
         page = int(callback.data.split("_")[-1])
         per_page = 10
         offset = page * per_page
 
-        # Get active candidates
+        # Get active candidates (filter by epoch=1)
         candidates_q = (
             select(PortfolioCandidate)
-            .where(PortfolioCandidate.status.in_(["active", "active_waiting_slot"]))
+            .join(ForwardTestSnapshot, PortfolioCandidate.snapshot_id == ForwardTestSnapshot.snapshot_id)
+            .where(
+                and_(
+                    ForwardTestSnapshot.epoch == 1,
+                    PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
+                )
+            )
             .order_by(PortfolioCandidate.priority_score.desc())
             .offset(offset)
             .limit(per_page + 1)
@@ -6557,9 +6575,14 @@ async def admin_portfolio_candidates(callback: CallbackQuery, session: AsyncSess
         has_more = len(candidates) > per_page
         candidates = candidates[:per_page]
 
-        # Total count
-        total_q = select(func.count()).select_from(PortfolioCandidate).where(
-            PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
+        # Total count (filter by epoch=1)
+        total_q = select(func.count()).select_from(PortfolioCandidate).join(
+            ForwardTestSnapshot, PortfolioCandidate.snapshot_id == ForwardTestSnapshot.snapshot_id
+        ).where(
+            and_(
+                ForwardTestSnapshot.epoch == 1,
+                PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
+            )
         )
         total = (await session.execute(total_q)).scalar() or 0
 
@@ -6622,7 +6645,7 @@ async def admin_portfolio_candidates(callback: CallbackQuery, session: AsyncSess
 async def admin_portfolio_positions(callback: CallbackQuery, session: AsyncSession):
     """Show open portfolio positions with pagination"""
     try:
-        from src.services.forward_test.models import PortfolioPosition, ForwardTestMonitorState
+        from src.services.forward_test.models import PortfolioPosition, ForwardTestMonitorState, ForwardTestSnapshot
         from src.services.forward_test.config import get_config
 
         config = get_config()
@@ -6630,10 +6653,16 @@ async def admin_portfolio_positions(callback: CallbackQuery, session: AsyncSessi
         per_page = 8
         offset = page * per_page
 
-        # Get ALL open positions for summary
+        # Get ALL open positions for summary (filter by epoch=1)
         all_positions_q = (
             select(PortfolioPosition)
-            .where(PortfolioPosition.status == "open")
+            .join(ForwardTestSnapshot, PortfolioPosition.snapshot_id == ForwardTestSnapshot.snapshot_id)
+            .where(
+                and_(
+                    ForwardTestSnapshot.epoch == 1,
+                    PortfolioPosition.status == "open"
+                )
+            )
         )
         all_result = await session.execute(all_positions_q)
         all_positions = all_result.scalars().all()
@@ -6747,16 +6776,22 @@ async def admin_portfolio_positions(callback: CallbackQuery, session: AsyncSessi
 async def admin_portfolio_history(callback: CallbackQuery, session: AsyncSession):
     """Show closed portfolio positions history"""
     try:
-        from src.services.forward_test.models import PortfolioPosition
+        from src.services.forward_test.models import PortfolioPosition, ForwardTestSnapshot
 
         page = int(callback.data.split("_")[-1])
         per_page = 10
         offset = page * per_page
 
-        # Get closed positions
+        # Get closed positions (filter by epoch=1)
         positions_q = (
             select(PortfolioPosition)
-            .where(PortfolioPosition.status == "closed")
+            .join(ForwardTestSnapshot, PortfolioPosition.snapshot_id == ForwardTestSnapshot.snapshot_id)
+            .where(
+                and_(
+                    ForwardTestSnapshot.epoch == 1,
+                    PortfolioPosition.status == "closed"
+                )
+            )
             .order_by(PortfolioPosition.closed_at.desc())
             .offset(offset)
             .limit(per_page + 1)
@@ -6767,9 +6802,14 @@ async def admin_portfolio_history(callback: CallbackQuery, session: AsyncSession
         has_more = len(positions) > per_page
         positions = positions[:per_page]
 
-        # Total count
-        total_q = select(func.count()).select_from(PortfolioPosition).where(
-            PortfolioPosition.status == "closed"
+        # Total count (filter by epoch=1)
+        total_q = select(func.count()).select_from(PortfolioPosition).join(
+            ForwardTestSnapshot, PortfolioPosition.snapshot_id == ForwardTestSnapshot.snapshot_id
+        ).where(
+            and_(
+                ForwardTestSnapshot.epoch == 1,
+                PortfolioPosition.status == "closed"
+            )
         )
         total = (await session.execute(total_q)).scalar() or 0
 
