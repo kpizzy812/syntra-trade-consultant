@@ -5326,6 +5326,14 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             ScenarioState.ENTERED.value,
             ScenarioState.TP1.value,
         ]
+
+        # Count ALL active trades first
+        active_count_q = select(func.count()).select_from(ForwardTestMonitorState).where(
+            ForwardTestMonitorState.state.in_(active_states)
+        )
+        active_count = (await session.execute(active_count_q)).scalar() or 0
+
+        # Get sample for display (limit 8)
         active_q = (
             select(ForwardTestMonitorState, ForwardTestSnapshot)
             .join(
@@ -5334,10 +5342,34 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             )
             .where(ForwardTestMonitorState.state.in_(active_states))
             .order_by(ForwardTestMonitorState.entered_at.desc())
-            .limit(20)
+            .limit(8)
         )
         active_result = await session.execute(active_q)
         active_trades = active_result.all()
+
+        # Count expired scenarios (never entered) - today only
+        expired_before_entry_q = select(func.count()).select_from(ForwardTestMonitorState).join(
+            ForwardTestSnapshot,
+            ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
+        ).where(
+            and_(
+                ForwardTestSnapshot.generated_at >= start_dt,
+                ForwardTestSnapshot.generated_at <= end_dt,
+                ForwardTestMonitorState.state == ScenarioState.EXPIRED.value,
+                ForwardTestMonitorState.entered_at.is_(None)  # Never entered
+            )
+        )
+        expired_before_entry = (await session.execute(expired_before_entry_q)).scalar() or 0
+
+        # Waiting entry (triggered but not entered)
+        waiting_entry_states = [
+            ScenarioState.ARMED.value,
+            ScenarioState.TRIGGERED.value,
+        ]
+        waiting_q = select(func.count()).select_from(ForwardTestMonitorState).where(
+            ForwardTestMonitorState.state.in_(waiting_entry_states)
+        )
+        waiting_count = (await session.execute(waiting_q)).scalar() or 0
 
         # Finished today
         finished_q = select(func.count()).select_from(ForwardTestOutcome).join(
@@ -5364,30 +5396,32 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
         # Build response
         response = f"🧪 <b>Forward Test</b> {enabled_emoji}\n\n"
 
-        # All-time summary
+        # All-time summary (closed trades only)
         if alltime_count > 0:
-            response += f"📊 <b>All-Time:</b> {alltime_count} сделок | <b>{alltime_r:+.1f}R</b>\n\n"
+            response += f"📊 <b>Закрытых:</b> {alltime_count} сделок | <b>{alltime_r:+.1f}R</b>\n\n"
 
         response += f"📅 <b>Сегодня:</b>\n"
         response += f"├ Сгенерировано: {generated}\n"
-        response += f"├ Активных: {len(active_trades)}\n"
-        response += f"└ Завершено: {finished}\n\n"
+        response += f"├ Ждут входа: {waiting_count}\n"
+        response += f"├ В позиции: <b>{active_count}</b>\n"
+        response += f"├ Завершено: {finished}\n"
+        response += f"└ Не дошли до entry: {expired_before_entry}\n\n"
 
         # Active trades summary
-        if active_trades:
-            # Summary stats
+        if active_count > 0:
+            # Summary stats from sample
             total_mfe = sum((m.mfe_r or 0) for m, s in active_trades)
             total_mae = sum((m.mae_r or 0) for m, s in active_trades)
             longs = sum(1 for m, s in active_trades if s.bias == "long")
             shorts = len(active_trades) - longs
 
-            response += f"📈 <b>Открытые позиции ({len(active_trades)}):</b>\n"
+            response += f"📈 <b>Открытые позиции ({active_count}):</b>\n"
             response += f"├ Long/Short: {longs}/{shorts}\n"
             response += f"├ Σ MFE: {total_mfe:+.2f}R\n"
             response += f"└ Σ MAE: {total_mae:.2f}R\n\n"
 
-            # List active trades (clickable)
-            for monitor, snapshot in active_trades[:8]:
+            # List active trades (sample 8)
+            for monitor, snapshot in active_trades:
                 side_emoji = "🟢" if snapshot.bias == "long" else "🔴"
                 state_emoji = "⏳" if monitor.state == ScenarioState.ENTERED.value else "✅1"
                 symbol_short = snapshot.symbol.replace("USDT", "")
@@ -5396,8 +5430,8 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
                 response += f"{side_emoji} <b>{symbol_short}</b> {state_emoji} "
                 response += f"MFE: {mfe:+.2f}R\n"
 
-            if len(active_trades) > 8:
-                response += f"<i>... и ещё {len(active_trades) - 8}</i>\n"
+            if active_count > 8:
+                response += f"<i>... и ещё {active_count - 8}</i>\n"
         else:
             response += "📭 <i>Нет активных сделок</i>\n"
 
@@ -5551,83 +5585,23 @@ async def admin_ft_alltime(callback: CallbackQuery, session: AsyncSession):
 
 @router.callback_query(F.data.startswith("admin_ft_open_"))
 async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
-    """Show open trades with clickable cards"""
+    """Show open trades grouped by symbol"""
     try:
         from src.services.forward_test.models import (
             ForwardTestSnapshot,
             ForwardTestMonitorState,
         )
         from src.services.forward_test.enums import ScenarioState
-
-        page = int(callback.data.split("_")[-1])
-        per_page = 5
+        from src.services.bybit_service import BybitService
+        from collections import defaultdict
 
         active_states = [
             ScenarioState.ENTERED.value,
             ScenarioState.TP1.value,
         ]
 
-        # Get ALL active trades for summary (only on first page)
-        total_trades = 0
-        if page == 0:
-            from src.services.bybit_service import BybitService
-
-            all_active_q = (
-                select(ForwardTestMonitorState, ForwardTestSnapshot)
-                .join(
-                    ForwardTestSnapshot,
-                    ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
-                )
-                .where(ForwardTestMonitorState.state.in_(active_states))
-            )
-            all_result = await session.execute(all_active_q)
-            all_trades = all_result.all()
-
-            # Calculate summary stats
-            total_trades = len(all_trades)
-            longs = sum(1 for m, s in all_trades if s.bias == "long")
-            shorts = total_trades - longs
-
-            # Get current prices for unrealized R calculation
-            bybit = BybitService()
-            symbols = list(set(s.symbol for m, s in all_trades))
-            current_prices = {}
-            for symbol in symbols:
-                try:
-                    price = await bybit.get_current_price(symbol)
-                    if price:
-                        current_prices[symbol] = price
-                except Exception:
-                    pass
-
-            # Calculate unrealized R for each trade
-            total_unrealized_r = 0.0
-            in_profit_count = 0
-            in_loss_count = 0
-
-            for monitor, snapshot in all_trades:
-                if snapshot.symbol in current_prices and monitor.avg_entry_price and monitor.initial_risk_per_unit:
-                    current_price = current_prices[snapshot.symbol]
-                    direction = 1 if snapshot.bias == "long" else -1
-                    unrealized_r = (current_price - monitor.avg_entry_price) * direction / monitor.initial_risk_per_unit
-                    # Add realized from partial TP
-                    unrealized_r += (monitor.realized_r_so_far or 0)
-                    total_unrealized_r += unrealized_r
-
-                    if unrealized_r >= 0:
-                        in_profit_count += 1
-                    else:
-                        in_loss_count += 1
-
-            total_mfe = sum((m.mfe_r or 0) for m, s in all_trades)
-            total_mae = sum((m.mae_r or 0) for m, s in all_trades)
-            total_realized = sum((m.realized_r_so_far or 0) for m, s in all_trades)
-
-            # TP1 hit trades (partial profit locked)
-            tp1_hit = sum(1 for m, s in all_trades if m.state == ScenarioState.TP1.value)
-
-        # Get paginated trades
-        active_q = (
+        # Get ALL active trades
+        all_active_q = (
             select(ForwardTestMonitorState, ForwardTestSnapshot)
             .join(
                 ForwardTestSnapshot,
@@ -5635,121 +5609,140 @@ async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
             )
             .where(ForwardTestMonitorState.state.in_(active_states))
             .order_by(ForwardTestMonitorState.entered_at.desc())
-            .offset(page * per_page)
-            .limit(per_page + 1)
         )
-        active_result = await session.execute(active_q)
-        rows = active_result.all()
+        all_result = await session.execute(all_active_q)
+        all_trades = all_result.all()
 
-        has_more = len(rows) > per_page
-        rows = rows[:per_page]
-
-        response = f"📋 <b>Открытые сделки</b> (стр. {page + 1})\n\n"
-
-        # Summary only on first page
-        if page == 0 and total_trades > 0:
-            # Determine overall status emoji
-            if total_unrealized_r > 0:
-                status_emoji = "🟢"
-            elif total_unrealized_r < 0:
-                status_emoji = "🔴"
-            else:
-                status_emoji = "⚪"
-
-            response += f"<b>📊 Summary ({total_trades} сделок):</b>\n"
-            response += f"├ Long/Short: {longs}/{shorts}\n"
-            response += f"├ Сейчас +R/-R: <b>{in_profit_count}/{in_loss_count}</b>\n"
-            response += f"├ {status_emoji} <b>Unrealized: {total_unrealized_r:+.2f}R</b>\n"
-            if tp1_hit > 0:
-                response += f"├ TP1 hit: {tp1_hit} (profit locked)\n"
-            if total_realized != 0:
-                response += f"├ Realized: {total_realized:+.2f}R\n"
-            response += f"├ Best (MFE): {total_mfe:+.2f}R\n"
-            response += f"└ Worst (MAE): {total_mae:.2f}R\n"
-            response += "\n"
-
-        if not rows:
+        if not all_trades:
+            response = "📋 <b>Открытые сделки</b>\n\n"
             response += "📭 <i>Нет открытых сделок</i>"
-        else:
-            # Get current prices for this page's trades
-            if page > 0:
-                from src.services.bybit_service import BybitService
-                bybit = BybitService()
-                current_prices = {}
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_forward_test")]
+            ])
+            await safe_edit_message(callback, response, keyboard)
+            await callback.answer()
+            return
 
-            page_symbols = list(set(s.symbol for m, s in rows))
-            for symbol in page_symbols:
-                if symbol not in current_prices:
-                    try:
-                        price = await bybit.get_current_price(symbol)
-                        if price:
-                            current_prices[symbol] = price
-                    except Exception:
-                        pass
+        # Group by symbol
+        by_symbol = defaultdict(list)
+        for monitor, snapshot in all_trades:
+            by_symbol[snapshot.symbol].append((monitor, snapshot))
 
-            for monitor, snapshot in rows:
-                side_emoji = "🟢" if snapshot.bias == "long" else "🔴"
-                state_name = "Entered" if monitor.state == ScenarioState.ENTERED.value else "TP1 hit"
-                symbol_short = snapshot.symbol.replace("USDT", "")
+        # Calculate summary stats
+        total_trades = len(all_trades)
+        longs = sum(1 for m, s in all_trades if s.bias == "long")
+        shorts = total_trades - longs
 
-                # Calculate current unrealized R
-                current_r = None
-                if snapshot.symbol in current_prices and monitor.avg_entry_price and monitor.initial_risk_per_unit:
-                    current_price = current_prices[snapshot.symbol]
-                    direction = 1 if snapshot.bias == "long" else -1
-                    current_r = (current_price - monitor.avg_entry_price) * direction / monitor.initial_risk_per_unit
-                    current_r += (monitor.realized_r_so_far or 0)
+        # Get current prices for unrealized R calculation
+        bybit = BybitService()
+        symbols = list(by_symbol.keys())
+        current_prices = {}
+        for symbol in symbols:
+            try:
+                price = await bybit.get_current_price(symbol)
+                if price:
+                    current_prices[symbol] = price
+            except Exception:
+                pass
 
-                # Status emoji based on current R
-                if current_r is not None:
-                    r_emoji = "✅" if current_r >= 0 else "❌"
-                    response += f"{side_emoji} <b>{symbol_short}</b> {r_emoji} <b>{current_r:+.2f}R</b>\n"
+        # Calculate unrealized R for each trade
+        total_unrealized_r = 0.0
+        in_profit_count = 0
+        in_loss_count = 0
+        symbol_stats = {}  # {symbol: {unrealized_r, count, longs, shorts}}
+
+        for symbol, trades in by_symbol.items():
+            sym_unrealized = 0.0
+            sym_in_profit = 0
+            sym_in_loss = 0
+            sym_longs = 0
+            sym_shorts = 0
+
+            for monitor, snapshot in trades:
+                if snapshot.bias == "long":
+                    sym_longs += 1
                 else:
-                    response += f"{side_emoji} <b>{symbol_short}</b> [{state_name}]\n"
+                    sym_shorts += 1
 
-                response += f"├ {snapshot.archetype[:25]}\n"
+                if symbol in current_prices and monitor.avg_entry_price and monitor.initial_risk_per_unit:
+                    current_price = current_prices[symbol]
+                    direction = 1 if snapshot.bias == "long" else -1
+                    unrealized_r = (current_price - monitor.avg_entry_price) * direction / monitor.initial_risk_per_unit
+                    unrealized_r += (monitor.realized_r_so_far or 0)
+                    sym_unrealized += unrealized_r
+                    total_unrealized_r += unrealized_r
 
-                if monitor.entered_at:
-                    duration = datetime.now() - monitor.entered_at.replace(tzinfo=None)
-                    hours = duration.total_seconds() / 3600
-                    response += f"├ Entry: {monitor.avg_entry_price:.2f} | {hours:.1f}h\n" if monitor.avg_entry_price else ""
+                    if unrealized_r >= 0:
+                        in_profit_count += 1
+                        sym_in_profit += 1
+                    else:
+                        in_loss_count += 1
+                        sym_in_loss += 1
 
-                if monitor.mae_r is not None:
-                    response += f"└ MAE: {monitor.mae_r:.2f}R | MFE: {monitor.mfe_r or 0:+.2f}R\n"
+            symbol_stats[symbol] = {
+                "unrealized_r": sym_unrealized,
+                "count": len(trades),
+                "longs": sym_longs,
+                "shorts": sym_shorts,
+                "in_profit": sym_in_profit,
+                "in_loss": sym_in_loss,
+            }
 
-                response += "\n"
+        total_mfe = sum((m.mfe_r or 0) for m, s in all_trades)
+        total_mae = sum((m.mae_r or 0) for m, s in all_trades)
+        total_realized = sum((m.realized_r_so_far or 0) for m, s in all_trades)
+        tp1_hit = sum(1 for m, s in all_trades if m.state == ScenarioState.TP1.value)
 
-        # Build keyboard with trade cards
+        # Build response
+        status_emoji = "🟢" if total_unrealized_r > 0 else ("🔴" if total_unrealized_r < 0 else "⚪")
+
+        response = "📋 <b>Открытые сделки</b>\n\n"
+        response += f"<b>📊 Summary ({total_trades} сделок):</b>\n"
+        response += f"├ Long/Short: {longs}/{shorts}\n"
+        response += f"├ Сейчас +R/-R: <b>{in_profit_count}/{in_loss_count}</b>\n"
+        response += f"├ {status_emoji} <b>Unrealized: {total_unrealized_r:+.2f}R</b>\n"
+        if tp1_hit > 0:
+            response += f"├ TP1 hit: {tp1_hit} (profit locked)\n"
+        if total_realized != 0:
+            response += f"├ Realized: {total_realized:+.2f}R\n"
+        response += f"├ Best (MFE): {total_mfe:+.2f}R\n"
+        response += f"└ Worst (MAE): {total_mae:.2f}R\n"
+        response += "\n"
+
+        # List symbols with stats
+        response += f"<b>📊 По тикерам ({len(symbols)}):</b>\n"
+
+        # Sort by unrealized R desc
+        sorted_symbols = sorted(symbols, key=lambda s: symbol_stats[s]["unrealized_r"], reverse=True)
+
+        for symbol in sorted_symbols:
+            stats = symbol_stats[symbol]
+            sym_short = symbol.replace("USDT", "")
+            r_emoji = "🟢" if stats["unrealized_r"] >= 0 else "🔴"
+
+            response += f"{r_emoji} <b>{sym_short}</b> ({stats['count']}) "
+            response += f"<b>{stats['unrealized_r']:+.2f}R</b>\n"
+
+        # Build keyboard with symbol buttons (3 per row)
         buttons = []
-
-        # Trade card buttons
-        trade_row = []
-        for i, (monitor, snapshot) in enumerate(rows):
-            symbol_short = snapshot.symbol.replace("USDT", "")[:4]
-            trade_row.append(InlineKeyboardButton(
-                text=f"📄 {symbol_short}",
-                callback_data=f"admin_ft_card_{snapshot.snapshot_id}"
+        row = []
+        for symbol in sorted_symbols:
+            sym_short = symbol.replace("USDT", "")[:5]
+            stats = symbol_stats[symbol]
+            btn_text = f"{sym_short} ({stats['count']})"
+            row.append(InlineKeyboardButton(
+                text=btn_text,
+                callback_data=f"admin_ft_sym_{symbol}"
             ))
-            if len(trade_row) == 3:
-                buttons.append(trade_row)
-                trade_row = []
-        if trade_row:
-            buttons.append(trade_row)
+            if len(row) == 3:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
 
-        # Navigation
-        nav_row = []
-        if page > 0:
-            nav_row.append(InlineKeyboardButton(
-                text="◀️ Prev", callback_data=f"admin_ft_open_{page - 1}"
-            ))
-        if has_more:
-            nav_row.append(InlineKeyboardButton(
-                text="Next ▶️", callback_data=f"admin_ft_open_{page + 1}"
-            ))
-        if nav_row:
-            buttons.append(nav_row)
-
+        # Refresh and back
         buttons.append([
+            InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_ft_open_0"),
             InlineKeyboardButton(text="◀️ Назад", callback_data="admin_forward_test")
         ])
 
@@ -5759,6 +5752,141 @@ async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
 
     except Exception as e:
         logger.exception(f"Error showing open trades: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_ft_sym_"))
+async def admin_ft_symbol_trades(callback: CallbackQuery, session: AsyncSession):
+    """Show all trades for a specific symbol"""
+    try:
+        from src.services.forward_test.models import (
+            ForwardTestSnapshot,
+            ForwardTestMonitorState,
+        )
+        from src.services.forward_test.enums import ScenarioState
+        from src.services.bybit_service import BybitService
+
+        symbol = callback.data.replace("admin_ft_sym_", "")
+        symbol_short = symbol.replace("USDT", "")
+
+        active_states = [
+            ScenarioState.ENTERED.value,
+            ScenarioState.TP1.value,
+        ]
+
+        # Get all trades for this symbol
+        trades_q = (
+            select(ForwardTestMonitorState, ForwardTestSnapshot)
+            .join(
+                ForwardTestSnapshot,
+                ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
+            )
+            .where(
+                and_(
+                    ForwardTestMonitorState.state.in_(active_states),
+                    ForwardTestSnapshot.symbol == symbol
+                )
+            )
+            .order_by(ForwardTestMonitorState.entered_at.desc())
+        )
+        result = await session.execute(trades_q)
+        trades = result.all()
+
+        if not trades:
+            await callback.answer(f"Нет сделок по {symbol_short}", show_alert=True)
+            return
+
+        # Get current price
+        bybit = BybitService()
+        current_price = None
+        try:
+            current_price = await bybit.get_current_price(symbol)
+        except Exception:
+            pass
+
+        # Build response
+        response = f"📋 <b>{symbol_short}</b> — {len(trades)} сделок\n"
+        if current_price:
+            response += f"📈 Цена: <b>{current_price:.4f}</b>\n"
+        response += "\n"
+
+        # Summary for this symbol
+        total_unrealized = 0.0
+        total_mfe = 0.0
+        total_mae = 0.0
+        longs = sum(1 for m, s in trades if s.bias == "long")
+        shorts = len(trades) - longs
+
+        for monitor, snapshot in trades:
+            total_mfe += (monitor.mfe_r or 0)
+            total_mae += (monitor.mae_r or 0)
+
+            if current_price and monitor.avg_entry_price and monitor.initial_risk_per_unit:
+                direction = 1 if snapshot.bias == "long" else -1
+                unr = (current_price - monitor.avg_entry_price) * direction / monitor.initial_risk_per_unit
+                unr += (monitor.realized_r_so_far or 0)
+                total_unrealized += unr
+
+        status_emoji = "🟢" if total_unrealized >= 0 else "🔴"
+        response += f"<b>Summary:</b>\n"
+        response += f"├ Long/Short: {longs}/{shorts}\n"
+        response += f"├ {status_emoji} Unrealized: <b>{total_unrealized:+.2f}R</b>\n"
+        response += f"├ MFE: {total_mfe:+.2f}R\n"
+        response += f"└ MAE: {total_mae:.2f}R\n\n"
+
+        # List each trade
+        for i, (monitor, snapshot) in enumerate(trades, 1):
+            side_emoji = "🟢" if snapshot.bias == "long" else "🔴"
+            state_text = "TP1✅" if monitor.state == ScenarioState.TP1.value else ""
+
+            # Calculate current R
+            current_r = None
+            if current_price and monitor.avg_entry_price and monitor.initial_risk_per_unit:
+                direction = 1 if snapshot.bias == "long" else -1
+                current_r = (current_price - monitor.avg_entry_price) * direction / monitor.initial_risk_per_unit
+                current_r += (monitor.realized_r_so_far or 0)
+
+            r_text = f"<b>{current_r:+.2f}R</b>" if current_r is not None else "—"
+            r_emoji = "✅" if current_r and current_r >= 0 else ("❌" if current_r else "")
+
+            response += f"{i}. {side_emoji} {r_emoji} {r_text} {state_text}\n"
+            response += f"├ {snapshot.archetype[:30]}\n"
+
+            if monitor.entered_at:
+                duration = datetime.now() - monitor.entered_at.replace(tzinfo=None)
+                hours = duration.total_seconds() / 3600
+                entry_text = f"Entry: {monitor.avg_entry_price:.4f}" if monitor.avg_entry_price else ""
+                response += f"├ {entry_text} | {hours:.1f}h\n"
+
+            if monitor.mae_r is not None:
+                response += f"└ MAE: {monitor.mae_r:.2f}R | MFE: {monitor.mfe_r or 0:+.2f}R\n"
+
+            response += "\n"
+
+        # Build keyboard with card buttons
+        buttons = []
+        row = []
+        for i, (monitor, snapshot) in enumerate(trades, 1):
+            row.append(InlineKeyboardButton(
+                text=f"📄 #{i}",
+                callback_data=f"admin_ft_card_{snapshot.snapshot_id}"
+            ))
+            if len(row) == 4:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+
+        buttons.append([
+            InlineKeyboardButton(text="◀️ К тикерам", callback_data="admin_ft_open_0")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing symbol trades: {e}")
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
 
 
