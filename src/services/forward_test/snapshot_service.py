@@ -173,11 +173,11 @@ class SnapshotService:
                     else:
                         entry_avg = current_price
 
-                # Take profits
-                take_profits = scenario.get("take_profits", [])
-                tp1_price = float(take_profits[0].get("price", 0)) if len(take_profits) > 0 else 0
-                tp2_price = float(take_profits[1].get("price", 0)) if len(take_profits) > 1 else None
-                tp3_price = float(take_profits[2].get("price", 0)) if len(take_profits) > 2 else None
+                # Take profits (поле называется "targets" в scenario_generator)
+                targets = scenario.get("targets", [])
+                tp1_price = float(targets[0].get("price", 0)) if len(targets) > 0 else 0
+                tp2_price = float(targets[1].get("price", 0)) if len(targets) > 1 else None
+                tp3_price = float(targets[2].get("price", 0)) if len(targets) > 2 else None
 
                 # stop_loss может быть dict или float
                 stop_loss_data = scenario.get("stop_loss", 0)
