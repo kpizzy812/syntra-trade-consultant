@@ -31,7 +31,7 @@ class RetentionConfig:
     """Настройки хранения данных."""
     snapshots_days: int = 90    # хранение snapshots
     events_days: int = 30       # хранение events (trace_json остаётся)
-    outcomes_days: int = 180    # хранение outcomes (для сравнения версий)
+    outcomes_days: int = 0      # 0 = хранить всегда (для all-time stats)
 
 
 @dataclass
@@ -71,6 +71,9 @@ class LearningGatesConfig:
 @dataclass
 class ForwardTestConfig:
     """Главная конфигурация Forward Test."""
+    # Master switch - можно отключить через админку
+    enabled: bool = True
+
     slippage: SlippageConfig = field(default_factory=SlippageConfig)
     universe: UniverseConfig = field(default_factory=UniverseConfig)
     retention: RetentionConfig = field(default_factory=RetentionConfig)

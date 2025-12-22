@@ -5297,7 +5297,13 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             ForwardTestMonitorState,
             ForwardTestOutcome,
         )
-        from src.services.forward_test.enums import ScenarioState
+        from src.services.forward_test.enums import ScenarioState, OutcomeResult
+        from src.services.forward_test.scheduler import forward_test_scheduler
+
+        # Scheduler status
+        status = forward_test_scheduler.get_status()
+        enabled = status.get("enabled", True)
+        enabled_emoji = "✅" if enabled else "⏸️"
 
         today = date.today()
         start_dt = datetime.combine(today, datetime.min.time())
@@ -5342,56 +5348,86 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
         )
         finished = (await session.execute(finished_q)).scalar() or 0
 
+        # All-time stats (quick)
+        alltime_q = select(
+            func.count(),
+            func.sum(ForwardTestOutcome.total_r),
+        ).select_from(ForwardTestOutcome)
+        alltime_result = await session.execute(alltime_q)
+        alltime_row = alltime_result.one()
+        alltime_count = alltime_row[0] or 0
+        alltime_r = alltime_row[1] or 0.0
+
         # Build response
-        response = "🧪 <b>Forward Test</b>\n\n"
+        response = f"🧪 <b>Forward Test</b> {enabled_emoji}\n\n"
+
+        # All-time summary
+        if alltime_count > 0:
+            response += f"📊 <b>All-Time:</b> {alltime_count} сделок | <b>{alltime_r:+.1f}R</b>\n\n"
+
         response += f"📅 <b>Сегодня:</b>\n"
         response += f"├ Сгенерировано: {generated}\n"
         response += f"├ Активных: {len(active_trades)}\n"
         response += f"└ Завершено: {finished}\n\n"
 
+        # Active trades summary
         if active_trades:
-            response += "📈 <b>Активные сделки:</b>\n\n"
-            for monitor, snapshot in active_trades:
-                # Calculate unrealized PnL
+            # Summary stats
+            total_mfe = sum((m.mfe_r or 0) for m, s in active_trades)
+            total_mae = sum((m.mae_r or 0) for m, s in active_trades)
+            longs = sum(1 for m, s in active_trades if s.bias == "long")
+            shorts = len(active_trades) - longs
+
+            response += f"📈 <b>Открытые позиции ({len(active_trades)}):</b>\n"
+            response += f"├ Long/Short: {longs}/{shorts}\n"
+            response += f"├ Σ MFE: {total_mfe:+.2f}R\n"
+            response += f"└ Σ MAE: {total_mae:.2f}R\n\n"
+
+            # List active trades (clickable)
+            for monitor, snapshot in active_trades[:8]:
                 side_emoji = "🟢" if snapshot.bias == "long" else "🔴"
                 state_emoji = "⏳" if monitor.state == ScenarioState.ENTERED.value else "✅1"
-
-                # Unrealized R (approximate - based on current state)
-                unrealized_r = monitor.mfe_r if monitor.mfe_r else 0.0
-                if monitor.realized_r_so_far:
-                    unrealized_r = monitor.realized_r_so_far
-
                 symbol_short = snapshot.symbol.replace("USDT", "")
-                arch_short = snapshot.archetype[:15] if snapshot.archetype else "?"
+                mfe = monitor.mfe_r or 0
 
-                response += f"{side_emoji} <b>{symbol_short}</b> {state_emoji}\n"
-                response += f"   {arch_short}\n"
-                response += f"   Entry: {monitor.avg_entry_price:.2f}" if monitor.avg_entry_price else ""
-                response += f" | Fill: {monitor.fill_pct:.0f}%\n" if monitor.fill_pct else "\n"
+                response += f"{side_emoji} <b>{symbol_short}</b> {state_emoji} "
+                response += f"MFE: {mfe:+.2f}R\n"
 
-                if monitor.mae_r is not None and monitor.mfe_r is not None:
-                    response += f"   MAE: {monitor.mae_r:.2f}R | MFE: {monitor.mfe_r:+.2f}R\n"
-
-                response += "\n"
+            if len(active_trades) > 8:
+                response += f"<i>... и ещё {len(active_trades) - 8}</i>\n"
         else:
             response += "📭 <i>Нет активных сделок</i>\n"
+
+        # Toggle button text
+        toggle_text = "⏸️ Выключить" if enabled else "▶️ Включить"
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="📊 Daily Report", callback_data="admin_ft_daily"
+                        text=toggle_text, callback_data="admin_ft_toggle"
                     ),
                     InlineKeyboardButton(
-                        text="📈 7 Days", callback_data="admin_ft_7d"
+                        text="📊 All-Time", callback_data="admin_ft_alltime"
                     ),
                 ],
                 [
                     InlineKeyboardButton(
-                        text="🏆 Best/Worst", callback_data="admin_ft_archetypes"
+                        text="📋 Открытые", callback_data="admin_ft_open_0"
                     ),
                     InlineKeyboardButton(
-                        text="📜 History", callback_data="admin_ft_history_0"
+                        text="📜 История", callback_data="admin_ft_history_0"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="📊 Daily", callback_data="admin_ft_daily"
+                    ),
+                    InlineKeyboardButton(
+                        text="📈 7 Days", callback_data="admin_ft_7d"
+                    ),
+                    InlineKeyboardButton(
+                        text="🏆 Archetypes", callback_data="admin_ft_archetypes"
                     ),
                 ],
                 [
@@ -5410,6 +5446,326 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
 
     except Exception as e:
         logger.exception(f"Error showing forward test menu: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_ft_toggle")
+async def admin_ft_toggle(callback: CallbackQuery, session: AsyncSession):
+    """Toggle forward test on/off"""
+    try:
+        from src.services.forward_test.scheduler import forward_test_scheduler
+
+        current = forward_test_scheduler.is_enabled()
+        forward_test_scheduler.set_enabled(not current)
+
+        new_state = "включен" if not current else "выключен"
+        await callback.answer(f"Forward Test {new_state}", show_alert=True)
+
+        # Refresh menu by re-calling the handler
+        callback.data = "admin_forward_test"
+        await admin_forward_test_menu(callback, session)
+
+    except Exception as e:
+        logger.exception(f"Error toggling forward test: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_ft_alltime")
+async def admin_ft_alltime(callback: CallbackQuery, session: AsyncSession):
+    """Show all-time forward test statistics"""
+    try:
+        from src.services.forward_test.models import ForwardTestOutcome, ForwardTestSnapshot
+        from src.services.forward_test.enums import OutcomeResult
+
+        # All-time stats
+        outcomes_q = select(ForwardTestOutcome)
+        result = await session.execute(outcomes_q)
+        outcomes = result.scalars().all()
+
+        if not outcomes:
+            response = "📊 <b>All-Time Stats</b>\n\n"
+            response += "📭 <i>Нет данных</i>"
+        else:
+            wins = sum(1 for o in outcomes if o.result == OutcomeResult.WIN.value)
+            losses = sum(1 for o in outcomes if o.result == OutcomeResult.LOSS.value)
+            be = len(outcomes) - wins - losses
+            total_r = sum(o.total_r or 0 for o in outcomes)
+            avg_r = total_r / len(outcomes)
+            winrate = wins / (wins + losses) * 100 if (wins + losses) > 0 else 0
+
+            # By terminal state
+            tp1_count = sum(1 for o in outcomes if o.terminal_state == "TP1")
+            tp2_count = sum(1 for o in outcomes if o.terminal_state == "TP2")
+            tp3_count = sum(1 for o in outcomes if o.terminal_state == "TP3")
+            sl_count = sum(1 for o in outcomes if o.terminal_state == "SL")
+            be_count = sum(1 for o in outcomes if o.terminal_state == "BE")
+            expired_count = sum(1 for o in outcomes if o.terminal_state == "EXPIRED")
+
+            # Average MAE/MFE
+            avg_mae = sum(o.mae_r or 0 for o in outcomes) / len(outcomes)
+            avg_mfe = sum(o.mfe_r or 0 for o in outcomes) / len(outcomes)
+
+            # First/last trade dates
+            sorted_outcomes = sorted(outcomes, key=lambda x: x.created_at or datetime.min)
+            first_date = sorted_outcomes[0].created_at.strftime("%d.%m.%Y") if sorted_outcomes else "N/A"
+            last_date = sorted_outcomes[-1].created_at.strftime("%d.%m.%Y") if sorted_outcomes else "N/A"
+
+            response = "📊 <b>All-Time Stats</b>\n\n"
+            response += f"📅 Период: {first_date} — {last_date}\n\n"
+            response += f"<b>📈 Performance:</b>\n"
+            response += f"├ Всего сделок: <b>{len(outcomes)}</b>\n"
+            response += f"├ Winrate: <b>{winrate:.1f}%</b>\n"
+            response += f"├ Net R: <b>{total_r:+.2f}R</b>\n"
+            response += f"└ Avg R: <b>{avg_r:+.3f}R</b>\n\n"
+
+            response += f"<b>📊 Outcomes:</b>\n"
+            response += f"├ Wins: {wins} ({wins/len(outcomes)*100:.0f}%)\n"
+            response += f"├ Losses: {losses} ({losses/len(outcomes)*100:.0f}%)\n"
+            response += f"└ BE/Other: {be} ({be/len(outcomes)*100:.0f}%)\n\n"
+
+            response += f"<b>🎯 Terminal States:</b>\n"
+            response += f"├ TP1: {tp1_count} | TP2: {tp2_count} | TP3: {tp3_count}\n"
+            response += f"├ SL: {sl_count} | BE: {be_count}\n"
+            response += f"└ Expired: {expired_count}\n\n"
+
+            response += f"<b>📉 Risk Metrics:</b>\n"
+            response += f"├ Avg MAE: {avg_mae:.2f}R\n"
+            response += f"└ Avg MFE: {avg_mfe:+.2f}R\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_forward_test")]
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing alltime stats: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_ft_open_"))
+async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
+    """Show open trades with clickable cards"""
+    try:
+        from src.services.forward_test.models import (
+            ForwardTestSnapshot,
+            ForwardTestMonitorState,
+        )
+        from src.services.forward_test.enums import ScenarioState
+
+        page = int(callback.data.split("_")[-1])
+        per_page = 5
+
+        active_states = [
+            ScenarioState.ENTERED.value,
+            ScenarioState.TP1.value,
+        ]
+        active_q = (
+            select(ForwardTestMonitorState, ForwardTestSnapshot)
+            .join(
+                ForwardTestSnapshot,
+                ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
+            )
+            .where(ForwardTestMonitorState.state.in_(active_states))
+            .order_by(ForwardTestMonitorState.entered_at.desc())
+            .offset(page * per_page)
+            .limit(per_page + 1)
+        )
+        active_result = await session.execute(active_q)
+        rows = active_result.all()
+
+        has_more = len(rows) > per_page
+        rows = rows[:per_page]
+
+        response = f"📋 <b>Открытые сделки</b> (стр. {page + 1})\n\n"
+
+        if not rows:
+            response += "📭 <i>Нет открытых сделок</i>"
+        else:
+            for monitor, snapshot in rows:
+                side_emoji = "🟢" if snapshot.bias == "long" else "🔴"
+                state_name = "Entered" if monitor.state == ScenarioState.ENTERED.value else "TP1 hit"
+                symbol_short = snapshot.symbol.replace("USDT", "")
+
+                response += f"{side_emoji} <b>{symbol_short}</b> [{state_name}]\n"
+                response += f"├ Archetype: {snapshot.archetype[:25]}\n"
+                response += f"├ Entry: {monitor.avg_entry_price or 'N/A'}"
+                if monitor.fill_pct:
+                    response += f" ({monitor.fill_pct:.0f}% filled)"
+                response += "\n"
+
+                if monitor.mae_r is not None:
+                    response += f"├ MAE: {monitor.mae_r:.2f}R | MFE: {monitor.mfe_r or 0:+.2f}R\n"
+
+                if monitor.realized_r_so_far:
+                    response += f"├ Realized: {monitor.realized_r_so_far:+.2f}R\n"
+
+                if monitor.entered_at:
+                    duration = datetime.now() - monitor.entered_at.replace(tzinfo=None)
+                    hours = duration.total_seconds() / 3600
+                    response += f"└ Duration: {hours:.1f}h\n"
+
+                response += "\n"
+
+        # Build keyboard with trade cards
+        buttons = []
+
+        # Trade card buttons
+        trade_row = []
+        for i, (monitor, snapshot) in enumerate(rows):
+            symbol_short = snapshot.symbol.replace("USDT", "")[:4]
+            trade_row.append(InlineKeyboardButton(
+                text=f"📄 {symbol_short}",
+                callback_data=f"admin_ft_card_{snapshot.snapshot_id}"
+            ))
+            if len(trade_row) == 3:
+                buttons.append(trade_row)
+                trade_row = []
+        if trade_row:
+            buttons.append(trade_row)
+
+        # Navigation
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(
+                text="◀️ Prev", callback_data=f"admin_ft_open_{page - 1}"
+            ))
+        if has_more:
+            nav_row.append(InlineKeyboardButton(
+                text="Next ▶️", callback_data=f"admin_ft_open_{page + 1}"
+            ))
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([
+            InlineKeyboardButton(text="◀️ Назад", callback_data="admin_forward_test")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing open trades: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_ft_card_"))
+async def admin_ft_trade_card(callback: CallbackQuery, session: AsyncSession):
+    """Show detailed trade card with entry/SL/TPs/leverage/PnL"""
+    try:
+        from src.services.forward_test.models import (
+            ForwardTestSnapshot,
+            ForwardTestMonitorState,
+            ForwardTestEvent,
+        )
+        from src.services.forward_test.enums import ScenarioState
+
+        snapshot_id = callback.data.replace("admin_ft_card_", "")
+
+        # Get snapshot and monitor state
+        q = (
+            select(ForwardTestMonitorState, ForwardTestSnapshot)
+            .join(
+                ForwardTestSnapshot,
+                ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
+            )
+            .where(ForwardTestSnapshot.snapshot_id == snapshot_id)
+        )
+        result = await session.execute(q)
+        row = result.first()
+
+        if not row:
+            await callback.answer("Сделка не найдена", show_alert=True)
+            return
+
+        monitor, snapshot = row
+        side_emoji = "🟢 LONG" if snapshot.bias == "long" else "🔴 SHORT"
+        symbol_short = snapshot.symbol.replace("USDT", "")
+
+        # Parse scenario_json for targets
+        scenario = snapshot.scenario_json or {}
+        entry = scenario.get("entry", {})
+        targets = scenario.get("targets", [])
+        stop_loss = scenario.get("stop_loss", {})
+        leverage = scenario.get("leverage", "?")
+
+        response = f"📄 <b>Trade Card: {symbol_short}</b>\n\n"
+        response += f"{side_emoji}\n"
+        response += f"├ Archetype: <b>{snapshot.archetype}</b>\n"
+        response += f"├ Timeframe: {snapshot.timeframe}\n"
+        response += f"└ Leverage: {leverage}x\n\n"
+
+        # Entry
+        response += f"<b>📥 Entry:</b>\n"
+        if isinstance(entry, dict):
+            entry_price = entry.get("price") or entry.get("limit_price")
+            entry_type = entry.get("type", "limit")
+            response += f"├ Type: {entry_type}\n"
+            response += f"├ Plan: {entry_price}\n"
+        else:
+            response += f"├ Plan: {entry}\n"
+        response += f"└ Actual: {monitor.avg_entry_price or 'N/A'}"
+        if monitor.fill_pct:
+            response += f" ({monitor.fill_pct:.0f}%)"
+        response += "\n\n"
+
+        # Stop Loss
+        response += f"<b>🛑 Stop Loss:</b>\n"
+        if isinstance(stop_loss, dict):
+            sl_price = stop_loss.get("price")
+            response += f"└ {sl_price}\n\n"
+        else:
+            response += f"└ {stop_loss}\n\n"
+
+        # Targets
+        response += f"<b>🎯 Targets:</b>\n"
+        for i, tp in enumerate(targets, 1):
+            if isinstance(tp, dict):
+                tp_price = tp.get("price")
+                tp_rr = tp.get("rr", "?")
+                tp_pct = tp.get("close_pct", "?")
+                hit = "✅" if i == 1 and monitor.state == ScenarioState.TP1.value else "⏳"
+                response += f"├ TP{i}: {tp_price} ({tp_rr}R, {tp_pct}%) {hit}\n"
+            else:
+                response += f"├ TP{i}: {tp}\n"
+        response += "\n"
+
+        # Current State
+        state_map = {
+            ScenarioState.ENTERED.value: "⏳ В позиции",
+            ScenarioState.TP1.value: "✅ TP1 достигнут",
+        }
+        state_text = state_map.get(monitor.state, monitor.state)
+        response += f"<b>📊 Status:</b> {state_text}\n"
+
+        if monitor.mae_r is not None:
+            response += f"├ MAE: {monitor.mae_r:.2f}R (worst drawdown)\n"
+        if monitor.mfe_r is not None:
+            response += f"├ MFE: {monitor.mfe_r:+.2f}R (best unrealized)\n"
+        if monitor.realized_r_so_far:
+            response += f"├ Realized: {monitor.realized_r_so_far:+.2f}R\n"
+
+        if monitor.entered_at:
+            duration = datetime.now() - monitor.entered_at.replace(tzinfo=None)
+            hours = duration.total_seconds() / 3600
+            response += f"└ Duration: {hours:.1f}h\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ К списку", callback_data="admin_ft_open_0")],
+                [InlineKeyboardButton(text="◀️ Главная", callback_data="admin_forward_test")],
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing trade card: {e}")
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
 
 

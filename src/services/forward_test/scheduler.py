@@ -153,8 +153,20 @@ class ForwardTestScheduler:
         await self._job_telegram_report()
         return {"status": "completed"}
 
+    def set_enabled(self, enabled: bool):
+        """Включить/выключить forward testing."""
+        self.config.enabled = enabled
+        logger.info(f"Forward test {'enabled' if enabled else 'disabled'}")
+
+    def is_enabled(self) -> bool:
+        """Проверить включен ли forward testing."""
+        return self.config.enabled
+
     async def _job_generate(self) -> dict:
         """Job: генерация batch."""
+        if not self.config.enabled:
+            logger.debug("Forward test disabled, skipping generation")
+            return {"skipped": True, "reason": "disabled"}
         try:
             async with get_session_maker()() as session:
                 result = await snapshot_service.generate_batch(session)
@@ -174,6 +186,8 @@ class ForwardTestScheduler:
 
     async def _job_monitor(self) -> list:
         """Job: мониторинг."""
+        if not self.config.enabled:
+            return []
         try:
             async with get_session_maker()() as session:
                 transitions = await monitor_service.tick(session)
@@ -252,47 +266,56 @@ class ForwardTestScheduler:
         """
         Job: cleanup старых данных.
 
-        Retention:
+        Retention (0 = keep forever):
         - events: 30 дней
         - snapshots: 90 дней
-        - outcomes: 180 дней
+        - outcomes: 0 (хранить всегда для all-time stats)
         """
         try:
             retention = self.config.retention
             now = datetime.now(UTC)
+            events_deleted_count = 0
+            outcomes_deleted_count = 0
+            snapshots_deleted_count = 0
 
             async with get_session_maker()() as session:
-                # Cleanup events (30 дней)
-                events_cutoff = now - timedelta(days=retention.events_days)
-                events_deleted = await session.execute(
-                    delete(ForwardTestEvent).where(
-                        ForwardTestEvent.ts < events_cutoff
+                # Cleanup events
+                if retention.events_days > 0:
+                    events_cutoff = now - timedelta(days=retention.events_days)
+                    events_deleted = await session.execute(
+                        delete(ForwardTestEvent).where(
+                            ForwardTestEvent.ts < events_cutoff
+                        )
                     )
-                )
+                    events_deleted_count = events_deleted.rowcount
 
-                # Cleanup outcomes (180 дней)
-                outcomes_cutoff = now - timedelta(days=retention.outcomes_days)
-                outcomes_deleted = await session.execute(
-                    delete(ForwardTestOutcome).where(
-                        ForwardTestOutcome.created_at < outcomes_cutoff
+                # Cleanup outcomes (0 = хранить всегда)
+                if retention.outcomes_days > 0:
+                    outcomes_cutoff = now - timedelta(days=retention.outcomes_days)
+                    outcomes_deleted = await session.execute(
+                        delete(ForwardTestOutcome).where(
+                            ForwardTestOutcome.created_at < outcomes_cutoff
+                        )
                     )
-                )
+                    outcomes_deleted_count = outcomes_deleted.rowcount
 
-                # Cleanup snapshots (90 дней) - CASCADE удалит связанные
-                snapshots_cutoff = now - timedelta(days=retention.snapshots_days)
-                snapshots_deleted = await session.execute(
-                    delete(ForwardTestSnapshot).where(
-                        ForwardTestSnapshot.generated_at < snapshots_cutoff
+                # Cleanup snapshots
+                if retention.snapshots_days > 0:
+                    snapshots_cutoff = now - timedelta(days=retention.snapshots_days)
+                    snapshots_deleted = await session.execute(
+                        delete(ForwardTestSnapshot).where(
+                            ForwardTestSnapshot.generated_at < snapshots_cutoff
+                        )
                     )
-                )
+                    snapshots_deleted_count = snapshots_deleted.rowcount
 
                 await session.commit()
 
                 logger.info(
                     f"Cleanup complete: "
-                    f"events={events_deleted.rowcount}, "
-                    f"outcomes={outcomes_deleted.rowcount}, "
-                    f"snapshots={snapshots_deleted.rowcount}"
+                    f"events={events_deleted_count}, "
+                    f"outcomes={outcomes_deleted_count}, "
+                    f"snapshots={snapshots_deleted_count}"
                 )
 
         except Exception as e:
@@ -303,6 +326,7 @@ class ForwardTestScheduler:
         if not self.scheduler or not self._running:
             return {
                 "running": False,
+                "enabled": self.config.enabled,
                 "jobs": []
             }
 
@@ -316,6 +340,7 @@ class ForwardTestScheduler:
 
         return {
             "running": True,
+            "enabled": self.config.enabled,
             "jobs": jobs
         }
 
