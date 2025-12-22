@@ -164,6 +164,7 @@ class TelegramReporter:
         # Batches count
         batches_q = select(func.count(func.distinct(ForwardTestSnapshot.batch_id))).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -261,9 +262,10 @@ class TelegramReporter:
         end_dt: datetime
     ) -> Dict[str, Any]:
         """Получить funnel метрики."""
-        # Generated
+        # Generated (epoch == 1 = active data)
         gen_q = select(func.count()).select_from(ForwardTestSnapshot).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -276,6 +278,7 @@ class TelegramReporter:
             ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt,
                 ForwardTestMonitorState.triggered_at.isnot(None)
@@ -289,6 +292,7 @@ class TelegramReporter:
             ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt,
                 ForwardTestMonitorState.entered_at.isnot(None)
@@ -302,6 +306,7 @@ class TelegramReporter:
             ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -331,6 +336,7 @@ class TelegramReporter:
             ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -415,6 +421,7 @@ class TelegramReporter:
             ForwardTestSnapshot.snapshot_id == ForwardTestOutcome.snapshot_id
         ).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -696,6 +703,7 @@ class ForwardTestCommandHandler:
             ForwardTestSnapshot.snapshot_id == ForwardTestOutcome.snapshot_id
         ).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -731,6 +739,7 @@ class ForwardTestCommandHandler:
             ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt,
                 ForwardTestSnapshot.archetype == archetype
@@ -863,6 +872,7 @@ class ForwardTestCommandHandler:
             ForwardTestSnapshot.snapshot_id == ForwardTestOutcome.snapshot_id
         ).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -905,7 +915,29 @@ class ForwardTestCommandHandler:
             PortfolioPosition.status == "open"
         ).order_by(desc(PortfolioPosition.filled_at))
         positions_result = await session.execute(positions_q)
-        positions = positions_result.scalars().all()
+        open_positions = positions_result.scalars().all()
+
+        # Get all positions for summary (last 30 days)
+        all_positions_q = select(PortfolioPosition).order_by(
+            desc(PortfolioPosition.filled_at)
+        ).limit(100)
+        all_positions_result = await session.execute(all_positions_q)
+        all_positions = all_positions_result.scalars().all()
+
+        # Calculate open positions stats
+        long_open = [p for p in open_positions if p.side == "long"]
+        short_open = [p for p in open_positions if p.side == "short"]
+        sum_mfe_open = sum((p.mfe_r or 0) for p in open_positions)
+        sum_mae_open = sum((p.mae_r or 0) for p in open_positions)
+        sum_unrealized = sum((p.unrealized_r or 0) for p in open_positions)
+
+        # Calculate all-time summary
+        long_all = [p for p in all_positions if p.side == "long"]
+        short_all = [p for p in all_positions if p.side == "short"]
+        positive_r = [p for p in all_positions if (p.r_mult_realized or 0) > 0 or (p.unrealized_r or 0) > 0]
+        negative_r = [p for p in all_positions if (p.r_mult_realized or 0) < 0 or (p.unrealized_r or 0) < 0]
+        best_mfe = max((p.mfe_r or 0) for p in all_positions) if all_positions else 0
+        worst_mae = min((p.mae_r or 0) for p in all_positions) if all_positions else 0
 
         lines = [
             "<b>Portfolio Mode</b>",
@@ -914,26 +946,34 @@ class ForwardTestCommandHandler:
             f"<b>Risk:</b> {stats['total_risk_r']:.2f}R / {config.portfolio.max_total_risk_r:.1f}R ({stats['total_risk_r']/config.portfolio.max_total_risk_r*100:.0f}%)",
             f"<b>Max DD:</b> {stats['max_drawdown_pct']:.1f}%",
             "",
-            f"<b>Performance</b>",
-            f"• Trades: {stats['total_trades']}",
-            f"• Win/Loss: {stats['win_count']}/{stats['loss_count']}",
-            f"• Total R: {stats['total_r_realized']:+.2f}R",
+            f"<b>Open Positions ({len(open_positions)})</b>",
+            f"├ Long/Short: {len(long_open)}/{len(short_open)}",
+            f"├ Σ MFE: <b>{sum_mfe_open:+.2f}R</b>",
+            f"├ Σ MAE: <b>{sum_mae_open:+.2f}R</b>",
+            f"└ Unrealized: <b>{sum_unrealized:+.2f}R</b>",
+            "",
+            f"<b>Summary ({len(all_positions)} trades)</b>",
+            f"├ Long/Short: {len(long_all)}/{len(short_all)}",
+            f"├ +R/-R: {len(positive_r)}/{len(negative_r)}",
+            f"├ Realized: <b>{stats['total_r_realized']:+.2f}R</b>",
+            f"├ Best (MFE): <b>{best_mfe:+.2f}R</b>",
+            f"└ Worst (MAE): <b>{worst_mae:+.2f}R</b>",
         ]
 
         if stats['total_trades'] > 0:
             wr = stats['win_count'] / stats['total_trades'] * 100
-            lines.append(f"• Winrate: {wr:.0f}%")
+            lines.append("")
+            lines.append(f"<b>Winrate:</b> {wr:.0f}%")
 
-        lines.append("")
-        lines.append(f"<b>Open Positions ({len(positions)}/{config.portfolio.max_open_positions})</b>")
-
-        if positions:
-            for pos in positions:
+        # Show open positions list if any
+        if open_positions:
+            lines.append("")
+            lines.append("<b>Positions:</b>")
+            for pos in open_positions[:10]:  # Limit to 10
                 symbol = pos.symbol.replace("USDT", "")
                 side_emoji = "🟢" if pos.side == "long" else "🔴"
-                lines.append(f"{side_emoji} {symbol} @ {pos.avg_fill_price:.2f} ({pos.risk_r_filled:.2f}R)")
-        else:
-            lines.append("No open positions")
+                unr = f"{pos.unrealized_r:+.2f}R" if pos.unrealized_r else "—"
+                lines.append(f"{side_emoji} {symbol} @ {pos.avg_fill_price:.2f} | {unr}")
 
         await bot.send_message(chat_id=chat_id, text="\n".join(lines), parse_mode=ParseMode.HTML)
 

@@ -53,13 +53,21 @@ class PortfolioManager:
         """
         Вычислить priority score для кандидата.
 
+        Quality берётся из weight_factors (LLM output):
+        - confluence_count: 0-3 (сколько подтверждений)
+        - htf_alignment: -1/0/+1 (согласованность с HTF)
+        - path_clear: bool (чистый путь до TP)
+        - invalidation_distance_R: float (расстояние до SL в R)
+        - tp1_rr: float (RR до TP1)
+
         Returns:
             (priority_score, ev_component, conf_component, quality_component)
         """
         ev = snapshot.ev_r or 0.0
         confidence = snapshot.confidence or 0.0
-        # Quality placeholder — в v2 будет invalidation_distance
-        quality = 1.0
+
+        # Quality из weight_factors (не placeholder!)
+        quality = self._calculate_quality_from_weight_factors(snapshot)
 
         ev_comp = ev * self.config.ev_weight
         conf_comp = confidence * self.config.confidence_weight
@@ -68,6 +76,83 @@ class PortfolioManager:
         priority_score = ev_comp + conf_comp + quality_comp
 
         return priority_score, ev_comp, conf_comp, quality_comp
+
+    def _calculate_quality_from_weight_factors(self, snapshot: ForwardTestSnapshot) -> float:
+        """
+        Рассчитать quality из weight_factors.
+
+        Использует ту же логику что scenario_metrics_service.calculate_weight_raw().
+
+        Returns:
+            quality в диапазоне [0, 1]
+        """
+        normalized = snapshot.normalized_json or {}
+        factors = normalized.get("weight_factors", {})
+
+        if not factors:
+            # Fallback если нет weight_factors
+            return 0.5
+
+        # Санитайз входных данных
+        def safe_int(val, default=0):
+            try:
+                return int(val) if val is not None else default
+            except (TypeError, ValueError):
+                return default
+
+        def safe_float(val, default=0.0):
+            try:
+                return float(val) if val is not None else default
+            except (TypeError, ValueError):
+                return default
+
+        def safe_bool(val, default=False):
+            if val is None:
+                return default
+            if isinstance(val, bool):
+                return val
+            if isinstance(val, str):
+                return val.lower() in ("true", "1", "yes")
+            return bool(val)
+
+        confluence = safe_int(factors.get("confluence_count"), 0)
+        htf_alignment = safe_int(factors.get("htf_alignment"), 0)
+        path_clear = safe_bool(factors.get("path_clear"), False)
+        inv_dist = safe_float(factors.get("invalidation_distance_R"), 999)
+        tp1_rr = safe_float(factors.get("tp1_rr"), 999)
+
+        # Base score
+        base = 0.25
+
+        # Positive factors
+        base += 0.10 * min(confluence, 3)  # max +0.30
+
+        if path_clear:
+            base += 0.10
+
+        if htf_alignment > 0:
+            base += 0.10
+
+        # Penalties
+        penalty = 0.0
+
+        if htf_alignment < 0:
+            penalty += 0.10
+
+        if inv_dist < 0.8:
+            penalty += 0.10
+
+        if tp1_rr < 0.8:
+            penalty += 0.10
+
+        # weight_raw в [0.05, 0.85]
+        weight_raw = max(0.05, min(0.85, base - penalty))
+
+        # Нормализуем к [0, 1] для score calculation
+        # 0.05 -> 0.0, 0.85 -> 1.0
+        quality = (weight_raw - 0.05) / 0.80
+
+        return quality
 
     async def add_candidate_to_pool(
         self,

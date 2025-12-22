@@ -113,6 +113,16 @@ class ForwardTestScheduler:
             replace_existing=True
         )
 
+        # 6. Mark-to-market: hourly at :30 min (Portfolio Mode)
+        if self.config.portfolio.enabled:
+            self.scheduler.add_job(
+                self._job_mark_to_market,
+                CronTrigger(minute=30),  # Every hour at :30
+                id="forward_test_mark_to_market",
+                name="Forward Test Mark-to-Market",
+                replace_existing=True
+            )
+
         self.scheduler.start()
         self._running = True
 
@@ -320,6 +330,23 @@ class ForwardTestScheduler:
 
         except Exception as e:
             logger.error(f"Cleanup job failed: {e}")
+
+    async def _job_mark_to_market(self):
+        """
+        Job: hourly mark-to-market for portfolio positions.
+
+        Обновляет unrealized_r для всех open positions.
+        """
+        if not self.config.enabled or not self.config.portfolio.enabled:
+            return
+
+        try:
+            async with get_session_maker()() as session:
+                updated = await monitor_service.update_unrealized_pnl(session)
+                await session.commit()
+                logger.debug(f"Mark-to-market: updated {updated} positions")
+        except Exception as e:
+            logger.error(f"Mark-to-market job failed: {e}")
 
     def get_status(self) -> dict:
         """Получить статус scheduler."""

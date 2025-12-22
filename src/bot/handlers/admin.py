@@ -5312,9 +5312,10 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
         start_dt = datetime.combine(today, datetime.min.time())
         end_dt = datetime.combine(today, datetime.max.time())
 
-        # Funnel stats for today
+        # Funnel stats for today (epoch=1 = active data)
         gen_q = select(func.count()).select_from(ForwardTestSnapshot).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -5353,6 +5354,7 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt,
                 ForwardTestMonitorState.state == ScenarioState.EXPIRED.value,
@@ -5377,6 +5379,7 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at <= end_dt
             )
@@ -5470,6 +5473,9 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
                 [
                     InlineKeyboardButton(
                         text="🔄 Обновить", callback_data="admin_forward_test"
+                    ),
+                    InlineKeyboardButton(
+                        text="🗑 Очистить", callback_data="admin_ft_reset_confirm"
                     ),
                 ],
                 [
@@ -6027,12 +6033,15 @@ async def admin_ft_7d_report(callback: CallbackQuery, session: AsyncSession):
         end_dt = datetime.now()
         start_dt = end_dt - timedelta(days=7)
 
-        # Get outcomes
+        # Get outcomes (epoch=1 = active data)
         outcomes_q = select(ForwardTestOutcome).join(
             ForwardTestSnapshot,
             ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
         ).where(
-            ForwardTestSnapshot.generated_at >= start_dt
+            and_(
+                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.generated_at >= start_dt
+            )
         )
         result = await session.execute(outcomes_q)
         outcomes = result.scalars().all()
@@ -6089,7 +6098,10 @@ async def admin_ft_archetypes(callback: CallbackQuery, session: AsyncSession):
             ForwardTestOutcome,
             ForwardTestSnapshot.snapshot_id == ForwardTestOutcome.snapshot_id
         ).where(
-            ForwardTestSnapshot.generated_at >= start_dt
+            and_(
+                ForwardTestSnapshot.epoch == 1,
+                ForwardTestSnapshot.generated_at >= start_dt
+            )
         ).group_by(ForwardTestSnapshot.archetype).having(func.count() >= 3)
 
         result = await session.execute(q)
@@ -6193,6 +6205,144 @@ async def admin_ft_history(callback: CallbackQuery, session: AsyncSession):
 
     except Exception as e:
         logger.exception(f"Error showing history: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+# ============================================================================
+# Reset / Epoch handlers (очистка данных)
+# ============================================================================
+
+
+@router.callback_query(F.data == "admin_ft_reset_confirm")
+async def admin_ft_reset_confirm(callback: CallbackQuery, session: AsyncSession):
+    """Show confirmation for Forward Test data reset"""
+    try:
+        from src.services.forward_test.models import ForwardTestSnapshot
+
+        # Count current epoch=1 records
+        count_q = select(func.count()).select_from(ForwardTestSnapshot).where(
+            ForwardTestSnapshot.epoch == 1
+        )
+        count = (await session.execute(count_q)).scalar() or 0
+
+        response = (
+            "⚠️ <b>Очистить Forward Test данные?</b>\n\n"
+            f"Будет скрыто <b>{count}</b> сценариев.\n"
+            "Данные не удаляются, только помечаются epoch=0.\n\n"
+            "Это действие нельзя отменить."
+        )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, очистить", callback_data="admin_ft_reset_execute"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="admin_forward_test"),
+            ],
+        ])
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing FT reset confirm: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_ft_reset_execute")
+async def admin_ft_reset_execute(callback: CallbackQuery, session: AsyncSession):
+    """Execute Forward Test data reset (set epoch=0)"""
+    try:
+        from src.services.forward_test.models import ForwardTestSnapshot
+        from sqlalchemy import update
+
+        # Set epoch=0 for all current epoch=1 records
+        stmt = update(ForwardTestSnapshot).where(
+            ForwardTestSnapshot.epoch == 1
+        ).values(epoch=0)
+
+        result = await session.execute(stmt)
+        await session.commit()
+
+        affected = result.rowcount
+
+        await callback.answer(f"✅ Очищено {affected} сценариев", show_alert=True)
+
+        # Return to FT menu
+        callback.data = "admin_forward_test"
+        await admin_forward_test_menu(callback, session)
+
+    except Exception as e:
+        logger.exception(f"Error executing FT reset: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_portfolio_reset_confirm")
+async def admin_portfolio_reset_confirm(callback: CallbackQuery, session: AsyncSession):
+    """Show confirmation for Portfolio data reset"""
+    try:
+        from src.services.forward_test.models import (
+            PortfolioCandidate,
+            PortfolioPosition,
+            PortfolioEquitySnapshot,
+        )
+
+        # Count records
+        candidates_q = select(func.count()).select_from(PortfolioCandidate)
+        positions_q = select(func.count()).select_from(PortfolioPosition)
+        equity_q = select(func.count()).select_from(PortfolioEquitySnapshot)
+
+        candidates = (await session.execute(candidates_q)).scalar() or 0
+        positions = (await session.execute(positions_q)).scalar() or 0
+        equity = (await session.execute(equity_q)).scalar() or 0
+
+        response = (
+            "⚠️ <b>Очистить Portfolio данные?</b>\n\n"
+            f"• Candidates: <b>{candidates}</b>\n"
+            f"• Positions: <b>{positions}</b>\n"
+            f"• Equity snapshots: <b>{equity}</b>\n\n"
+            "⚠️ <b>Данные будут УДАЛЕНЫ!</b>\n"
+            "Это действие нельзя отменить."
+        )
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Да, очистить", callback_data="admin_portfolio_reset_execute"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data="admin_portfolio"),
+            ],
+        ])
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing portfolio reset confirm: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_portfolio_reset_execute")
+async def admin_portfolio_reset_execute(callback: CallbackQuery, session: AsyncSession):
+    """Execute Portfolio data reset (delete all)"""
+    try:
+        from src.services.forward_test.models import (
+            PortfolioCandidate,
+            PortfolioPosition,
+            PortfolioEquitySnapshot,
+        )
+        from sqlalchemy import delete
+
+        # Delete in correct order (FK constraints)
+        await session.execute(delete(PortfolioEquitySnapshot))
+        await session.execute(delete(PortfolioPosition))
+        await session.execute(delete(PortfolioCandidate))
+        await session.commit()
+
+        await callback.answer("✅ Portfolio данные очищены", show_alert=True)
+
+        # Return to portfolio menu
+        callback.data = "admin_portfolio"
+        await admin_portfolio_menu(callback, session)
+
+    except Exception as e:
+        logger.exception(f"Error executing portfolio reset: {e}")
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
 
 
@@ -6340,6 +6490,7 @@ async def admin_portfolio_menu(callback: CallbackQuery, session: AsyncSession):
                 ],
                 [
                     InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_portfolio"),
+                    InlineKeyboardButton(text="🗑 Очистить", callback_data="admin_portfolio_reset_confirm"),
                 ],
                 [
                     InlineKeyboardButton(text="◀️ Назад", callback_data="admin_refresh"),

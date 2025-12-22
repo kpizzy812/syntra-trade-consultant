@@ -215,10 +215,21 @@ class ForwardTestSnapshot(Base):
         comment="Срок действия в часах"
     )
 
+    # === EPOCH (для фильтрации/очистки данных) ===
+    epoch: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=1,
+        server_default=text("1"),
+        index=True,
+        comment="Эпоха данных (0 = скрытые/невалидные)"
+    )
+
     # === INDEXES ===
     __table_args__ = (
         Index('ix_snapshot_gen_sym_tf', 'generated_at', 'symbol', 'timeframe', 'mode'),
         Index('ix_snapshot_batch', 'batch_id', 'batch_ts'),
+        Index('ix_snapshot_epoch', 'epoch'),
     )
 
     def __repr__(self) -> str:
@@ -961,6 +972,23 @@ class PortfolioPosition(Base):
         Float,
         nullable=True,
         comment="Max Adverse Excursion (synced from monitor)"
+    )
+
+    # === UNREALIZED R (Mark-to-Market) ===
+    unrealized_r: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Current unrealized PnL in R (mark-to-market)"
+    )
+    mark_price: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Last mark price used for unrealized calc"
+    )
+    marked_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+        comment="When unrealized_r was last updated"
     )
 
     # === STATUS ===

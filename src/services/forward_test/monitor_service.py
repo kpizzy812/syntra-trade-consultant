@@ -1268,6 +1268,71 @@ class MonitorService:
         )
         session.add(snapshot)
 
+    async def update_unrealized_pnl(self, session: AsyncSession) -> int:
+        """
+        Mark-to-market: обновить unrealized_r для всех open positions.
+
+        Вызывается hourly для актуализации unrealized P&L.
+
+        Returns:
+            Количество обновлённых позиций.
+        """
+        if not self.config.portfolio.enabled:
+            return 0
+
+        portfolio_cfg = self.config.portfolio
+        open_positions = await self._get_open_positions(session)
+
+        if not open_positions:
+            return 0
+
+        # Group positions by symbol for batch price fetch
+        symbols = list(set(p.symbol for p in open_positions))
+        current_prices: Dict[str, float] = {}
+
+        for symbol in symbols:
+            try:
+                df = await self.bybit.get_klines(symbol, "1", limit=1)
+                if df is not None and not df.empty:
+                    current_prices[symbol] = float(df.iloc[-1]["close"])
+            except Exception as e:
+                logger.warning(f"Failed to get price for {symbol}: {e}")
+
+        now = datetime.now(UTC)
+        updated_count = 0
+
+        for position in open_positions:
+            mark_price = current_prices.get(position.symbol)
+            if mark_price is None:
+                continue
+
+            # Calculate unrealized R
+            # Direction: +1 for long, -1 for short
+            direction = 1 if position.side == "long" else -1
+
+            # PnL % = (mark_price / entry_price - 1) * direction
+            pnl_pct = (mark_price / position.avg_fill_price - 1) * direction
+
+            # unrealized_r = PnL_pct / r_to_pct
+            # r_to_pct = 0.01 means 1R = 1% of equity
+            unrealized_r = pnl_pct / portfolio_cfg.r_to_pct
+
+            # Adjust for remaining position after partial closes
+            unrealized_r *= (position.remaining_pct / 100)
+
+            # Update position
+            position.unrealized_r = unrealized_r
+            position.mark_price = mark_price
+            position.marked_at = now
+            updated_count += 1
+
+        if updated_count > 0:
+            logger.info(
+                f"Portfolio: updated unrealized_r for {updated_count} positions"
+            )
+
+        return updated_count
+
 
 # Singleton
 monitor_service = MonitorService()

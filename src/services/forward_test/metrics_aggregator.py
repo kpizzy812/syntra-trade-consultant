@@ -153,9 +153,10 @@ class MetricsAggregator:
         start_dt = datetime.combine(target_date, datetime.min.time()).replace(tzinfo=UTC)
         end_dt = start_dt + timedelta(days=1)
 
-        # Получить snapshots за день
+        # Получить snapshots за день (epoch=1 = active data)
         snapshots_query = select(ForwardTestSnapshot).where(
             and_(
+                ForwardTestSnapshot.epoch == 1,
                 ForwardTestSnapshot.generated_at >= start_dt,
                 ForwardTestSnapshot.generated_at < end_dt
             )
