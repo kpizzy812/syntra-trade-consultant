@@ -18,7 +18,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.utils.chat_action import ChatActionSender
 from aiogram.exceptions import TelegramBadRequest
 from loguru import logger
-from sqlalchemy import select, func, Integer, case
+from sqlalchemy import select, func, Integer, case, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
