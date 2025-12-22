@@ -5565,7 +5565,10 @@ async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
         ]
 
         # Get ALL active trades for summary (only on first page)
+        total_trades = 0
         if page == 0:
+            from src.services.bybit_service import BybitService
+
             all_active_q = (
                 select(ForwardTestMonitorState, ForwardTestSnapshot)
                 .join(
@@ -5582,9 +5585,36 @@ async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
             longs = sum(1 for m, s in all_trades if s.bias == "long")
             shorts = total_trades - longs
 
-            # MFE > |MAE| means trade was profitable at some point
-            profitable_now = sum(1 for m, s in all_trades if (m.mfe_r or 0) > abs(m.mae_r or 0))
-            losing_now = total_trades - profitable_now
+            # Get current prices for unrealized R calculation
+            bybit = BybitService()
+            symbols = list(set(s.symbol for m, s in all_trades))
+            current_prices = {}
+            for symbol in symbols:
+                try:
+                    price = await bybit.get_current_price(symbol)
+                    if price:
+                        current_prices[symbol] = price
+                except Exception:
+                    pass
+
+            # Calculate unrealized R for each trade
+            total_unrealized_r = 0.0
+            in_profit_count = 0
+            in_loss_count = 0
+
+            for monitor, snapshot in all_trades:
+                if snapshot.symbol in current_prices and monitor.avg_entry_price and monitor.initial_risk_per_unit:
+                    current_price = current_prices[snapshot.symbol]
+                    direction = 1 if snapshot.bias == "long" else -1
+                    unrealized_r = (current_price - monitor.avg_entry_price) * direction / monitor.initial_risk_per_unit
+                    # Add realized from partial TP
+                    unrealized_r += (monitor.realized_r_so_far or 0)
+                    total_unrealized_r += unrealized_r
+
+                    if unrealized_r >= 0:
+                        in_profit_count += 1
+                    else:
+                        in_loss_count += 1
 
             total_mfe = sum((m.mfe_r or 0) for m, s in all_trades)
             total_mae = sum((m.mae_r or 0) for m, s in all_trades)
@@ -5615,42 +5645,74 @@ async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
 
         # Summary only on first page
         if page == 0 and total_trades > 0:
+            # Determine overall status emoji
+            if total_unrealized_r > 0:
+                status_emoji = "🟢"
+            elif total_unrealized_r < 0:
+                status_emoji = "🔴"
+            else:
+                status_emoji = "⚪"
+
             response += f"<b>📊 Summary ({total_trades} сделок):</b>\n"
             response += f"├ Long/Short: {longs}/{shorts}\n"
-            response += f"├ В плюсе/минусе: {profitable_now}/{losing_now}\n"
+            response += f"├ Сейчас +R/-R: <b>{in_profit_count}/{in_loss_count}</b>\n"
+            response += f"├ {status_emoji} <b>Unrealized: {total_unrealized_r:+.2f}R</b>\n"
             if tp1_hit > 0:
-                response += f"├ TP1 hit (locked profit): {tp1_hit}\n"
-            response += f"├ Σ Best (MFE): <b>{total_mfe:+.2f}R</b>\n"
-            response += f"├ Σ Worst (MAE): <b>{total_mae:.2f}R</b>\n"
+                response += f"├ TP1 hit: {tp1_hit} (profit locked)\n"
             if total_realized != 0:
-                response += f"├ Σ Realized: <b>{total_realized:+.2f}R</b>\n"
+                response += f"├ Realized: {total_realized:+.2f}R\n"
+            response += f"├ Best (MFE): {total_mfe:+.2f}R\n"
+            response += f"└ Worst (MAE): {total_mae:.2f}R\n"
             response += "\n"
 
         if not rows:
             response += "📭 <i>Нет открытых сделок</i>"
         else:
+            # Get current prices for this page's trades
+            if page > 0:
+                from src.services.bybit_service import BybitService
+                bybit = BybitService()
+                current_prices = {}
+
+            page_symbols = list(set(s.symbol for m, s in rows))
+            for symbol in page_symbols:
+                if symbol not in current_prices:
+                    try:
+                        price = await bybit.get_current_price(symbol)
+                        if price:
+                            current_prices[symbol] = price
+                    except Exception:
+                        pass
+
             for monitor, snapshot in rows:
                 side_emoji = "🟢" if snapshot.bias == "long" else "🔴"
                 state_name = "Entered" if monitor.state == ScenarioState.ENTERED.value else "TP1 hit"
                 symbol_short = snapshot.symbol.replace("USDT", "")
 
-                response += f"{side_emoji} <b>{symbol_short}</b> [{state_name}]\n"
-                response += f"├ Archetype: {snapshot.archetype[:25]}\n"
-                response += f"├ Entry: {monitor.avg_entry_price or 'N/A'}"
-                if monitor.fill_pct:
-                    response += f" ({monitor.fill_pct:.0f}% filled)"
-                response += "\n"
+                # Calculate current unrealized R
+                current_r = None
+                if snapshot.symbol in current_prices and monitor.avg_entry_price and monitor.initial_risk_per_unit:
+                    current_price = current_prices[snapshot.symbol]
+                    direction = 1 if snapshot.bias == "long" else -1
+                    current_r = (current_price - monitor.avg_entry_price) * direction / monitor.initial_risk_per_unit
+                    current_r += (monitor.realized_r_so_far or 0)
 
-                if monitor.mae_r is not None:
-                    response += f"├ MAE: {monitor.mae_r:.2f}R | MFE: {monitor.mfe_r or 0:+.2f}R\n"
+                # Status emoji based on current R
+                if current_r is not None:
+                    r_emoji = "✅" if current_r >= 0 else "❌"
+                    response += f"{side_emoji} <b>{symbol_short}</b> {r_emoji} <b>{current_r:+.2f}R</b>\n"
+                else:
+                    response += f"{side_emoji} <b>{symbol_short}</b> [{state_name}]\n"
 
-                if monitor.realized_r_so_far:
-                    response += f"├ Realized: {monitor.realized_r_so_far:+.2f}R\n"
+                response += f"├ {snapshot.archetype[:25]}\n"
 
                 if monitor.entered_at:
                     duration = datetime.now() - monitor.entered_at.replace(tzinfo=None)
                     hours = duration.total_seconds() / 3600
-                    response += f"└ Duration: {hours:.1f}h\n"
+                    response += f"├ Entry: {monitor.avg_entry_price:.2f} | {hours:.1f}h\n" if monitor.avg_entry_price else ""
+
+                if monitor.mae_r is not None:
+                    response += f"└ MAE: {monitor.mae_r:.2f}R | MFE: {monitor.mfe_r or 0:+.2f}R\n"
 
                 response += "\n"
 
