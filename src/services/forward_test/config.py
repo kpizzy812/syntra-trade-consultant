@@ -28,10 +28,10 @@ class UniverseConfig:
 
 @dataclass
 class RetentionConfig:
-    """Настройки хранения данных."""
-    snapshots_days: int = 90    # хранение snapshots
-    events_days: int = 30       # хранение events (trace_json остаётся)
-    outcomes_days: int = 0      # 0 = хранить всегда (для all-time stats)
+    """Настройки хранения данных (0 = хранить вечно)."""
+    snapshots_days: int = 0     # хранить вечно (нужны для trade cards)
+    events_days: int = 30       # 30 дней (debug trace, много данных)
+    outcomes_days: int = 0      # хранить вечно (для all-time stats)
 
 
 @dataclass
