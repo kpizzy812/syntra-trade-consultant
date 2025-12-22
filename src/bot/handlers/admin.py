@@ -173,6 +173,9 @@ def get_admin_main_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text="🧪 Forward Test", callback_data="admin_forward_test"
                 ),
+                InlineKeyboardButton(
+                    text="📊 Portfolio", callback_data="admin_portfolio"
+                ),
             ],
             [
                 InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_refresh"),
@@ -6062,4 +6065,452 @@ async def admin_ft_history(callback: CallbackQuery, session: AsyncSession):
 
     except Exception as e:
         logger.exception(f"Error showing history: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+# ============================================================================
+# Portfolio Mode Handlers
+# ============================================================================
+
+
+@router.callback_query(F.data == "admin_portfolio")
+async def admin_portfolio_menu(callback: CallbackQuery, session: AsyncSession):
+    """Show Portfolio Mode main menu with equity stats"""
+    try:
+        from src.services.forward_test.config import get_config
+        from src.services.forward_test.models import (
+            PortfolioCandidate,
+            PortfolioPosition,
+            PortfolioEquitySnapshot,
+        )
+
+        config = get_config()
+        portfolio_cfg = config.portfolio
+
+        if not portfolio_cfg.enabled:
+            response = "📊 <b>Portfolio Mode</b>\n\n"
+            response += "⚠️ <i>Portfolio Mode отключен в конфиге</i>"
+            keyboard = InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_refresh")]
+                ]
+            )
+            await safe_edit_message(callback, response, keyboard)
+            await callback.answer()
+            return
+
+        # Get equity stats
+        last_equity_q = (
+            select(PortfolioEquitySnapshot)
+            .order_by(PortfolioEquitySnapshot.ts.desc())
+            .limit(1)
+        )
+        last_equity_result = await session.execute(last_equity_q)
+        last_equity = last_equity_result.scalar_one_or_none()
+
+        # Count active candidates
+        active_candidates_q = select(func.count()).select_from(PortfolioCandidate).where(
+            PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
+        )
+        active_candidates = (await session.execute(active_candidates_q)).scalar() or 0
+
+        # Count open positions
+        open_positions_q = select(func.count()).select_from(PortfolioPosition).where(
+            PortfolioPosition.status == "open"
+        )
+        open_positions = (await session.execute(open_positions_q)).scalar() or 0
+
+        # Build response
+        response = "📊 <b>Portfolio Mode</b>\n\n"
+
+        # Config summary
+        response += f"⚙️ <b>Config:</b>\n"
+        response += f"├ Max Positions: {portfolio_cfg.max_open_positions}\n"
+        response += f"├ Max Risk: {portfolio_cfg.max_total_risk_r}R\n"
+        response += f"├ Max Candidates: {portfolio_cfg.max_active_candidates}\n"
+        response += f"└ 1R = {portfolio_cfg.r_to_pct * 100:.1f}%\n\n"
+
+        # Current state
+        response += f"📈 <b>Current State:</b>\n"
+        response += f"├ Active Candidates: {active_candidates}/{portfolio_cfg.max_active_candidates}\n"
+        response += f"└ Open Positions: {open_positions}/{portfolio_cfg.max_open_positions}\n\n"
+
+        if last_equity:
+            equity_change = last_equity.equity_pct_from_initial
+            equity_emoji = "🟢" if equity_change >= 0 else "🔴"
+
+            response += f"💰 <b>Equity:</b>\n"
+            response += f"├ Current: ${last_equity.equity_usd:,.2f}\n"
+            response += f"├ P&L: {equity_emoji} {equity_change:+.2f}%\n"
+            response += f"├ Peak: ${last_equity.equity_peak_usd:,.2f}\n"
+            response += f"├ DD: -{last_equity.current_drawdown_pct:.2f}%\n"
+            response += f"└ Max DD: -{last_equity.max_drawdown_pct:.2f}%\n\n"
+
+            # Cumulative stats
+            if last_equity.total_trades > 0:
+                win_rate = (last_equity.win_count / last_equity.total_trades) * 100
+                response += f"📊 <b>Stats:</b>\n"
+                response += f"├ Trades: {last_equity.total_trades}\n"
+                response += f"├ Win/Loss: {last_equity.win_count}/{last_equity.loss_count}\n"
+                response += f"├ Win Rate: {win_rate:.1f}%\n"
+                response += f"└ Total R: {last_equity.total_r_realized:+.2f}R\n"
+        else:
+            response += f"💰 <b>Equity:</b>\n"
+            response += f"└ Initial: ${portfolio_cfg.initial_capital:,.2f}\n"
+            response += "\n📭 <i>Нет данных equity</i>"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="📋 Candidates", callback_data="admin_portfolio_candidates_0"
+                    ),
+                    InlineKeyboardButton(
+                        text="📈 Positions", callback_data="admin_portfolio_positions_0"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="📜 History", callback_data="admin_portfolio_history_0"
+                    ),
+                    InlineKeyboardButton(
+                        text="📊 Equity", callback_data="admin_portfolio_equity"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_portfolio"),
+                ],
+                [
+                    InlineKeyboardButton(text="◀️ Назад", callback_data="admin_refresh"),
+                ],
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing portfolio menu: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_portfolio_candidates_"))
+async def admin_portfolio_candidates(callback: CallbackQuery, session: AsyncSession):
+    """Show active portfolio candidates with pagination"""
+    try:
+        from src.services.forward_test.models import PortfolioCandidate
+
+        page = int(callback.data.split("_")[-1])
+        per_page = 10
+        offset = page * per_page
+
+        # Get active candidates
+        candidates_q = (
+            select(PortfolioCandidate)
+            .where(PortfolioCandidate.status.in_(["active", "active_waiting_slot"]))
+            .order_by(PortfolioCandidate.priority_score.desc())
+            .offset(offset)
+            .limit(per_page + 1)
+        )
+        result = await session.execute(candidates_q)
+        candidates = result.scalars().all()
+
+        has_more = len(candidates) > per_page
+        candidates = candidates[:per_page]
+
+        # Total count
+        total_q = select(func.count()).select_from(PortfolioCandidate).where(
+            PortfolioCandidate.status.in_(["active", "active_waiting_slot"])
+        )
+        total = (await session.execute(total_q)).scalar() or 0
+
+        response = f"📋 <b>Active Candidates</b> ({total})\n"
+        response += f"<i>Page {page + 1}</i>\n\n"
+
+        if not candidates:
+            response += "📭 <i>Нет активных кандидатов</i>"
+        else:
+            for c in candidates:
+                side_emoji = "🟢" if c.side == "long" else "🔴"
+                status_emoji = "⏳" if c.status == "active" else "🔄"  # active_waiting_slot
+                symbol_short = c.symbol.replace("USDT", "")
+
+                response += f"{side_emoji}{status_emoji} <b>{symbol_short}</b> "
+                response += f"Score: {c.priority_score:.2f}\n"
+                response += f"   EV: {c.ev_component:.2f} | Conf: {c.conf_component:.2f}\n"
+
+                if c.had_fill_attempt:
+                    response += f"   ⚠️ Fill attempt: {c.last_fill_reject_reason or 'pending'}\n"
+
+                if c.expires_at:
+                    from datetime import datetime, UTC
+                    remaining = c.expires_at - datetime.now(UTC)
+                    hours_left = remaining.total_seconds() / 3600
+                    if hours_left > 0:
+                        response += f"   ⏱️ TTL: {hours_left:.1f}h\n"
+                    else:
+                        response += f"   ⏱️ <i>Expired</i>\n"
+                response += "\n"
+
+        # Navigation buttons
+        buttons = []
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(
+                text="◀️ Prev", callback_data=f"admin_portfolio_candidates_{page - 1}"
+            ))
+        if has_more:
+            nav_row.append(InlineKeyboardButton(
+                text="Next ▶️", callback_data=f"admin_portfolio_candidates_{page + 1}"
+            ))
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([
+            InlineKeyboardButton(text="◀️ Назад", callback_data="admin_portfolio")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing candidates: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_portfolio_positions_"))
+async def admin_portfolio_positions(callback: CallbackQuery, session: AsyncSession):
+    """Show open portfolio positions with pagination"""
+    try:
+        from src.services.forward_test.models import PortfolioPosition, ForwardTestMonitorState
+
+        page = int(callback.data.split("_")[-1])
+        per_page = 10
+        offset = page * per_page
+
+        # Get open positions
+        positions_q = (
+            select(PortfolioPosition)
+            .where(PortfolioPosition.status == "open")
+            .order_by(PortfolioPosition.filled_at.desc())
+            .offset(offset)
+            .limit(per_page + 1)
+        )
+        result = await session.execute(positions_q)
+        positions = result.scalars().all()
+
+        has_more = len(positions) > per_page
+        positions = positions[:per_page]
+
+        # Total count
+        total_q = select(func.count()).select_from(PortfolioPosition).where(
+            PortfolioPosition.status == "open"
+        )
+        total = (await session.execute(total_q)).scalar() or 0
+
+        # Total risk
+        total_risk_q = select(func.sum(PortfolioPosition.risk_r_filled)).where(
+            PortfolioPosition.status == "open"
+        )
+        total_risk = (await session.execute(total_risk_q)).scalar() or 0.0
+
+        response = f"📈 <b>Open Positions</b> ({total})\n"
+        response += f"Total Risk: {total_risk:.2f}R\n"
+        response += f"<i>Page {page + 1}</i>\n\n"
+
+        if not positions:
+            response += "📭 <i>Нет открытых позиций</i>"
+        else:
+            for p in positions:
+                side_emoji = "🟢" if p.side == "long" else "🔴"
+                symbol_short = p.symbol.replace("USDT", "")
+
+                response += f"{side_emoji} <b>{symbol_short}</b>\n"
+                response += f"   Entry: ${p.avg_fill_price:.4f}\n"
+                response += f"   Risk: {p.risk_r_filled:.3f}R ({p.risk_pct_filled*100:.2f}%)\n"
+
+                # Get current state from monitor
+                monitor_q = select(ForwardTestMonitorState).where(
+                    ForwardTestMonitorState.snapshot_id == p.snapshot_id
+                )
+                monitor_result = await session.execute(monitor_q)
+                monitor = monitor_result.scalar_one_or_none()
+
+                if monitor:
+                    state_emoji = "⏳"
+                    if monitor.state == "TP1":
+                        state_emoji = "✅1"
+                    elif monitor.state == "TP2":
+                        state_emoji = "✅2"
+
+                    mfe = monitor.mfe_r or 0
+                    mae = monitor.mae_r or 0
+                    response += f"   State: {state_emoji} {monitor.state}\n"
+                    response += f"   MFE: {mfe:+.2f}R | MAE: {mae:.2f}R\n"
+
+                filled_str = p.filled_at.strftime("%m/%d %H:%M") if p.filled_at else "?"
+                response += f"   Filled: {filled_str}\n\n"
+
+        # Navigation buttons
+        buttons = []
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(
+                text="◀️ Prev", callback_data=f"admin_portfolio_positions_{page - 1}"
+            ))
+        if has_more:
+            nav_row.append(InlineKeyboardButton(
+                text="Next ▶️", callback_data=f"admin_portfolio_positions_{page + 1}"
+            ))
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([
+            InlineKeyboardButton(text="◀️ Назад", callback_data="admin_portfolio")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing positions: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_portfolio_history_"))
+async def admin_portfolio_history(callback: CallbackQuery, session: AsyncSession):
+    """Show closed portfolio positions history"""
+    try:
+        from src.services.forward_test.models import PortfolioPosition
+
+        page = int(callback.data.split("_")[-1])
+        per_page = 10
+        offset = page * per_page
+
+        # Get closed positions
+        positions_q = (
+            select(PortfolioPosition)
+            .where(PortfolioPosition.status == "closed")
+            .order_by(PortfolioPosition.closed_at.desc())
+            .offset(offset)
+            .limit(per_page + 1)
+        )
+        result = await session.execute(positions_q)
+        positions = result.scalars().all()
+
+        has_more = len(positions) > per_page
+        positions = positions[:per_page]
+
+        # Total count
+        total_q = select(func.count()).select_from(PortfolioPosition).where(
+            PortfolioPosition.status == "closed"
+        )
+        total = (await session.execute(total_q)).scalar() or 0
+
+        response = f"📜 <b>Closed Positions</b> ({total})\n"
+        response += f"<i>Page {page + 1}</i>\n\n"
+
+        if not positions:
+            response += "📭 <i>Нет закрытых позиций</i>"
+        else:
+            for p in positions:
+                side_emoji = "🟢" if p.side == "long" else "🔴"
+                r_mult = p.r_mult_realized or 0
+                result_emoji = "✅" if r_mult > 0 else "❌" if r_mult < 0 else "⚪"
+                symbol_short = p.symbol.replace("USDT", "")
+
+                response += f"{side_emoji}{result_emoji} <b>{symbol_short}</b> "
+                response += f"<b>{r_mult:+.2f}R</b>\n"
+
+                if p.pnl_usd_realized is not None:
+                    response += f"   P&L: ${p.pnl_usd_realized:+.2f} ({(p.pnl_pct_realized or 0)*100:+.2f}%)\n"
+
+                closed_str = p.closed_at.strftime("%m/%d %H:%M") if p.closed_at else "?"
+                response += f"   Closed: {closed_str}\n\n"
+
+        # Navigation buttons
+        buttons = []
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(
+                text="◀️ Prev", callback_data=f"admin_portfolio_history_{page - 1}"
+            ))
+        if has_more:
+            nav_row.append(InlineKeyboardButton(
+                text="Next ▶️", callback_data=f"admin_portfolio_history_{page + 1}"
+            ))
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([
+            InlineKeyboardButton(text="◀️ Назад", callback_data="admin_portfolio")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing history: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_portfolio_equity")
+async def admin_portfolio_equity(callback: CallbackQuery, session: AsyncSession):
+    """Show detailed equity chart data"""
+    try:
+        from src.services.forward_test.models import PortfolioEquitySnapshot
+        from src.services.forward_test.config import get_config
+        from datetime import datetime, UTC, timedelta
+
+        config = get_config()
+
+        # Get last 20 equity snapshots
+        snapshots_q = (
+            select(PortfolioEquitySnapshot)
+            .order_by(PortfolioEquitySnapshot.ts.desc())
+            .limit(20)
+        )
+        result = await session.execute(snapshots_q)
+        snapshots = list(reversed(result.scalars().all()))
+
+        response = "📊 <b>Equity History</b>\n\n"
+
+        if not snapshots:
+            response += f"💰 Initial: ${config.portfolio.initial_capital:,.2f}\n"
+            response += "📭 <i>Нет данных</i>"
+        else:
+            latest = snapshots[-1]
+
+            # Summary
+            response += f"💰 <b>Current:</b> ${latest.equity_usd:,.2f}\n"
+            response += f"📈 <b>Peak:</b> ${latest.equity_peak_usd:,.2f}\n"
+            response += f"📉 <b>Max DD:</b> -{latest.max_drawdown_pct:.2f}%\n\n"
+
+            # Timeline
+            response += "<b>Timeline:</b>\n"
+            for snap in snapshots[-10:]:
+                ts_str = snap.ts.strftime("%m/%d %H:%M")
+                pnl = snap.equity_pct_from_initial
+                emoji = "🟢" if pnl >= 0 else "🔴"
+                dd_str = f"-{snap.current_drawdown_pct:.1f}%" if snap.current_drawdown_pct > 0 else ""
+
+                response += f"{emoji} {ts_str}: ${snap.equity_usd:,.0f} "
+                response += f"({pnl:+.1f}%) {dd_str}\n"
+                response += f"   ├ {snap.trigger}\n"
+                response += f"   └ Pos: {snap.open_positions_count} | Risk: {snap.total_risk_r:.2f}R\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_portfolio")]
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing equity: {e}")
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
