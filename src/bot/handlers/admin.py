@@ -170,6 +170,11 @@ def get_admin_main_menu() -> InlineKeyboardMarkup:
                 ),
             ],
             [
+                InlineKeyboardButton(
+                    text="🧪 Forward Test", callback_data="admin_forward_test"
+                ),
+            ],
+            [
                 InlineKeyboardButton(text="🔄 Обновить", callback_data="admin_refresh"),
             ],
         ]
@@ -5274,4 +5279,337 @@ async def admin_learning_recalculate(callback: CallbackQuery, session: AsyncSess
 
     except Exception as e:
         logger.exception(f"Error recalculating learning: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+# =============================================================================
+# Forward Test Admin Section
+# =============================================================================
+
+
+@router.callback_query(F.data == "admin_forward_test")
+async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession):
+    """Show Forward Test main menu with active trades"""
+    try:
+        from datetime import date, timedelta
+        from src.services.forward_test.models import (
+            ForwardTestSnapshot,
+            ForwardTestMonitorState,
+            ForwardTestOutcome,
+        )
+        from src.services.forward_test.enums import ScenarioState
+
+        today = date.today()
+        start_dt = datetime.combine(today, datetime.min.time())
+        end_dt = datetime.combine(today, datetime.max.time())
+
+        # Funnel stats for today
+        gen_q = select(func.count()).select_from(ForwardTestSnapshot).where(
+            and_(
+                ForwardTestSnapshot.generated_at >= start_dt,
+                ForwardTestSnapshot.generated_at <= end_dt
+            )
+        )
+        generated = (await session.execute(gen_q)).scalar() or 0
+
+        # Active trades (entered but not finished)
+        active_states = [
+            ScenarioState.ENTERED.value,
+            ScenarioState.TP1.value,
+        ]
+        active_q = (
+            select(ForwardTestMonitorState, ForwardTestSnapshot)
+            .join(
+                ForwardTestSnapshot,
+                ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
+            )
+            .where(ForwardTestMonitorState.state.in_(active_states))
+            .order_by(ForwardTestMonitorState.entered_at.desc())
+            .limit(20)
+        )
+        active_result = await session.execute(active_q)
+        active_trades = active_result.all()
+
+        # Finished today
+        finished_q = select(func.count()).select_from(ForwardTestOutcome).join(
+            ForwardTestSnapshot,
+            ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
+        ).where(
+            and_(
+                ForwardTestSnapshot.generated_at >= start_dt,
+                ForwardTestSnapshot.generated_at <= end_dt
+            )
+        )
+        finished = (await session.execute(finished_q)).scalar() or 0
+
+        # Build response
+        response = "🧪 <b>Forward Test</b>\n\n"
+        response += f"📅 <b>Сегодня:</b>\n"
+        response += f"├ Сгенерировано: {generated}\n"
+        response += f"├ Активных: {len(active_trades)}\n"
+        response += f"└ Завершено: {finished}\n\n"
+
+        if active_trades:
+            response += "📈 <b>Активные сделки:</b>\n\n"
+            for monitor, snapshot in active_trades:
+                # Calculate unrealized PnL
+                side_emoji = "🟢" if snapshot.bias == "long" else "🔴"
+                state_emoji = "⏳" if monitor.state == ScenarioState.ENTERED.value else "✅1"
+
+                # Unrealized R (approximate - based on current state)
+                unrealized_r = monitor.mfe_r if monitor.mfe_r else 0.0
+                if monitor.realized_r_so_far:
+                    unrealized_r = monitor.realized_r_so_far
+
+                symbol_short = snapshot.symbol.replace("USDT", "")
+                arch_short = snapshot.archetype[:15] if snapshot.archetype else "?"
+
+                response += f"{side_emoji} <b>{symbol_short}</b> {state_emoji}\n"
+                response += f"   {arch_short}\n"
+                response += f"   Entry: {monitor.avg_entry_price:.2f}" if monitor.avg_entry_price else ""
+                response += f" | Fill: {monitor.fill_pct:.0f}%\n" if monitor.fill_pct else "\n"
+
+                if monitor.mae_r is not None and monitor.mfe_r is not None:
+                    response += f"   MAE: {monitor.mae_r:.2f}R | MFE: {monitor.mfe_r:+.2f}R\n"
+
+                response += "\n"
+        else:
+            response += "📭 <i>Нет активных сделок</i>\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="📊 Daily Report", callback_data="admin_ft_daily"
+                    ),
+                    InlineKeyboardButton(
+                        text="📈 7 Days", callback_data="admin_ft_7d"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🏆 Best/Worst", callback_data="admin_ft_archetypes"
+                    ),
+                    InlineKeyboardButton(
+                        text="📜 History", callback_data="admin_ft_history_0"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(
+                        text="🔄 Обновить", callback_data="admin_forward_test"
+                    ),
+                ],
+                [
+                    InlineKeyboardButton(text="◀️ Назад", callback_data="admin_refresh"),
+                ],
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing forward test menu: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_ft_daily")
+async def admin_ft_daily_report(callback: CallbackQuery, session: AsyncSession):
+    """Show daily forward test report"""
+    try:
+        from src.services.forward_test.telegram_reporter import TelegramReporter
+
+        reporter = TelegramReporter()
+        report_html = await reporter._build_daily_report(session, date.today())
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_forward_test")]
+            ]
+        )
+
+        await safe_edit_message(callback, report_html, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing daily report: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_ft_7d")
+async def admin_ft_7d_report(callback: CallbackQuery, session: AsyncSession):
+    """Show 7-day forward test summary"""
+    try:
+        from src.services.forward_test.models import ForwardTestOutcome, ForwardTestSnapshot
+        from src.services.forward_test.enums import OutcomeResult
+
+        end_dt = datetime.now()
+        start_dt = end_dt - timedelta(days=7)
+
+        # Get outcomes
+        outcomes_q = select(ForwardTestOutcome).join(
+            ForwardTestSnapshot,
+            ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
+        ).where(
+            ForwardTestSnapshot.generated_at >= start_dt
+        )
+        result = await session.execute(outcomes_q)
+        outcomes = result.scalars().all()
+
+        if not outcomes:
+            response = "🧪 <b>Forward Test — 7 дней</b>\n\n"
+            response += "📭 <i>Нет данных за период</i>"
+        else:
+            wins = sum(1 for o in outcomes if o.result == OutcomeResult.WIN.value)
+            losses = sum(1 for o in outcomes if o.result == OutcomeResult.LOSS.value)
+            total_r = sum(o.total_r for o in outcomes)
+            avg_r = total_r / len(outcomes)
+            winrate = wins / (wins + losses) * 100 if (wins + losses) > 0 else 0
+
+            response = "🧪 <b>Forward Test — 7 дней</b>\n\n"
+            response += f"📊 <b>Всего сделок:</b> {len(outcomes)}\n"
+            response += f"├ Wins: {wins}\n"
+            response += f"├ Losses: {losses}\n"
+            response += f"└ Breakeven: {len(outcomes) - wins - losses}\n\n"
+            response += f"📈 <b>Performance:</b>\n"
+            response += f"├ Winrate: <b>{winrate:.1f}%</b>\n"
+            response += f"├ Net R: <b>{total_r:+.2f}R</b>\n"
+            response += f"└ Avg R: <b>{avg_r:+.2f}R</b>\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_forward_test")]
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing 7d report: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data == "admin_ft_archetypes")
+async def admin_ft_archetypes(callback: CallbackQuery, session: AsyncSession):
+    """Show best and worst archetypes"""
+    try:
+        from src.services.forward_test.models import ForwardTestOutcome, ForwardTestSnapshot
+
+        end_dt = datetime.now()
+        start_dt = end_dt - timedelta(days=30)
+
+        q = select(
+            ForwardTestSnapshot.archetype,
+            func.count().label('count'),
+            func.avg(ForwardTestOutcome.total_r).label('avg_r'),
+            func.sum(ForwardTestOutcome.total_r).label('total_r')
+        ).join(
+            ForwardTestOutcome,
+            ForwardTestSnapshot.snapshot_id == ForwardTestOutcome.snapshot_id
+        ).where(
+            ForwardTestSnapshot.generated_at >= start_dt
+        ).group_by(ForwardTestSnapshot.archetype).having(func.count() >= 3)
+
+        result = await session.execute(q)
+        rows = result.all()
+
+        if not rows:
+            response = "🧪 <b>Archetypes — 30 дней</b>\n\n"
+            response += "📭 <i>Недостаточно данных</i>"
+        else:
+            # Sort by avg_r
+            sorted_rows = sorted(rows, key=lambda x: x[2] or 0, reverse=True)
+
+            response = "🏆 <b>Best Archetypes (30d)</b>\n\n"
+            for row in sorted_rows[:5]:
+                arch, count, avg_r, total_r = row
+                emoji = "✅" if (avg_r or 0) > 0 else "❌"
+                response += f"{emoji} <b>{arch[:20]}</b>\n"
+                response += f"   n={count} | avg: {avg_r:+.2f}R | total: {total_r:+.2f}R\n"
+
+            response += "\n💀 <b>Worst Archetypes (30d)</b>\n\n"
+            for row in sorted_rows[-5:]:
+                arch, count, avg_r, total_r = row
+                if (avg_r or 0) >= 0:
+                    continue
+                emoji = "❌"
+                response += f"{emoji} <b>{arch[:20]}</b>\n"
+                response += f"   n={count} | avg: {avg_r:+.2f}R | total: {total_r:+.2f}R\n"
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="admin_forward_test")]
+            ]
+        )
+
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing archetypes: {e}")
+        await callback.answer(f"❌ Ошибка: {e}", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("admin_ft_history_"))
+async def admin_ft_history(callback: CallbackQuery, session: AsyncSession):
+    """Show finished trades history with pagination"""
+    try:
+        from src.services.forward_test.models import ForwardTestOutcome, ForwardTestSnapshot
+
+        page = int(callback.data.split("_")[-1])
+        per_page = 10
+        offset = page * per_page
+
+        q = (
+            select(ForwardTestOutcome, ForwardTestSnapshot)
+            .join(
+                ForwardTestSnapshot,
+                ForwardTestOutcome.snapshot_id == ForwardTestSnapshot.snapshot_id
+            )
+            .order_by(ForwardTestOutcome.created_at.desc())
+            .offset(offset)
+            .limit(per_page + 1)
+        )
+        result = await session.execute(q)
+        rows = result.all()
+
+        has_more = len(rows) > per_page
+        rows = rows[:per_page]
+
+        response = f"📜 <b>History</b> (стр. {page + 1})\n\n"
+
+        for outcome, snapshot in rows:
+            side_emoji = "🟢" if snapshot.bias == "long" else "🔴"
+            result_emoji = "✅" if outcome.total_r > 0 else "❌" if outcome.total_r < 0 else "➖"
+            symbol_short = snapshot.symbol.replace("USDT", "")
+
+            response += f"{side_emoji}{result_emoji} <b>{symbol_short}</b> "
+            response += f"<b>{outcome.total_r:+.2f}R</b>\n"
+            response += f"   {snapshot.archetype[:18]}\n"
+            response += f"   {outcome.terminal_state} | {outcome.created_at.strftime('%m/%d %H:%M')}\n\n"
+
+        buttons = []
+        nav_row = []
+        if page > 0:
+            nav_row.append(InlineKeyboardButton(
+                text="◀️ Prev", callback_data=f"admin_ft_history_{page - 1}"
+            ))
+        if has_more:
+            nav_row.append(InlineKeyboardButton(
+                text="Next ▶️", callback_data=f"admin_ft_history_{page + 1}"
+            ))
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([
+            InlineKeyboardButton(text="◀️ Назад", callback_data="admin_forward_test")
+        ])
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await safe_edit_message(callback, response, keyboard)
+        await callback.answer()
+
+    except Exception as e:
+        logger.exception(f"Error showing history: {e}")
         await callback.answer(f"❌ Ошибка: {e}", show_alert=True)

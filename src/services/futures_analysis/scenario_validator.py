@@ -248,7 +248,8 @@ class ScenarioValidator:
         self,
         scenarios: List[Dict],
         current_price: float,
-        atr: float
+        atr: float,
+        min_tp1_rr: float = 0.7
     ) -> List[Dict]:
         """
         Рассчитать RR в Python + санити-проверки (LLM не считает RR).
@@ -267,11 +268,13 @@ class ScenarioValidator:
             4. TP в правильном направлении (LONG: tp > entry_ref, SHORT: tp < entry_ref)
             5. RR адекватность: RR_TP1 > 10 на 4H = outlier (warning)
             6. risk_per_unit > 0 (иначе invalid)
+            7. TP1 RR >= min_tp1_rr (hard reject if below)
 
         Args:
             scenarios: Сценарии после validate()
             current_price: Текущая цена
             atr: ATR для авто-фиксов
+            min_tp1_rr: Minimum TP1 RR threshold (from mode config)
 
         Returns:
             Сценарии с пересчитанным RR и статусом валидации
@@ -531,6 +534,23 @@ class ScenarioValidator:
                     rr_outlier = True
                     issues.append(f"TP1_rr_outlier: RR={rr:.1f} (>10)")
 
+                # 🆕 TP1 minimum RR check - mark as LOW QUALITY (not hard reject)
+                if i == 0 and rr < min_tp1_rr:
+                    sc["quality_tier"] = "low"
+                    # Add to quality_issues for UI display
+                    if "quality_issues" not in sc:
+                        sc["quality_issues"] = []
+                    sc["quality_issues"].append({
+                        "code": "tp1_rr_too_low",
+                        "severity": "warning",
+                        "message": f"TP1 RR слишком низкий: {rr:.2f}R (минимум {min_tp1_rr}R)",
+                        "details": f"При переводе SL в безубыток EV становится отрицательным"
+                    })
+                    issues.append(f"TP1_rr_too_low: RR={rr:.2f} < {min_tp1_rr}")
+                    logger.warning(
+                        f"Scenario #{sc.get('id')} marked low quality: TP1 RR {rr:.2f} < {min_tp1_rr}"
+                    )
+
             # === 6. Добавляем метаданные расчёта ===
             sc["rr_calculation"] = {
                 "entry_ref": round(entry_ref, 2),
@@ -589,7 +609,19 @@ class ScenarioValidator:
                     )
 
             # === 8. Итоговый статус ===
-            if not issues:
+            # Set quality_tier if not already set (e.g., by TP1 RR check)
+            if "quality_tier" not in sc:
+                if not issues:
+                    sc["quality_tier"] = "high"
+                elif rr_outlier:
+                    sc["quality_tier"] = "acceptable"  # outlier warning but usable
+                else:
+                    sc["quality_tier"] = "acceptable"  # fixed issues
+
+            # Legacy field for backward compatibility
+            if sc["quality_tier"] == "low":
+                sc["rr_validation"] = "low_quality"
+            elif not issues:
                 sc["rr_validation"] = "valid"
             elif rr_outlier:
                 sc["rr_validation"] = "warning_outlier"
@@ -601,17 +633,17 @@ class ScenarioValidator:
             validated.append(sc)
 
         # Логируем результаты
-        valid_count = sum(1 for s in validated if s.get("rr_validation") == "valid")
-        fixed_count = sum(1 for s in validated if s.get("rr_validation") == "fixed")
-        invalid_count = sum(1 for s in validated if s.get("rr_validation") == "invalid")
+        high_count = sum(1 for s in validated if s.get("quality_tier") == "high")
+        acceptable_count = sum(1 for s in validated if s.get("quality_tier") == "acceptable")
+        low_count = sum(1 for s in validated if s.get("quality_tier") == "low")
 
         logger.info(
-            f"RR recalculation: {valid_count} valid, {fixed_count} fixed, "
-            f"{invalid_count} invalid out of {len(validated)}"
+            f"RR recalculation: {high_count} high, {acceptable_count} acceptable, "
+            f"{low_count} low quality out of {len(validated)}"
         )
 
-        # Фильтруем invalid сценарии
-        return [s for s in validated if s.get("rr_validation") != "invalid"]
+        # 🆕 Return ALL scenarios (no filtering) - let service/API separate them
+        return validated
 
     def get_max_entry_distance(self, timeframe: str, atr: float, current_price: float) -> float:
         """

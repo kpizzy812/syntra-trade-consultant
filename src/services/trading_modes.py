@@ -39,6 +39,8 @@ class ModeConfig:
     default_cooldown_min: int = 15  # Cooldown after advice
     # 🆕 Funding rate thresholds (risk philosophy)
     funding_extreme: float = 0.001  # Threshold for "extreme" funding (0.1% default)
+    # 🆕 Minimum TP1 RR threshold (reject scenarios below this)
+    min_tp1_rr: float = 0.7  # Default minimum TP1 R:R
 
 
 # =============================================================================
@@ -74,6 +76,8 @@ CONSERVATIVE_MODE = ModeConfig(
     default_cooldown_min=60,
     # Risk philosophy: catch overheating early
     funding_extreme=0.0005,  # 0.05% - very sensitive
+    # Conservative requires higher RR
+    min_tp1_rr=0.8,
 )
 
 STANDARD_MODE = ModeConfig(
@@ -139,6 +143,8 @@ HIGH_RISK_MODE = ModeConfig(
     default_cooldown_min=15,
     # Risk philosophy: allows skew, expects impulse
     funding_extreme=0.002,  # 0.20% - less sensitive
+    # High risk allows lower RR for momentum plays
+    min_tp1_rr=0.6,
 )
 
 MEME_MODE = ModeConfig(
@@ -177,6 +183,8 @@ MEME_MODE = ModeConfig(
     default_cooldown_min=20,
     # Risk philosophy: memes often have 0.2-0.5% funding, that's normal
     funding_extreme=0.003,  # 0.30% - very tolerant
+    # Meme allows lowest RR due to unpredictability
+    min_tp1_rr=0.5,
 )
 
 

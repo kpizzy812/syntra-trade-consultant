@@ -141,24 +141,22 @@ class LearningCalibrator:
                         llm_probs=sc.get("outcome_probs_raw"),  # если LLM предоставил
                     )
 
-                    # Gate: TP1 RR minimum thresholds (depends on timeframe)
-                    # Aggressive (15m, 1h): min 0.6R, penalty below 0.8R
-                    # Standard (4h, 1d): min 0.7R, penalty below 0.8R
+                    # EV adjustments based on quality_tier (set by validator)
+                    # No hard reject here - just apply EV penalties
                     tp1_rr = targets[0].get("rr", 0) if targets else 0
                     ev_multiplier = 1.0
                     ev_flags = list(metrics.flags)
 
-                    is_aggressive_tf = timeframe in ["15m", "1h"]
-                    min_rr = 0.6 if is_aggressive_tf else 0.7  # Absolute minimum
+                    quality_tier = sc.get("quality_tier", "high")
                     healthy_rr = 0.8  # Healthy minimum for all modes
 
-                    if tp1_rr < min_rr:
-                        # Hard reject - below absolute minimum
-                        ev_flags.append("tp1_rr_too_low_reject")
-                        sc["rejected"] = True
-                        sc["reject_reason"] = f"TP1 RR {tp1_rr:.2f} < {min_rr} (min for {timeframe})"
+                    # Apply EV penalty based on quality tier
+                    if quality_tier == "low":
+                        # Low quality scenarios get significant EV penalty
+                        ev_flags.append("low_quality_scenario")
+                        ev_multiplier = 0.5  # -50% к EV (makes it less attractive)
                     elif tp1_rr < healthy_rr:
-                        # Penalty zone (0.6-0.8 for aggressive, 0.7-0.8 for standard)
+                        # Penalty zone (below 0.8R but above mode minimum)
                         ev_flags.append("tp1_rr_penalty_zone")
                         ev_multiplier = 0.8  # -20% к EV
                     elif tp1_rr < 1.0:
@@ -197,22 +195,20 @@ class LearningCalibrator:
                         "flags": ev_flags,
                     }
 
-                # Фильтруем rejected сценарии и сортируем по scenario_score
-                valid_scenarios = [sc for sc in scenarios if not sc.get("rejected")]
-                rejected_scenarios = [sc for sc in scenarios if sc.get("rejected")]
-
+                # Sort ALL scenarios by scenario_score (low quality will have lower scores)
                 scenarios = sorted(
-                    valid_scenarios,
+                    scenarios,
                     key=lambda x: x.get("ev_metrics", {}).get("scenario_score", 0),
                     reverse=True
                 )
 
-                # Логируем rejected
-                if rejected_scenarios:
-                    logger.info(f"Rejected {len(rejected_scenarios)} scenarios due to low TP1 RR")
+                # Log quality distribution
+                high_count = sum(1 for s in scenarios if s.get("quality_tier") == "high")
+                low_count = sum(1 for s in scenarios if s.get("quality_tier") == "low")
 
                 logger.debug(
-                    f"EV calculation applied to {len(scenarios)} scenarios, "
+                    f"EV calculation applied to {len(scenarios)} scenarios "
+                    f"({high_count} high, {low_count} low quality), "
                     f"top score: {scenarios[0].get('ev_metrics', {}).get('scenario_score', 0):.3f}"
                     if scenarios else ""
                 )

@@ -569,6 +569,18 @@ class FuturesAnalysisService:
             # Generate unique analysis_id for feedback tracking
             analysis_id = str(uuid.uuid4())
 
+            # 🆕 Separate scenarios by quality tier
+            # "high" and "acceptable" → main scenarios (for auto-trading)
+            # "low" → low_quality scenarios (for manual review / learning)
+            scenarios_valid = [
+                s for s in scenarios
+                if s.get("quality_tier") in ("high", "acceptable", None)
+            ]
+            scenarios_low_quality = [
+                s for s in scenarios
+                if s.get("quality_tier") == "low"
+            ]
+
             result = {
                 "success": True,
                 "symbol": symbol,
@@ -577,7 +589,8 @@ class FuturesAnalysisService:
                 "analysis_id": analysis_id,  # 🆕 For feedback loop tracking
                 "current_price": round(current_price, 2),
                 "market_context": market_context,
-                "scenarios": scenarios,
+                "scenarios": scenarios_valid,  # Only high/acceptable quality
+                "scenarios_low_quality": scenarios_low_quality,  # 🆕 For UI display / learning
                 "key_levels": key_levels,
                 "data_quality": data_quality,
                 # 🆕 NO-TRADE signal (first-class citizen)
@@ -586,13 +599,15 @@ class FuturesAnalysisService:
                     "has_liquidation_data": liquidation_data is not None,
                     "funding_available": funding_data is not None,
                     "candles_analyzed": len(klines_df),
-                    "timeframes_analyzed": list(mtf_data.keys()) if mtf_data else []
+                    "timeframes_analyzed": list(mtf_data.keys()) if mtf_data else [],
+                    "total_scenarios_generated": len(scenarios),  # 🆕 Total before split
+                    "low_quality_count": len(scenarios_low_quality)
                 }
             }
 
             logger.info(
                 f"Analysis complete for {symbol}: "
-                f"{len(scenarios)} scenarios, "
+                f"{len(scenarios_valid)} valid + {len(scenarios_low_quality)} low quality scenarios, "
                 f"quality={data_quality['completeness']}%"
             )
 
@@ -1106,10 +1121,15 @@ class FuturesAnalysisService:
             )
 
             # 🔥 Рассчитываем RR в Python (не доверяем LLM математику!)
+            # Get mode config for min_tp1_rr threshold
+            from src.services.trading_modes import get_mode_config
+            mode_config = get_mode_config(mode)
+
             final_scenarios = self._calculate_rr_and_validate(
                 scenarios=validated_scenarios,
                 current_price=current_price,
-                atr=atr
+                atr=atr,
+                min_tp1_rr=mode_config.min_tp1_rr
             )
 
             # 📊 Нормализуем веса сценариев (Python > LLM)
@@ -1312,7 +1332,8 @@ class FuturesAnalysisService:
         self,
         scenarios: List[Dict],
         current_price: float,
-        atr: float
+        atr: float,
+        min_tp1_rr: float = 0.7
     ) -> List[Dict]:
         """
         Рассчитать RR в Python - делегирует к ScenarioValidator.
@@ -1322,7 +1343,8 @@ class FuturesAnalysisService:
         return self._scenario_validator.calculate_rr(
             scenarios=scenarios,
             current_price=current_price,
-            atr=atr
+            atr=atr,
+            min_tp1_rr=min_tp1_rr
         )
 
     # =========================================================================

@@ -100,6 +100,9 @@ class ScenarioGenerator:
             atr = indicators.get("atr", 0)
             max_dist_pct = MAX_ENTRY_DISTANCE_PCT_BY_TF.get(timeframe, MAX_ENTRY_DISTANCE_PCT_DEFAULT)
 
+            # Get mode config for min_tp1_rr threshold
+            mode_config_for_rr = get_mode_config(mode)
+
             # Collect all levels
             all_resistances = list(key_levels.get("resistance", []))
             all_supports = list(key_levels.get("support", []))
@@ -145,7 +148,8 @@ class ScenarioGenerator:
                 final_scenarios = validator.calculate_rr(
                     scenarios=validated_scenarios,
                     current_price=current_price,
-                    atr=atr
+                    atr=atr,
+                    min_tp1_rr=mode_config_for_rr.min_tp1_rr
                 )
             else:
                 final_scenarios = scenarios
@@ -365,6 +369,9 @@ class ScenarioGenerator:
             bias="short",
         )
 
+        # Get mode configuration early (needed for pre_gates)
+        mode_config = get_mode_config(mode)
+
         # Build pre-gates dict for prompt
         pre_gates = {
             "long": {
@@ -382,6 +389,8 @@ class ScenarioGenerator:
                 "potential_tp1": round(potential_tp1_short, 2),
             },
             "estimated_R": round(estimated_R, 2),
+            # 🆕 Min RR threshold from mode config
+            "min_tp1_rr": mode_config.min_tp1_rr,
         }
 
         logger.debug(
@@ -420,8 +429,7 @@ class ScenarioGenerator:
             atr_pct=atr_pct,
         )
 
-        # Get mode configuration and build MODE PROFILE block
-        mode_config = get_mode_config(mode)
+        # Build MODE PROFILE block (mode_config already obtained above)
         mode_profile_block = build_mode_profile_block(mode_config)
 
         # Build prompt
@@ -620,13 +628,22 @@ class ScenarioGenerator:
 🎯 **CRITICAL TARGET RULES (TP1 minimum R:R)**:
 TP1 is about risk reduction, partial profit, and giving trade a chance to reach TP2/TP3.
 
-**Minimum TP1 distance in terms of Risk (R = |entry - SL|):**
-- Standard/Swing mode: TP1 >= 0.8R (healthy minimum)
-- Aggressive/Intraday mode: TP1 >= 0.6R (acceptable for high winrate setups)
-- Absolute minimum: 0.7R (below this = garbage, will be rejected)
-- Ideal if setup allows: 1.0-1.2R+
+**⚠️ MINIMUM TP1 RR: See `market_data.pre_gates.min_tp1_rr`** (mode-dependent threshold)
+This is a HARD MINIMUM - scenarios below this will be REJECTED by validator!
 
-**If TP1 < 0.7R and user moves SL to breakeven → EV dies. Don't create such scenarios!**
+**BEFORE finalizing each scenario, YOU MUST verify:**
+```
+entry_avg = average of entry_plan.orders[].price (weighted by size_pct)
+risk = |entry_avg - stop_loss.recommended|
+reward_tp1 = |targets[0].price - entry_avg|
+tp1_rr = reward_tp1 / risk
+
+IF tp1_rr < market_data.pre_gates.min_tp1_rr → DO NOT CREATE THIS SCENARIO
+```
+
+**Why this matters:** If TP1 RR is too low and user moves SL to breakeven → EV dies.
+
+**Ideal if setup allows:** 1.0-1.5R+ for TP1
 
 📋 **ENTRY PLAN STRUCTURE** (instead of simple entry zone):
 Each scenario MUST have an `entry_plan` with:

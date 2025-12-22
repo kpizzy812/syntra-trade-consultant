@@ -791,9 +791,11 @@ async def get_futures_scenarios(
             )
 
         # Log successful analysis
+        low_quality_count = len(result.get('scenarios_low_quality', []))
         logger.info(
             f"Analysis complete for {symbol}: "
-            f"{len(result['scenarios'])} scenarios, "
+            f"{len(result['scenarios'])} scenarios"
+            f"{f' + {low_quality_count} low quality' if low_quality_count else ''}, "
             f"quality={result['data_quality']['completeness']}%"
         )
 
