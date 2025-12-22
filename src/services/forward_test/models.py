@@ -924,6 +924,45 @@ class PortfolioPosition(Base):
         comment="risk_r_filled * r_to_pct"
     )
 
+    # === LADDER TP TRACKING (v8) ===
+    remaining_pct: Mapped[float] = mapped_column(
+        Float,
+        default=100.0,
+        nullable=False,
+        comment="Remaining position after partial closes (100 -> 70 after TP1)"
+    )
+    risk_r_current: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+        comment="Current risk = risk_r_filled * remaining_pct / 100"
+    )
+    tp_progress: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+        comment="0,1,2,3 - synced from monitor.tp_progress"
+    )
+
+    # === UNREALIZED R TRACKING ===
+    realized_r_so_far: Mapped[float] = mapped_column(
+        Float,
+        default=0.0,
+        nullable=False,
+        comment="Synced from monitor.realized_r_so_far"
+    )
+
+    # === MFE/MAE DENORMALIZED ===
+    mfe_r: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Max Favorable Excursion (synced from monitor)"
+    )
+    mae_r: Mapped[Optional[float]] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Max Adverse Excursion (synced from monitor)"
+    )
+
     # === STATUS ===
     status: Mapped[str] = mapped_column(
         String(20),

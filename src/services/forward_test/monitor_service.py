@@ -520,6 +520,9 @@ class MonitorService:
         )
         session.add(event)
 
+        # v8: Sync portfolio position после TP1 partial close
+        await self.sync_portfolio_position_state(session, snapshot.snapshot_id, state)
+
         return StateTransition(
             snapshot_id=snapshot.snapshot_id,
             from_state=old_state,
@@ -895,7 +898,8 @@ class MonitorService:
         # Get current state
         current_equity = await self._get_current_equity(session)
         open_positions = await self._get_open_positions(session)
-        current_total_risk = sum(p.risk_r_filled for p in open_positions)
+        # v8: Используем risk_r_current (уменьшается после TP1)
+        current_total_risk = sum(p.risk_r_current for p in open_positions)
 
         portfolio_cfg = self.config.portfolio
 
@@ -953,8 +957,11 @@ class MonitorService:
                     continue
 
             # 7. Check risk budget
-            # FIX #5: MVP filled_weight = 1.0
-            filled_weight = 1.0
+            # FIX #29: Используем реальный fill_pct для ladder entry
+            filled_weight = monitor.fill_pct / 100.0 if monitor.fill_pct > 0 else 0.0
+            if filled_weight == 0:
+                continue  # Ещё нет реального fill
+
             base_risk = portfolio_cfg.max_total_risk_r / portfolio_cfg.max_open_positions
             risk_r_filled = base_risk * filled_weight
 
@@ -997,6 +1004,13 @@ class MonitorService:
                 base_risk_r=base_risk,
                 risk_r_filled=risk_r_filled,
                 risk_pct_filled=risk_r_filled * portfolio_cfg.r_to_pct,
+                # v8 Ladder TP fields
+                remaining_pct=100.0,
+                risk_r_current=risk_r_filled,  # = risk_r_filled изначально
+                tp_progress=monitor.tp_progress,
+                realized_r_so_far=monitor.realized_r_so_far,
+                mfe_r=monitor.mfe_r,
+                mae_r=monitor.mae_r,
                 status="open",
             )
 
@@ -1032,6 +1046,50 @@ class MonitorService:
             )
 
         return filled_count
+
+    async def sync_portfolio_position_state(
+        self,
+        session: AsyncSession,
+        snapshot_id: str,
+        monitor: ForwardTestMonitorState
+    ):
+        """
+        Sync position state с monitor после TP1 partial close.
+
+        v8: Обновляет remaining_pct, risk_r_current, tp_progress, realized_r_so_far.
+        Вызывается из _handle_tp1() после обновления MonitorState.
+        """
+        if not self.config.portfolio.enabled:
+            return
+
+        position = await session.scalar(
+            select(PortfolioPosition).where(
+                PortfolioPosition.snapshot_id == snapshot_id,
+                PortfolioPosition.status == "open"
+            )
+        )
+        if not position:
+            return
+
+        # Sync fields from monitor
+        old_remaining = position.remaining_pct
+        position.remaining_pct = monitor.remaining_position_pct
+        position.risk_r_current = position.risk_r_filled * (position.remaining_pct / 100)
+        position.tp_progress = monitor.tp_progress
+        position.realized_r_so_far = monitor.realized_r_so_far
+
+        # MFE/MAE sync
+        position.mfe_r = monitor.mfe_r
+        position.mae_r = monitor.mae_r
+
+        # Log partial close
+        if old_remaining > position.remaining_pct:
+            closed_pct = old_remaining - position.remaining_pct
+            logger.info(
+                f"Portfolio: TP1 partial close {position.position_id} "
+                f"closed {closed_pct:.0f}%, remaining {position.remaining_pct:.0f}%, "
+                f"realized_r_so_far={position.realized_r_so_far:.2f}R"
+            )
 
     async def close_portfolio_position(
         self,
@@ -1165,7 +1223,8 @@ class MonitorService:
 
         # Calculate current state
         open_positions = await self._get_open_positions(session)
-        total_risk_r = sum(p.risk_r_filled for p in open_positions)
+        # v8: Используем risk_r_current (уменьшается после TP1)
+        total_risk_r = sum(p.risk_r_current for p in open_positions)
 
         active_count = await session.scalar(
             select(func.count()).select_from(PortfolioCandidate).where(
