@@ -5563,6 +5563,37 @@ async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
             ScenarioState.ENTERED.value,
             ScenarioState.TP1.value,
         ]
+
+        # Get ALL active trades for summary (only on first page)
+        if page == 0:
+            all_active_q = (
+                select(ForwardTestMonitorState, ForwardTestSnapshot)
+                .join(
+                    ForwardTestSnapshot,
+                    ForwardTestMonitorState.snapshot_id == ForwardTestSnapshot.snapshot_id
+                )
+                .where(ForwardTestMonitorState.state.in_(active_states))
+            )
+            all_result = await session.execute(all_active_q)
+            all_trades = all_result.all()
+
+            # Calculate summary stats
+            total_trades = len(all_trades)
+            longs = sum(1 for m, s in all_trades if s.bias == "long")
+            shorts = total_trades - longs
+
+            # MFE > |MAE| means trade was profitable at some point
+            profitable_now = sum(1 for m, s in all_trades if (m.mfe_r or 0) > abs(m.mae_r or 0))
+            losing_now = total_trades - profitable_now
+
+            total_mfe = sum((m.mfe_r or 0) for m, s in all_trades)
+            total_mae = sum((m.mae_r or 0) for m, s in all_trades)
+            total_realized = sum((m.realized_r_so_far or 0) for m, s in all_trades)
+
+            # TP1 hit trades (partial profit locked)
+            tp1_hit = sum(1 for m, s in all_trades if m.state == ScenarioState.TP1.value)
+
+        # Get paginated trades
         active_q = (
             select(ForwardTestMonitorState, ForwardTestSnapshot)
             .join(
@@ -5581,6 +5612,19 @@ async def admin_ft_open_trades(callback: CallbackQuery, session: AsyncSession):
         rows = rows[:per_page]
 
         response = f"📋 <b>Открытые сделки</b> (стр. {page + 1})\n\n"
+
+        # Summary only on first page
+        if page == 0 and total_trades > 0:
+            response += f"<b>📊 Summary ({total_trades} сделок):</b>\n"
+            response += f"├ Long/Short: {longs}/{shorts}\n"
+            response += f"├ В плюсе/минусе: {profitable_now}/{losing_now}\n"
+            if tp1_hit > 0:
+                response += f"├ TP1 hit (locked profit): {tp1_hit}\n"
+            response += f"├ Σ Best (MFE): <b>{total_mfe:+.2f}R</b>\n"
+            response += f"├ Σ Worst (MAE): <b>{total_mae:.2f}R</b>\n"
+            if total_realized != 0:
+                response += f"├ Σ Realized: <b>{total_realized:+.2f}R</b>\n"
+            response += "\n"
 
         if not rows:
             response += "📭 <i>Нет открытых сделок</i>"
