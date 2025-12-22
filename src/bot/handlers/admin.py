@@ -5686,11 +5686,8 @@ async def admin_ft_trade_card(callback: CallbackQuery, session: AsyncSession):
         side_emoji = "🟢 LONG" if snapshot.bias == "long" else "🔴 SHORT"
         symbol_short = snapshot.symbol.replace("USDT", "")
 
-        # Parse scenario_json for targets
-        scenario = snapshot.scenario_json or {}
-        entry = scenario.get("entry", {})
-        targets = scenario.get("targets", [])
-        stop_loss = scenario.get("stop_loss", {})
+        # Use normalized_json for extra details, direct fields for key prices
+        scenario = snapshot.normalized_json or {}
         leverage = scenario.get("leverage", "?")
 
         response = f"📄 <b>Trade Card: {symbol_short}</b>\n\n"
@@ -5699,39 +5696,30 @@ async def admin_ft_trade_card(callback: CallbackQuery, session: AsyncSession):
         response += f"├ Timeframe: {snapshot.timeframe}\n"
         response += f"└ Leverage: {leverage}x\n\n"
 
-        # Entry
+        # Entry - use direct fields
         response += f"<b>📥 Entry:</b>\n"
-        if isinstance(entry, dict):
-            entry_price = entry.get("price") or entry.get("limit_price")
-            entry_type = entry.get("type", "limit")
-            response += f"├ Type: {entry_type}\n"
-            response += f"├ Plan: {entry_price}\n"
-        else:
-            response += f"├ Plan: {entry}\n"
+        response += f"├ Plan: {snapshot.entry_price_avg}\n"
         response += f"└ Actual: {monitor.avg_entry_price or 'N/A'}"
         if monitor.fill_pct:
             response += f" ({monitor.fill_pct:.0f}%)"
         response += "\n\n"
 
-        # Stop Loss
+        # Stop Loss - use direct field
         response += f"<b>🛑 Stop Loss:</b>\n"
-        if isinstance(stop_loss, dict):
-            sl_price = stop_loss.get("price")
-            response += f"└ {sl_price}\n\n"
+        response += f"├ Initial: {snapshot.stop_loss}\n"
+        if monitor.current_sl and monitor.current_sl != snapshot.stop_loss:
+            response += f"└ Current: {monitor.current_sl} (BE)\n\n"
         else:
-            response += f"└ {stop_loss}\n\n"
+            response += "\n"
 
-        # Targets
+        # Targets - use direct fields
         response += f"<b>🎯 Targets:</b>\n"
-        for i, tp in enumerate(targets, 1):
-            if isinstance(tp, dict):
-                tp_price = tp.get("price")
-                tp_rr = tp.get("rr", "?")
-                tp_pct = tp.get("close_pct", "?")
-                hit = "✅" if i == 1 and monitor.state == ScenarioState.TP1.value else "⏳"
-                response += f"├ TP{i}: {tp_price} ({tp_rr}R, {tp_pct}%) {hit}\n"
-            else:
-                response += f"├ TP{i}: {tp}\n"
+        tp1_hit = "✅" if monitor.state == ScenarioState.TP1.value else "⏳"
+        response += f"├ TP1: {snapshot.tp1_price} {tp1_hit}\n"
+        if snapshot.tp2_price:
+            response += f"├ TP2: {snapshot.tp2_price} ⏳\n"
+        if snapshot.tp3_price:
+            response += f"├ TP3: {snapshot.tp3_price} ⏳\n"
         response += "\n"
 
         # Current State
