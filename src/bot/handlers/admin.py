@@ -5333,7 +5333,7 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
         )
         active_count = (await session.execute(active_count_q)).scalar() or 0
 
-        # Get sample for display (limit 8)
+        # Get trades for display (limit 25 to fit in message)
         active_q = (
             select(ForwardTestMonitorState, ForwardTestSnapshot)
             .join(
@@ -5342,7 +5342,7 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
             )
             .where(ForwardTestMonitorState.state.in_(active_states))
             .order_by(ForwardTestMonitorState.entered_at.desc())
-            .limit(8)
+            .limit(25)
         )
         active_result = await session.execute(active_q)
         active_trades = active_result.all()
@@ -5430,8 +5430,8 @@ async def admin_forward_test_menu(callback: CallbackQuery, session: AsyncSession
                 response += f"{side_emoji} <b>{symbol_short}</b> {state_emoji} "
                 response += f"MFE: {mfe:+.2f}R\n"
 
-            if active_count > 8:
-                response += f"<i>... и ещё {active_count - 8}</i>\n"
+            if active_count > 25:
+                response += f"<i>... и ещё {active_count - 25}</i>\n"
         else:
             response += "📭 <i>Нет активных сделок</i>\n"
 
