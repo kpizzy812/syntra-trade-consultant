@@ -173,6 +173,10 @@ class PortfolioManager:
         FIX #6: Проверяем max_per_symbol И max_per_symbol_side
         FIX #12+#21: Replacement для active candidates по symbol
         FIX #23: FOR UPDATE на replacement target
+
+        NOTE: IntegrityError может возникнуть при добавлении нескольких сценариев
+        для одного символа в одном батче. Это обрабатывается на уровне выше через
+        nested transaction (savepoint) в snapshot_service.
         """
         if not self.config.enabled:
             candidate = self._create_rejected(snapshot, rank_in_batch, "portfolio_disabled")

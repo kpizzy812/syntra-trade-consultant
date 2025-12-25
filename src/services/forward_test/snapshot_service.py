@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 
 from loguru import logger
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.services.forward_test.config import get_config
@@ -192,7 +193,11 @@ class SnapshotService:
 
                 # Confidence и EV
                 confidence = float(scenario.get("confidence", 0.5))
+                # EV может быть на верхнем уровне или внутри ev_metrics
                 ev_r = scenario.get("ev_r")
+                if ev_r is None:
+                    ev_metrics = scenario.get("ev_metrics", {})
+                    ev_r = ev_metrics.get("ev_r") if ev_metrics else None
                 if ev_r is not None:
                     ev_r = float(ev_r)
 
@@ -262,15 +267,25 @@ class SnapshotService:
 
                 # === PORTFOLIO MODE: добавить кандидата в пул ===
                 if self.config.portfolio.enabled:
+                    # FIX: Используем nested transaction для изоляции IntegrityError
+                    # Savepoint автоматически rollback'ится при exception и commit'ится при успехе
                     try:
-                        candidate, status = await portfolio_manager.add_candidate_to_pool(
-                            session=session,
-                            snapshot=snapshot,
-                            rank_in_batch=idx + 1,
-                        )
-                        logger.debug(
-                            f"Portfolio candidate {candidate.candidate_id}: "
-                            f"{symbol} {bias_str} → {status}"
+                        async with session.begin_nested():
+                            candidate, status = await portfolio_manager.add_candidate_to_pool(
+                                session=session,
+                                snapshot=snapshot,
+                                rank_in_batch=idx + 1,
+                            )
+                            logger.debug(
+                                f"Portfolio candidate {candidate.candidate_id}: "
+                                f"{symbol} {bias_str} → {status}"
+                            )
+                    except IntegrityError as e:
+                        # Ожидаемая ситуация: дублирующийся кандидат для символа в батче
+                        # Savepoint уже откатился автоматически, продолжаем обработку
+                        logger.warning(
+                            f"Duplicate candidate for {symbol} (scenario {idx}): "
+                            f"likely multiple scenarios for same symbol in batch"
                         )
                     except Exception as e:
                         logger.error(f"Failed to add portfolio candidate: {e}")
