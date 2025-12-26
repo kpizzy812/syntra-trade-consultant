@@ -110,11 +110,11 @@ class ScenarioGenerator:
                 all_resistances.extend([sh["price"] for sh in price_structure.get("swing_highs", []) if sh.get("price")])
                 all_supports.extend([sl["price"] for sl in price_structure.get("swing_lows", []) if sl.get("price")])
 
-            # Filter to near only for validation
-            resistance_near, _ = filter_levels_by_distance(
+            # Filter to near + macro (macro нужен для auto-repair TP1)
+            resistance_near, resistance_macro = filter_levels_by_distance(
                 list(set(all_resistances)), current_price, max_dist_pct, side="short"
             )
-            support_near, _ = filter_levels_by_distance(
+            support_near, support_macro = filter_levels_by_distance(
                 list(set(all_supports)), current_price, max_dist_pct, side="long"
             )
 
@@ -129,10 +129,21 @@ class ScenarioGenerator:
             if vwap and vwap.get("price"):
                 dynamic_levels.append(vwap.get("price"))
 
+            # 🔧 Candidates для валидатора: near + macro (для auto-repair TP1)
             candidates = {
                 "supports": support_near + dynamic_levels,
                 "resistances": resistance_near + dynamic_levels,
+                # 🆕 Добавляем macro для fallback при auto-repair TP1
+                "supports_macro": support_macro,
+                "resistances_macro": resistance_macro,
             }
+
+            # 🔍 ДИАГНОСТИКА: Логируем доступные уровни для анализа
+            logger.debug(
+                f"📊 TP candidates available: "
+                f"R_near={len(resistance_near)}, R_macro={len(resistance_macro)}, "
+                f"S_near={len(support_near)}, S_macro={len(support_macro)}"
+            )
 
             # Validate scenarios
             if validator:
@@ -145,11 +156,13 @@ class ScenarioGenerator:
                 )
 
                 # Рассчитываем RR в Python (не доверяем LLM математику!)
+                # 🔧 Передаём candidates для auto-repair TP1
                 final_scenarios = validator.calculate_rr(
                     scenarios=validated_scenarios,
                     current_price=current_price,
                     atr=atr,
-                    min_tp1_rr=mode_config_for_rr.min_tp1_rr
+                    min_tp1_rr=mode_config_for_rr.min_tp1_rr,
+                    candidates=candidates  # near + macro для auto-repair
                 )
             else:
                 final_scenarios = scenarios
@@ -286,6 +299,32 @@ class ScenarioGenerator:
             f"R_near={len(resistance_near)}, R_macro={len(resistance_macro)}, "
             f"S_near={len(support_near)}, S_macro={len(support_macro)}"
         )
+
+        # 🔧 ROBUST FIX: Расширение near до минимума через macro fallback
+        MIN_TP_CANDIDATES = 3
+
+        # Расширяем resistance_near если мало кандидатов
+        if len(resistance_near) < MIN_TP_CANDIDATES and resistance_macro:
+            # Берём ближайшие macro levels (отсортированы по расстоянию)
+            resistance_macro_sorted = sorted(resistance_macro, key=lambda x: abs(x - current_price))
+            needed = MIN_TP_CANDIDATES - len(resistance_near)
+            resistance_near_extended = resistance_near + resistance_macro_sorted[:needed]
+            logger.info(
+                f"🔧 Extended resistance_near: {len(resistance_near)} → {len(resistance_near_extended)} "
+                f"(added {needed} from macro)"
+            )
+            resistance_near = resistance_near_extended
+
+        # Расширяем support_near если мало кандидатов
+        if len(support_near) < MIN_TP_CANDIDATES and support_macro:
+            support_macro_sorted = sorted(support_macro, key=lambda x: abs(x - current_price))
+            needed = MIN_TP_CANDIDATES - len(support_near)
+            support_near_extended = support_near + support_macro_sorted[:needed]
+            logger.info(
+                f"🔧 Extended support_near: {len(support_near)} → {len(support_near_extended)} "
+                f"(added {needed} from macro)"
+            )
+            support_near = support_near_extended
 
         # Build quality-filtered level candidates with level_id
         levels_meta = enriched_data.get("levels_meta", {}) if enriched_data else {}

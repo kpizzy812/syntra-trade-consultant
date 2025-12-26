@@ -249,7 +249,8 @@ class ScenarioValidator:
         scenarios: List[Dict],
         current_price: float,
         atr: float,
-        min_tp1_rr: float = 0.7
+        min_tp1_rr: float = 0.7,
+        candidates: Dict = None
     ) -> List[Dict]:
         """
         Рассчитать RR в Python + санити-проверки (LLM не считает RR).
@@ -547,9 +548,74 @@ class ScenarioValidator:
                         "details": f"При переводе SL в безубыток EV становится отрицательным"
                     })
                     issues.append(f"TP1_rr_too_low: RR={rr:.2f} < {min_tp1_rr}")
+
+                    # 🔍 ДИАГНОСТИКА: Детальное логирование для анализа
+                    r_atr_mult = round(risk_per_unit / atr, 2) if atr and atr > 0 else 0
                     logger.warning(
-                        f"Scenario #{sc.get('id')} marked low quality: TP1 RR {rr:.2f} < {min_tp1_rr}"
+                        f"🚨 Scenario #{sc.get('id')} LOW QUALITY: TP1 RR {rr:.2f} < {min_tp1_rr} | "
+                        f"entry={entry_ref:.2f}, stop={stop:.2f}, R={risk_per_unit:.2f} ({r_atr_mult}x ATR), "
+                        f"TP1={tp_price:.2f}"
                     )
+
+                    # 🔧 AUTO-REPAIR: Попытка заменить TP1 на подходящий уровень
+                    if candidates:
+                        # Собираем все доступные TP-кандидаты (near + macro)
+                        if is_long:
+                            all_tp_candidates = list(candidates.get("resistances", []))
+                            all_tp_candidates.extend(candidates.get("resistances_macro", []))
+                        else:
+                            all_tp_candidates = list(candidates.get("supports", []))
+                            all_tp_candidates.extend(candidates.get("supports_macro", []))
+
+                        # Фильтруем только подходящие по направлению
+                        valid_candidates = [
+                            c for c in all_tp_candidates
+                            if (c > entry_ref if is_long else c < entry_ref)
+                        ]
+
+                        # Сортируем от ближайшего к дальнему
+                        valid_candidates_sorted = sorted(
+                            valid_candidates,
+                            key=lambda x: abs(x - entry_ref)
+                        )
+
+                        # Ищем первый уровень который даёт RR >= min_tp1_rr
+                        repaired = False
+                        for candidate_price in valid_candidates_sorted:
+                            candidate_reward = abs(candidate_price - entry_ref)
+                            candidate_rr = round(candidate_reward / risk_per_unit, 2)
+
+                            if candidate_rr >= min_tp1_rr:
+                                # ✅ Нашли подходящий уровень!
+                                logger.info(
+                                    f"🔧 Scenario #{sc.get('id')}: TP1 auto-repaired "
+                                    f"{tp_price:.2f} (RR {rr:.2f}) → {candidate_price:.2f} (RR {candidate_rr:.2f})"
+                                )
+                                sc["targets"][0]["price"] = round(candidate_price, 2)
+                                sc["targets"][0]["rr"] = candidate_rr
+                                sc["targets"][0]["reason"] += f" (auto-adjusted from {tp_price:.2f})"
+
+                                # Обновляем quality_tier на acceptable
+                                sc["quality_tier"] = "acceptable"
+
+                                # Добавляем в fixes_applied
+                                fixes_applied = sc.get("fixes_applied", [])
+                                if "tp1_repaired" not in fixes_applied:
+                                    fixes_applied.append("tp1_repaired")
+                                sc["fixes_applied"] = fixes_applied
+
+                                # Обновляем rr и убираем low quality
+                                rr = candidate_rr
+                                tp_price = candidate_price
+                                repaired = True
+                                break
+
+                        if not repaired:
+                            # ❌ Нет подходящего уровня - остаётся low quality
+                            logger.warning(
+                                f"⚠️ Scenario #{sc.get('id')}: No valid TP1 found "
+                                f"(all {len(valid_candidates_sorted)} candidates give RR < {min_tp1_rr})"
+                            )
 
             # === 6. Добавляем метаданные расчёта ===
             sc["rr_calculation"] = {
