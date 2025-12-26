@@ -168,6 +168,14 @@ export default function ChatMessage({
           ) : (
             // Assistant message - markdown с подсветкой кода (ChatGPT-style)
             <div className="prose prose-invert prose-sm max-w-none">
+              {/* Показываем индикатор загрузки если стрим идёт но контента ещё нет */}
+              {isStreaming && !content ? (
+                <div className="flex items-center gap-1 py-1">
+                  <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+              ) : (
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 rehypePlugins={[rehypeRaw]}
@@ -342,6 +350,7 @@ export default function ChatMessage({
               >
                 {sanitizedContent}
               </ReactMarkdown>
+              )}
             </div>
           )}
         </div>

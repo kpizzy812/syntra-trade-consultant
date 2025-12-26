@@ -36,7 +36,7 @@ class ModeConfig:
     liq_proximity_critical_pct: float = 5.0  # Critical if within X%
     invalidation_threat_pct: float = 2.0  # Warn if within X% of invalidation
     advice_expiration_min: int = 30  # How long advice is valid
-    default_cooldown_min: int = 15  # Cooldown after advice
+    default_cooldown_min: int = 1440  # 24h cooldown - avoid repeating same advice
     # 🆕 Funding rate thresholds (risk philosophy)
     funding_extreme: float = 0.001  # Threshold for "extreme" funding (0.1% default)
     # 🆕 Minimum TP1 RR threshold (reject scenarios below this)
@@ -73,7 +73,7 @@ CONSERVATIVE_MODE = ModeConfig(
     liq_proximity_critical_pct=8.0,
     invalidation_threat_pct=1.5,
     advice_expiration_min=120,
-    default_cooldown_min=60,
+    default_cooldown_min=1440,  # 24 hours - avoid repeating same advice
     # Risk philosophy: catch overheating early
     funding_extreme=0.0005,  # 0.05% - very sensitive
     # Conservative requires higher RR
@@ -104,7 +104,7 @@ STANDARD_MODE = ModeConfig(
     liq_proximity_critical_pct=5.0,
     invalidation_threat_pct=2.0,
     advice_expiration_min=60,
-    default_cooldown_min=30,
+    default_cooldown_min=1440,  # 24 hours - avoid repeating same advice
     # Risk philosophy: market default
     funding_extreme=0.001,  # 0.10% - standard threshold
 )
@@ -140,7 +140,7 @@ HIGH_RISK_MODE = ModeConfig(
     liq_proximity_critical_pct=4.0,
     invalidation_threat_pct=1.0,
     advice_expiration_min=30,
-    default_cooldown_min=15,
+    default_cooldown_min=1440,  # 24 hours - avoid repeating same advice
     # Risk philosophy: allows skew, expects impulse
     funding_extreme=0.002,  # 0.20% - less sensitive
     # High risk allows lower RR for momentum plays
@@ -180,7 +180,7 @@ MEME_MODE = ModeConfig(
     liq_proximity_critical_pct=6.0,
     invalidation_threat_pct=3.0,  # Wider due to volatility
     advice_expiration_min=20,
-    default_cooldown_min=20,
+    default_cooldown_min=1440,  # 24 hours - avoid repeating same advice
     # Risk philosophy: memes often have 0.2-0.5% funding, that's normal
     funding_extreme=0.003,  # 0.30% - very tolerant
     # Meme allows lowest RR due to unpredictability

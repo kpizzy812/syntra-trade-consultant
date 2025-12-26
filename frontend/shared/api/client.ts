@@ -277,25 +277,35 @@ export const api = {
         throw new Error('Response body is not readable');
       }
 
+      let buffer = ''; // Buffer for incomplete lines
+
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          const chunk = decoder.decode(value);
-          const lines = chunk.split('\n');
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
+          const lines = buffer.split('\n');
+
+          // Keep last line in buffer (might be incomplete)
+          buffer = lines.pop() || '';
 
           for (const line of lines) {
             if (line.startsWith('data: ')) {
-              const data = JSON.parse(line.slice(6));
+              try {
+                const data = JSON.parse(line.slice(6));
 
-              if (data.type === 'token') {
-                onToken(data.content);
-              } else if (data.type === 'error') {
-                onError?.(data.error);
-              } else if (data.type === 'done') {
-                // Pass chat_id from backend to frontend
-                onDone?.(data.chat_id);
+                if (data.type === 'token') {
+                  onToken(data.content);
+                } else if (data.type === 'error') {
+                  onError?.(data.error);
+                } else if (data.type === 'done') {
+                  // Pass chat_id from backend to frontend
+                  onDone?.(data.chat_id);
+                }
+              } catch (e) {
+                console.error('Failed to parse SSE data:', line, e);
               }
             }
           }
@@ -368,24 +378,34 @@ export const api = {
         throw new Error('Response body is not readable');
       }
 
+      let buffer = ''; // Buffer for incomplete lines
+
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          const chunk = decoder.decode(value);
-          const lines = chunk.split('\n');
+          const chunk = decoder.decode(value, { stream: true });
+          buffer += chunk;
+          const lines = buffer.split('\n');
+
+          // Keep last line in buffer (might be incomplete)
+          buffer = lines.pop() || '';
 
           for (const line of lines) {
             if (line.startsWith('data: ')) {
-              const data = JSON.parse(line.slice(6));
+              try {
+                const data = JSON.parse(line.slice(6));
 
-              if (data.type === 'token') {
-                onToken(data.content);
-              } else if (data.type === 'error') {
-                onError?.(data.error);
-              } else if (data.type === 'done') {
-                onDone?.();
+                if (data.type === 'token') {
+                  onToken(data.content);
+                } else if (data.type === 'error') {
+                  onError?.(data.error);
+                } else if (data.type === 'done') {
+                  onDone?.();
+                }
+              } catch (e) {
+                console.error('Failed to parse SSE data:', line, e);
               }
             }
           }
