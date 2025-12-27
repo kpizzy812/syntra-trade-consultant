@@ -71,7 +71,7 @@
 |------|--------|----------|
 | Free/Basic | GPT-4o-mini + DeepSeek | Chat, basic analysis |
 | Premium | GPT-5-mini + GPT-5.1 | Advanced analysis, futures |
-| VIP | GPT-5.1 + o4-mini UltraThink | Deep reasoning, priority |
+| VIP | GPT-5.1 + o4-mini | Deep reasoning, priority |
 
 **Scenario Generation:** GPT-5.2 (heavy reasoning)
 
@@ -221,7 +221,7 @@ npm run dev
 | Free | $0 | 2/day | Basic chat, prices, news |
 | Basic | $9.99/mo | 10/day | + Patterns, funding rates, memory |
 | Premium | $24.99/mo | 15/day | + Futures signals, full analysis |
-| VIP | $49.99/mo | 30/day | + UltraThink reasoning, priority |
+| VIP | $49.99/mo | 30/day | + o4-mini reasoning, priority |
 
 ## Documentation
 
