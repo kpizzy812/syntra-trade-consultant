@@ -4,7 +4,7 @@
 
 # SyntraAI
 
-> AI-powered cryptocurrency trading platform with Telegram Mini App interface
+> AI-powered crypto trading assistant with real-time market data and unique personality
 
 [![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
@@ -15,43 +15,65 @@
 
 ## Overview
 
-**SyntraAI** is a full-stack SaaS platform for cryptocurrency traders, combining AI-powered market analysis with an intuitive Telegram Mini App interface. The system generates actionable trading scenarios for futures markets using latest AI models (GPT-5.2, o4-mini UltraThink), provides real-time portfolio tracking, and includes a comprehensive paper trading (forward testing) engine.
+**SyntraAI** is an AI-powered crypto trading assistant with a distinctive sarcastic personality. Unlike generic chatbots, Syntra provides real-time market analysis using **OpenAI Function Calling** to fetch live data from multiple sources, combines professional-grade technical analysis with cynical humor, and offers advanced features like futures scenario generation and paper trading.
 
-### Key Highlights
+### What Makes Syntra Different
 
-- **AI Trading Engine** — GPT-5.2 powered scenario generation with entry/exit points, risk/reward analysis
-- **UltraThink Reasoning** — o4-mini deep reasoning mode for complex market analysis (VIP tier)
-- **Paper Trading** — Forward testing system with simulated order fills and performance tracking
-- **Multi-Platform** — Telegram Mini App + responsive web interface
-- **Real-time Data** — Integration with Binance, CoinGecko, CryptoPanic for live market data
-- **Payment System** — Telegram Stars, TON blockchain, and crypto payment gateways
+- **Real Personality** — Not a generic bot. Syntra is a self-aware, cynical AI analyst who delivers serious insights with sharp wit
+- **Live Data via Tool Calling** — AI fetches real-time prices, indicators, news through function calling (not static responses)
+- **Multi-Source Intelligence** — CoinGecko, Binance, CryptoPanic, DexScreener, CoinMetrics combined
+- **Context Memory** — Remembers conversation history for coherent multi-turn analysis
+- **Professional + Fun** — Technical analysis with personality (think: Bloomberg Terminal meets a sarcastic friend)
 
 ## Features
 
-### AI & Analysis
-- **GPT-5.2** for futures scenario generation (heavy reasoning)
-- **GPT-5.1** flagship model for Premium/VIP analysis
-- **o4-mini UltraThink** reasoning mode for deep market insights
-- **DeepSeek Reasoner** for cost-effective analysis
-- Vision API for chart pattern recognition
-- Supervisor AI for macro-level market analysis
-- Technical indicators (RSI, MACD, Bollinger Bands, Moving Averages)
-- Candlestick pattern detection (Doji, Hammer, Engulfing, etc.)
+### AI Chat Assistant
+- **GPT-5.2 / GPT-5.1** powered conversations with memory
+- **OpenAI Function Calling** for real-time data retrieval
+- Unique cynical personality with professional insights
+- Multi-language support (English, Russian)
 
-### Trading Tools
-- Futures scenarios with entry, TP1/TP2/TP3, and stop-loss levels
-- Portfolio tracking with margin and unrealized P&L monitoring
-- Risk/Reward ratio analysis per position
-- Forward testing with simulated trade execution
-- Performance statistics and win rate tracking
+### Real-Time Market Data (Tool Calling)
+- **Live Prices** — Any crypto via CoinGecko, CoinMarketCap, DexScreener
+- **Technical Indicators** — RSI, MACD, Bollinger Bands, Moving Averages
+- **Candlestick Patterns** — Doji, Hammer, Engulfing, Morning Star, etc.
+- **Fear & Greed Index** — Market sentiment
+- **Crypto News** — Latest headlines from CryptoPanic
+- **Funding Rates** — Binance Futures sentiment
+- **On-Chain Metrics** — Active addresses, exchange flows (CoinMetrics)
+- **Market Cycles** — Rainbow Chart, Pi Cycle Top indicator
+
+### Chart Analysis (Vision)
+- Screenshot analysis with GPT-4 Vision
+- Automatic coin detection from charts
+- Pattern recognition with real market data overlay
+
+### Futures Scenarios (Premium)
+- AI-generated trading scenarios with entry/exit points
+- TP1/TP2/TP3 targets and stop-loss levels
+- Risk/Reward analysis
+- Confidence scoring based on market conditions
+
+### Paper Trading (Forward Test)
+- Test scenarios without real money
+- Simulated order fills
+- Portfolio tracking with margin monitoring
+- Performance statistics and win rate
 
 ### Platform
-- Telegram Mini App (WebApp inside Telegram)
-- Responsive web interface for desktop
-- Real-time WebSocket updates
-- Multi-language support (English, Russian)
-- Referral system with revenue share
-- Gamification with SYNTRA points
+- **Telegram Mini App** — Primary interface inside Telegram
+- **Web Application** — Responsive Next.js interface
+- **Landing Page** — Marketing site at ai.syntratrade.xyz
+
+## AI Models
+
+| Tier | Models | Use Case |
+|------|--------|----------|
+| Free/Basic | GPT-4o-mini + DeepSeek | Chat, basic analysis |
+| Premium | GPT-5-mini + GPT-5.1 | Advanced analysis, futures |
+| VIP | GPT-5.1 + o4-mini UltraThink | Deep reasoning, priority |
+
+**Scenario Generation:** GPT-5.2 (heavy reasoning)
 
 ## Tech Stack
 
@@ -59,12 +81,11 @@
 | Technology | Purpose |
 |------------|---------|
 | Python 3.12 | Core language |
-| FastAPI | REST API framework |
+| FastAPI | REST API + WebSocket |
 | SQLAlchemy 2.0 | Async ORM |
 | PostgreSQL 16 | Primary database |
 | Redis | Caching layer |
 | Alembic | Database migrations |
-| Uvicorn | ASGI server |
 
 ### Frontend
 | Technology | Purpose |
@@ -73,27 +94,24 @@
 | TypeScript | Type safety |
 | Tailwind CSS | Styling |
 | Lightweight Charts | Trading charts |
-| TonConnect | Web3 wallet integration |
+| TonConnect | Web3 wallet |
 
-### External APIs
+### Integrations
 | Service | Purpose |
 |---------|---------|
-| OpenAI GPT-5.2/5.1 | Scenario generation, analysis |
-| OpenAI o4-mini | UltraThink reasoning mode |
-| DeepSeek | Cost-effective AI (Free/Basic tiers) |
-| OpenAI Vision | Chart pattern recognition |
-| Binance API | OHLC data, funding rates |
-| CoinGecko | Price data, market cap |
-| CryptoPanic | Crypto news feed |
-| Telegram Bot API | Bot & Mini App |
+| OpenAI | GPT-5.x, Vision, Function Calling |
+| DeepSeek | Cost-effective AI for lower tiers |
+| Binance API | OHLC, funding rates, liquidations |
+| CoinGecko | Prices, market cap, historical data |
+| CoinMarketCap | Backup price source |
+| DexScreener | DEX token data |
+| CryptoPanic | Crypto news aggregation |
+| CoinMetrics | On-chain analytics |
 
-### Subscription Tiers
-| Tier | Price | AI Models | Features |
-|------|-------|-----------|----------|
-| Free | $0 | GPT-4o-mini + DeepSeek | Basic analysis, 2 req/day |
-| Basic | $9.99/mo | + DeepSeek Reasoner | Patterns, funding rates, 10 req/day |
-| Premium | $24.99/mo | GPT-5-mini + GPT-5.1 | Full features, futures signals |
-| VIP | $49.99/mo | GPT-5.1 + o4-mini UltraThink | Priority, deep reasoning, 30 req/day |
+### Payments
+- Telegram Stars
+- TON blockchain
+- NOWPayments (crypto)
 
 ## Architecture
 
@@ -110,8 +128,8 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                      API LAYER (FastAPI)                     │
 │  ┌────────────┐  ┌────────────┐  ┌────────────────────────┐ │
-│  │    Auth    │  │   Trading  │  │   WebSocket Events     │ │
-│  │  (OAuth2)  │  │    API     │  │   (Real-time updates)  │ │
+│  │    Auth    │  │  AI Chat   │  │   Market Data APIs     │ │
+│  │  (OAuth2)  │  │ (Streaming)│  │   (Tool Calling)       │ │
 │  └────────────┘  └────────────┘  └────────────────────────┘ │
 └─────────────────────────────┬───────────────────────────────┘
                               │
@@ -119,13 +137,12 @@
 ┌─────────────────────────────────────────────────────────────┐
 │                   BUSINESS LOGIC LAYER                       │
 │  ┌────────────────┐  ┌────────────────┐  ┌───────────────┐  │
-│  │ Futures        │  │  Forward Test  │  │   Payments    │  │
-│  │ Analysis       │  │  Engine        │  │   Gateway     │  │
-│  │ (AI Scenarios) │  │  (Paper Trade) │  │               │  │
+│  │ OpenAI Service │  │  Crypto Tools  │  │   Technical   │  │
+│  │ (Function Call)│  │  (10+ sources) │  │   Analysis    │  │
 │  └────────────────┘  └────────────────┘  └───────────────┘  │
 │  ┌────────────────┐  ┌────────────────┐  ┌───────────────┐  │
-│  │ Supervisor AI  │  │  Statistics    │  │   Referral    │  │
-│  │ (Macro View)   │  │  & Analytics   │  │   System      │  │
+│  │ Futures Engine │  │  Forward Test  │  │   Payments    │  │
+│  │ (Scenarios)    │  │  (Paper Trade) │  │   Gateway     │  │
 │  └────────────────┘  └────────────────┘  └───────────────┘  │
 └─────────────────────────────┬───────────────────────────────┘
                               │
@@ -134,7 +151,7 @@
 │                    DATA ACCESS LAYER                         │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │
 │  │  PostgreSQL  │  │    Redis     │  │  External APIs   │   │
-│  │  (Primary)   │  │   (Cache)    │  │  (Binance, etc.) │   │
+│  │  (Primary)   │  │   (Cache)    │  │  (10+ services)  │   │
 │  └──────────────┘  └──────────────┘  └──────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -143,27 +160,29 @@
 
 ```
 SyntraAI/
-├── src/                      # Backend source code
+├── src/
 │   ├── api/                  # FastAPI routes (30+ endpoints)
-│   ├── services/             # Business logic (50+ services)
-│   │   ├── futures_analysis/ # AI scenario generation
-│   │   ├── forward_test/     # Paper trading engine
-│   │   └── stats/            # Trading statistics
-│   ├── database/             # SQLAlchemy models & CRUD
-│   ├── learning/             # ML models & calibration
-│   └── cache/                # Redis caching layer
+│   │   ├── chat.py           # AI chat with streaming
+│   │   ├── market.py         # Market data endpoints
+│   │   ├── futures_*.py      # Futures scenarios
+│   │   └── ...
+│   ├── services/
+│   │   ├── openai_service.py # AI with function calling
+│   │   ├── crypto_tools.py   # 10+ tool definitions
+│   │   ├── coingecko_service.py
+│   │   ├── binance_service.py
+│   │   ├── technical_indicators.py
+│   │   ├── candlestick_patterns.py
+│   │   └── ...
+│   ├── database/             # SQLAlchemy models
+│   └── cache/                # Redis caching
 ├── frontend/                 # Next.js application
-│   ├── app/                  # App router pages
-│   ├── components/           # React components
-│   └── lib/                  # Utilities & hooks
-├── config/                   # Configuration files
-├── alembic/                  # Database migrations (60+)
-├── tests/                    # Test suite (38+ tests)
-├── docs/                     # Documentation
-├── api_server.py             # FastAPI entry point
-├── bot.py                    # Telegram bot entry point
-├── docker-compose.yml        # Docker configuration
-└── requirements.txt          # Python dependencies
+├── config/
+│   ├── prompts.py            # Syntra personality
+│   ├── limits.py             # Tier limits
+│   └── model_router.py       # AI model selection
+├── alembic/                  # DB migrations (60+)
+└── tests/                    # Test suite
 ```
 
 ## Getting Started
@@ -174,81 +193,43 @@ SyntraAI/
 - PostgreSQL 16
 - Redis
 
-### Backend Setup
+### Quick Start
 
 ```bash
-# Clone repository
+# Clone
 git clone https://github.com/your-username/SyntraAI.git
 cd SyntraAI
 
-# Create virtual environment
+# Backend
 python3 -m venv .venv
 source .venv/bin/activate
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your API keys
-
-# Run migrations
+cp .env.example .env  # Configure API keys
 alembic upgrade head
-
-# Start API server
 python api_server.py
-```
 
-### Frontend Setup
-
-```bash
+# Frontend
 cd frontend
-
-# Install dependencies
 npm install
-
-# Start development server
 npm run dev
 ```
 
-### Docker
+## Subscription Tiers
 
-```bash
-# Start all services
-docker-compose up -d
-
-# Apply migrations
-docker-compose exec api alembic upgrade head
-```
-
-## API Endpoints
-
-### Trading
-- `POST /api/futures/scenarios` — Generate AI trading scenarios
-- `GET /api/futures/scenarios/{coin}` — Get scenarios for a coin
-- `POST /api/forward-test/start` — Start paper trading session
-
-### Portfolio
-- `GET /api/portfolio/positions` — Active positions
-- `GET /api/portfolio/margin` — Margin & unrealized P&L
-- `GET /api/stats/trading` — Trading statistics
-
-### Market Data
-- `GET /api/market/price/{coin}` — Current price
-- `GET /api/market/analysis/{coin}` — Full market analysis
-- `GET /api/market/news` — Latest crypto news
+| Tier | Price | Requests | Features |
+|------|-------|----------|----------|
+| Free | $0 | 2/day | Basic chat, prices, news |
+| Basic | $9.99/mo | 10/day | + Patterns, funding rates, memory |
+| Premium | $24.99/mo | 15/day | + Futures signals, full analysis |
+| VIP | $49.99/mo | 30/day | + UltraThink reasoning, priority |
 
 ## Documentation
 
-- [Architecture](docs/ARCHITECTURE.md) — System design & components
-- [API Documentation](docs/API_DOCS.md) — Endpoint specifications
-- [Development Guide](docs/DEVELOPMENT.md) — Code style & best practices
-- [Deployment](docs/DEPLOYMENT.md) — Production deployment guide
+- [Architecture](docs/ARCHITECTURE.md)
+- [API Documentation](docs/API_DOCS.md)
+- [Development Guide](docs/DEVELOPMENT.md)
+- [Deployment](docs/DEPLOYMENT.md)
 
 ## License
 
 Proprietary — All rights reserved
-
-## Contact
-
-For questions and collaboration inquiries, reach out via GitHub issues.
