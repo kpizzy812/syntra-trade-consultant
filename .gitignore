@@ -178,3 +178,8 @@ logs/
 
 # Local development
 .claude/
+
+# Next.js
+.next/
+out/
+.vercel/
