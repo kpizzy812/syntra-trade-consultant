@@ -37,6 +37,7 @@ from src.api.supervisor import router as supervisor_router
 from src.api.feedback import router as feedback_router
 from src.api.forward_test import router as forward_test_router
 from src.api.stats import router as stats_router
+from src.api.weekly_analytics import router as weekly_analytics_router
 
 
 # Создаем главный router
@@ -67,6 +68,7 @@ router.include_router(supervisor_router)  # Syntra Supervisor API
 router.include_router(feedback_router)  # Trade feedback and learning API
 router.include_router(forward_test_router)  # Forward test (paper trading) API
 router.include_router(stats_router)  # Stats API (trading stats, archetypes, funnel)
+router.include_router(weekly_analytics_router)  # Weekly market analytics for ChannelAgent
 
 
 @router.post("/auth/telegram")

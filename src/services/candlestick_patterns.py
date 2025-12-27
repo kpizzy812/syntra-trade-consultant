@@ -357,25 +357,26 @@ class CandlestickPatterns:
         patterns_found = patterns.get("patterns_found", [])
         signal = patterns.get("pattern_signal", "neutral")
 
-        # Pattern names in Russian
+        # Pattern names in Russian (полностью на русском)
         pattern_names = {
-            "doji": "Doji (нерешительность)",
-            "hammer": "Hammer (бычий разворот)",
-            "inverted_hammer": "Inverted Hammer (бычий разворот)",
-            "shooting_star": "Shooting Star (медвежий разворот)",
-            "engulfing_bullish": "Bullish Engulfing (бычье поглощение)",
-            "engulfing_bearish": "Bearish Engulfing (медвежье поглощение)",
-            "morning_star": "Morning Star (утренняя звезда)",
-            "evening_star": "Evening Star (вечерняя звезда)",
-            "three_white_soldiers": "Three White Soldiers (три белых солдата)",
-            "three_black_crows": "Three Black Crows (три черных вороны)",
+            "doji": "Доджи (нерешительность)",
+            "hammer": "Молот (бычий разворот)",
+            "inverted_hammer": "Перевёрнутый молот (бычий)",
+            "shooting_star": "Падающая звезда (медвежий разворот)",
+            "engulfing_bullish": "Бычье поглощение",
+            "engulfing_bearish": "Медвежье поглощение",
+            "morning_star": "Утренняя звезда (бычий)",
+            "evening_star": "Вечерняя звезда (медвежий)",
+            "three_white_soldiers": "Три белых солдата (бычий)",
+            "three_black_crows": "Три чёрных вороны (медвежий)",
         }
 
         formatted_patterns = [pattern_names.get(p, p) for p in patterns_found]
 
         signal_emoji = {"bullish": "🟢", "bearish": "🔴", "neutral": "⚪"}
+        signal_ru = {"bullish": "бычий", "bearish": "медвежий", "neutral": "нейтральный"}
 
         return (
             f"{signal_emoji.get(signal, '⚪')} Обнаруженные паттерны: {', '.join(formatted_patterns)}\n"
-            f"Общий сигнал: {signal}"
+            f"Общий сигнал: {signal_ru.get(signal, signal)}"
         )

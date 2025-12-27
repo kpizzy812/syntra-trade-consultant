@@ -1,362 +1,235 @@
-# Syntra Trade Consultant
+# SyntraAI
 
-> AI-powered Telegram bot for cryptocurrency trading analysis and consultation
+> AI-powered cryptocurrency trading platform with Telegram Mini App interface
 
-## Описание
+[![Python](https://img.shields.io/badge/Python-3.12-blue.svg)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com)
+[![Next.js](https://img.shields.io/badge/Next.js-14-black.svg)](https://nextjs.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue.svg)](https://postgresql.org)
 
-**Syntra Trade Consultant** — персональный торговый советник в формате Telegram-бота с искусственным интеллектом. Бот предоставляет профессиональную аналитику по криптовалютам с характерной саркастичной персоной AI-аналитика.
+[Russian version](README_RU.md)
 
-## Основные возможности
+## Overview
 
-### AI и Аналитика
-- 🤖 **AI-консультант** - Общение с саркастично-ироничным AI-аналитиком (персона Syntra)
-- 🌐 **Мультиязычность** - Автоматическое определение языка (русский/английский)
-- 📈 **Технический анализ** - Уровни поддержки/сопротивления, тренды, свечной анализ
-- 📊 **Технические индикаторы** - RSI, MACD, Bollinger Bands, Moving Averages
-- 🕯️ **Свечные паттерны** - Определение паттернов (Doji, Hammer, Engulfing и др.)
-- 👁️ **Интеллектуальный Vision-анализ графиков** - Анализ скриншотов с:
-  - Автоматическим распознаванием монеты
-  - Получением актуальных данных из CoinGecko API
-  - Объединением визуального анализа с реальными рыночными данными
-  - Точным расчетом токенов по формуле OpenAI
+**SyntraAI** is a full-stack SaaS platform for cryptocurrency traders, combining AI-powered market analysis with an intuitive Telegram Mini App interface. The system generates actionable trading scenarios for futures markets using GPT-4, provides real-time portfolio tracking, and includes a comprehensive paper trading (forward testing) engine.
 
-### Рыночные данные
-- 💰 **Актуальные цены** - Получение текущих цен криптовалют (CoinGecko + Binance)
-- 📰 **Новостной фон** - Анализ последних новостей и событий (CryptoPanic)
-- 😱 **Fear & Greed Index** - Индекс страха и жадности криптовалютного рынка
-- 📉 **Рыночная капитализация** - Топ криптовалют по капитализации
-- 📊 **Исторические данные** - OHLC данные для технического анализа
-- 💸 **Funding Rates** - Ставки финансирования фьючерсов (настроения трейдеров, Binance Futures)
-- 🌈 **Cycle Analysis** - Анализ рыночных циклов для Bitcoin (Rainbow Chart, Pi Cycle Top)
-- ⛓️ **On-Chain Metrics** - Метрики блокчейна (активные адреса, потоки с бирж, CoinMetrics)
-- 📈 **Market Dominance** - BTC.D, ETH.D, OTHERS.D - определение фазы рынка (Bitcoin Season vs Alt Season)
+### Key Highlights
 
-### Умные функции
-- 🎯 **Умная маршрутизация** - Автоматический выбор gpt-4o/gpt-4o-mini по сложности (порог: 1500 токенов)
-- 💡 **Контекстное общение** - Сохранение истории диалога для связных ответов
-- 🔄 **Retention система** - Автоматические рассылки для возврата пользователей
-- 📱 **Интерактивное меню** - Удобная навигация через inline-кнопки
+- **AI Trading Engine** — Automated futures scenario generation with entry/exit points, risk/reward analysis
+- **Paper Trading** — Forward testing system with simulated order fills and performance tracking
+- **Multi-Platform** — Telegram Mini App + responsive web interface
+- **Real-time Data** — Integration with Binance, CoinGecko, CryptoPanic for live market data
+- **Payment System** — Telegram Stars, TON blockchain, and crypto payment gateways
 
-### Контроль и безопасность
-- 🔒 **Система подписки** - Защита контента через подписку на канал
-- ⏱️ **Лимиты запросов** - 5 бесплатных запросов в день
-- 🛡️ **Админ-панель** - Управление пользователями, статистика, мониторинг расходов
-- 📝 **Подробное логирование** - Отслеживание всех действий пользователей
-- 💸 **Cost tracking** - Мониторинг расходов на AI API
+## Features
 
-## Технологический стек
+### AI & Analysis
+- GPT-4 powered trading scenario generation with confidence scoring
+- Vision API for chart pattern recognition
+- Supervisor AI for macro-level market analysis
+- Technical indicators (RSI, MACD, Bollinger Bands, Moving Averages)
+- Candlestick pattern detection (Doji, Hammer, Engulfing, etc.)
+
+### Trading Tools
+- Futures scenarios with entry, TP1/TP2/TP3, and stop-loss levels
+- Portfolio tracking with margin and unrealized P&L monitoring
+- Risk/Reward ratio analysis per position
+- Forward testing with simulated trade execution
+- Performance statistics and win rate tracking
+
+### Platform
+- Telegram Mini App (WebApp inside Telegram)
+- Responsive web interface for desktop
+- Real-time WebSocket updates
+- Multi-language support (English, Russian)
+- Referral system with revenue share
+- Gamification with SYNTRA points
+
+## Tech Stack
 
 ### Backend
-- **Python 3.12**
-- **aiogram 3.x** - Async Telegram Bot Framework
-- **PostgreSQL 16** - База данных
-- **SQLAlchemy 2.0 + asyncpg** - Async ORM
-- **Alembic** - Миграции БД
+| Technology | Purpose |
+|------------|---------|
+| Python 3.12 | Core language |
+| FastAPI | REST API framework |
+| SQLAlchemy 2.0 | Async ORM |
+| PostgreSQL 16 | Primary database |
+| Redis | Caching layer |
+| Alembic | Database migrations |
+| Uvicorn | ASGI server |
 
-### AI & APIs
-- **OpenAI API** (gpt-4o, gpt-4o-mini) - Текстовый AI
-- **OpenAI Vision API** (gpt-4o with vision) - Vision AI для анализа графиков
-- **CoinGecko API** - Цены и исторические данные
-- **CryptoPanic API** - Криптовалютные новости
-- **Binance Futures API** - Funding rates и Open Interest
-- **CoinMetrics Community API** - On-chain метрики (бесплатно)
+### Frontend
+| Technology | Purpose |
+|------------|---------|
+| Next.js 14 | React framework |
+| TypeScript | Type safety |
+| Tailwind CSS | Styling |
+| Lightweight Charts | Trading charts |
+| TonConnect | Web3 wallet integration |
 
-### Infrastructure
-- **Docker + Docker Compose** - Контейнеризация PostgreSQL
-- **Redis** (опционально) - Кэширование для продакшена
+### External APIs
+| Service | Purpose |
+|---------|---------|
+| OpenAI GPT-4 | Text generation, Vision analysis |
+| Binance API | OHLC data, funding rates |
+| CoinGecko | Price data, market cap |
+| CryptoPanic | Crypto news feed |
+| Telegram Bot API | Bot & Mini App |
 
-## Структура проекта
+## Architecture
 
 ```
-Syntra Trade Consultant/
-├── bot.py                 # Главный файл запуска бота
-├── config/
-│   ├── config.py         # Конфигурация из .env
-│   ├── logging.py        # Настройка логирования
-│   ├── prompts.py        # System prompts для AI (персона Syntra, RU)
-│   ├── prompts_en.py     # System prompts (English)
-│   ├── vision_prompts.py # Vision prompts (RU)
-│   ├── vision_prompts_en.py # Vision prompts (EN)
-│   ├── prompt_selector.py # Автовыбор промптов по языку
-│   └── sentry.py         # Интеграция Sentry для мониторинга ошибок
-├── src/
-│   ├── bot/
-│   │   ├── handlers/     # Обработчики команд
-│   │   │   ├── start.py  # /start команда
-│   │   │   ├── help_cmd.py # /help команда
-│   │   │   ├── limits.py # /limits команда
-│   │   │   ├── chat.py   # AI-чат
-│   │   │   ├── vision.py # Анализ графиков
-│   │   │   ├── crypto.py # Крипто-команды (/price, /analyze, /market, /news)
-│   │   │   ├── menu.py   # Меню навигации
-│   │   │   └── admin.py  # Админ-панель
-│   │   └── middleware/   # Middleware
-│   │       ├── database.py # Инжекция DB session
-│   │       ├── subscription.py # Проверка подписки на канал
-│   │       ├── request_limit.py # Лимиты запросов
-│   │       ├── logging.py # Логирование запросов
-│   │       ├── admin.py   # Проверка прав админа
-│   │       └── language.py # Определение языка пользователя
-│   ├── services/         # Бизнес-логика
-│   │   ├── openai_service.py # OpenAI API (Text + Vision)
-│   │   ├── openai_service_extended.py # Расширенные функции OpenAI
-│   │   ├── coingecko_service.py # CoinGecko API
-│   │   ├── cryptopanic_service.py # CryptoPanic API (новости)
-│   │   ├── binance_service.py # Binance API (OHLC, Funding Rates, Open Interest)
-│   │   ├── fear_greed_service.py # Fear & Greed Index
-│   │   ├── coinmetrics_service.py # CoinMetrics API (On-chain метрики)
-│   │   ├── cycle_analysis_service.py # Анализ циклов (Rainbow Chart, Pi Cycle)
-│   │   ├── historical_data_service.py # Исторические данные
-│   │   ├── analytics_aggregator.py # Сбор всей аналитики
-│   │   ├── technical_indicators.py # Технические индикаторы
-│   │   ├── candlestick_patterns.py # Свечные паттерны
-│   │   ├── crypto_tools.py # Утилиты для криптовалют (OpenAI Function Calling)
-│   │   └── retention_service.py # Воронка удержания пользователей
-│   ├── database/
-│   │   ├── models.py     # SQLAlchemy модели
-│   │   ├── engine.py     # Async DB engine
-│   │   └── crud.py       # CRUD операции
-│   ├── utils/            # Утилиты
-│   │   ├── coin_parser.py # Парсинг названий криптовалют
-│   │   ├── vision_tokens.py # Расчет токенов для Vision API
-│   │   └── i18n.py       # Интернационализация
-│   └── locales/          # Локализация
-│       ├── ru.json       # Русские тексты
-│       └── en.json       # Английские тексты
-├── alembic/              # Database migrations
-├── docs/                 # Документация
-│   ├── TODO.md
-│   ├── DEVELOPMENT.md
-│   ├── ARCHITECTURE.md
-│   ├── COMPONENTS.md
-│   ├── API_DOCS.md
-│   ├── DEPLOYMENT.md
-│   ├── USAGE_EXAMPLES.md
-│   ├── PROGRESS.md
-│   ├── PROJECT_STATUS_REPORT.md
-│   ├── TECHNICAL_ANALYSIS_INTEGRATION.md
-│   └── CRYPTOPANIC_OPTIMIZATION.md
-├── tests/                # Тесты
-├── logs/                 # Логи бота
-├── assets/               # Ресурсы (изображения и т.д.)
-├── requirements.txt      # Python зависимости
-├── docker-compose.yml    # Docker конфигурация
-├── docker-compose.prod.yml # Production Docker конфигурация
-├── Dockerfile            # Docker образ
-├── pytest.ini            # Конфигурация pytest
-├── .env.example          # Пример переменных окружения
-└── .env                  # Переменные окружения (не в git)
+┌─────────────────────────────────────────────────────────────┐
+│                    PRESENTATION LAYER                        │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
+│  │  Telegram   │  │   Next.js   │  │   Telegram Bot      │  │
+│  │  Mini App   │  │   Web App   │  │   (Notifications)   │  │
+│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
+└─────────┼────────────────┼────────────────────┼─────────────┘
+          │                │                    │
+          ▼                ▼                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      API LAYER (FastAPI)                     │
+│  ┌────────────┐  ┌────────────┐  ┌────────────────────────┐ │
+│  │    Auth    │  │   Trading  │  │   WebSocket Events     │ │
+│  │  (OAuth2)  │  │    API     │  │   (Real-time updates)  │ │
+│  └────────────┘  └────────────┘  └────────────────────────┘ │
+└─────────────────────────────┬───────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   BUSINESS LOGIC LAYER                       │
+│  ┌────────────────┐  ┌────────────────┐  ┌───────────────┐  │
+│  │ Futures        │  │  Forward Test  │  │   Payments    │  │
+│  │ Analysis       │  │  Engine        │  │   Gateway     │  │
+│  │ (AI Scenarios) │  │  (Paper Trade) │  │               │  │
+│  └────────────────┘  └────────────────┘  └───────────────┘  │
+│  ┌────────────────┐  ┌────────────────┐  ┌───────────────┐  │
+│  │ Supervisor AI  │  │  Statistics    │  │   Referral    │  │
+│  │ (Macro View)   │  │  & Analytics   │  │   System      │  │
+│  └────────────────┘  └────────────────┘  └───────────────┘  │
+└─────────────────────────────┬───────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    DATA ACCESS LAYER                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────┐   │
+│  │  PostgreSQL  │  │    Redis     │  │  External APIs   │   │
+│  │  (Primary)   │  │   (Cache)    │  │  (Binance, etc.) │   │
+│  └──────────────┘  └──────────────┘  └──────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-## Установка и запуск
+## Project Structure
 
-### Требования
+```
+SyntraAI/
+├── src/                      # Backend source code
+│   ├── api/                  # FastAPI routes (30+ endpoints)
+│   ├── services/             # Business logic (50+ services)
+│   │   ├── futures_analysis/ # AI scenario generation
+│   │   ├── forward_test/     # Paper trading engine
+│   │   └── stats/            # Trading statistics
+│   ├── database/             # SQLAlchemy models & CRUD
+│   ├── learning/             # ML models & calibration
+│   └── cache/                # Redis caching layer
+├── frontend/                 # Next.js application
+│   ├── app/                  # App router pages
+│   ├── components/           # React components
+│   └── lib/                  # Utilities & hooks
+├── config/                   # Configuration files
+├── alembic/                  # Database migrations (60+)
+├── tests/                    # Test suite (38+ tests)
+├── docs/                     # Documentation
+├── api_server.py             # FastAPI entry point
+├── bot.py                    # Telegram bot entry point
+├── docker-compose.yml        # Docker configuration
+└── requirements.txt          # Python dependencies
+```
+
+## Getting Started
+
+### Prerequisites
 - Python 3.12+
-- PostgreSQL 16 (или Docker)
-- Git
+- Node.js 18+
+- PostgreSQL 16
+- Redis
 
-### 1. Клонирование и настройка виртуального окружения
+### Backend Setup
 
 ```bash
-git clone <repository-url>
-cd "Syntra Trade Consultant"
+# Clone repository
+git clone https://github.com/your-username/SyntraAI.git
+cd SyntraAI
 
+# Create virtual environment
 python3 -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-# .venv\Scripts\activate   # Windows
-```
+source .venv/bin/activate
 
-### 2. Установка зависимостей
-
-```bash
-pip install --upgrade pip
+# Install dependencies
 pip install -r requirements.txt
-```
 
-### 3. Настройка переменных окружения
+# Configure environment
+cp .env.example .env
+# Edit .env with your API keys
 
-Отредактируйте файл `.env` и заполните необходимые переменные:
-
-```env
-# Telegram Bot
-BOT_TOKEN=your_bot_token_from_@BotFather
-REQUIRED_CHANNEL=@your_channel
-ADMIN_IDS=your_telegram_user_id
-
-# Database
-DATABASE_URL=postgresql+asyncpg://syntra:syntra_password_change_me@localhost:5433/syntra_bot
-
-# AI APIs
-OPENAI_API_KEY=sk-your_openai_key
-
-# Data APIs
-CRYPTOPANIC_TOKEN=your_cryptopanic_token
-```
-
-**Как получить токены:**
-- **BOT_TOKEN**: Создайте бота через [@BotFather](https://t.me/BotFather)
-- **OPENAI_API_KEY**: [platform.openai.com](https://platform.openai.com/api-keys)
-- **CRYPTOPANIC_TOKEN**: [cryptopanic.com/developers/api](https://cryptopanic.com/developers/api/)
-
-### 4. Запуск PostgreSQL
-
-```bash
-docker-compose up -d postgres
-```
-
-### 5. Применение миграций
-
-```bash
+# Run migrations
 alembic upgrade head
+
+# Start API server
+python api_server.py
 ```
 
-### 6. Запуск бота
+### Frontend Setup
 
 ```bash
-python bot.py
+cd frontend
+
+# Install dependencies
+npm install
+
+# Start development server
+npm run dev
 ```
 
-Бот запустится и начнет обрабатывать сообщения!
-
-## Доступные команды
-
-### Основные команды
-- `/start` - Начало работы с ботом, показ главного меню
-- `/help` - Справка по командам и возможностям бота
-- `/limits` - Проверка оставшихся запросов
-
-### Крипто-команды
-- `/price <монета>` - Показать текущую цену криптовалюты
-- `/analyze <монета>` - Полный анализ криптовалюты (цена, изменения, новости, AI-анализ)
-- `/market` - Топ-10 криптовалют по рыночной капитализации
-- `/news <монета>` - Последние новости по криптовалюте
-
-### Основной функционал
-- **Текстовые сообщения** - Просто отправьте вопрос боту для AI-анализа с контекстом
-- **Скриншоты графиков** - Отправьте фото графика для vision-анализа с автоопределением монеты
-- **Интерактивное меню** - Используйте кнопки меню для быстрого доступа к функциям
-
-### Админ-команды
-- `/admin` - Открыть панель администратора
-- `/admin_stats` - Детальная статистика использования бота
-- `/admin_users` - Управление пользователями
-- `/admin_costs` - Мониторинг расходов на API
-- `/admin_broadcast` - Рассылка сообщений пользователям
-- `/admin_limits` - Управление лимитами пользователей
-
-## Разработка
-
-### База данных
-
-**Создание новой миграции:**
-```bash
-alembic revision --autogenerate -m "Описание изменений"
-alembic upgrade head
-```
-
-**Откат миграции:**
-```bash
-alembic downgrade -1
-```
-
-### Тестирование
+### Docker
 
 ```bash
-pytest
-pytest --cov=src --cov-report=html
+# Start all services
+docker-compose up -d
+
+# Apply migrations
+docker-compose exec api alembic upgrade head
 ```
 
-### Линтинг и форматирование
+## API Endpoints
 
-```bash
-black .
-flake8 src/
-mypy src/
-isort .
-```
+### Trading
+- `POST /api/futures/scenarios` — Generate AI trading scenarios
+- `GET /api/futures/scenarios/{coin}` — Get scenarios for a coin
+- `POST /api/forward-test/start` — Start paper trading session
 
-## Документация
+### Portfolio
+- `GET /api/portfolio/positions` — Active positions
+- `GET /api/portfolio/margin` — Margin & unrealized P&L
+- `GET /api/stats/trading` — Trading statistics
 
-Полная документация проекта доступна в директории [`docs/`](docs/):
+### Market Data
+- `GET /api/market/price/{coin}` — Current price
+- `GET /api/market/analysis/{coin}` — Full market analysis
+- `GET /api/market/news` — Latest crypto news
 
-### Для разработчиков
-- **[DEVELOPMENT.md](docs/DEVELOPMENT.md)** - Руководство разработчика (best practices, code style)
-- **[ARCHITECTURE.md](docs/ARCHITECTURE.md)** - Архитектура системы (компоненты, потоки данных)
-- **[COMPONENTS.md](docs/COMPONENTS.md)** - Детальное описание всех компонентов
-- **[API_DOCS.md](docs/API_DOCS.md)** - Документация внешних API (OpenAI, CoinGecko, CryptoPanic)
+## Documentation
 
-### Для деплоя и эксплуатации
-- **[DEPLOYMENT.md](docs/DEPLOYMENT.md)** - Полное руководство по развертыванию (dev, prod, Docker)
-- **[USAGE_EXAMPLES.md](docs/USAGE_EXAMPLES.md)** - Примеры использования бота
+- [Architecture](docs/ARCHITECTURE.md) — System design & components
+- [API Documentation](docs/API_DOCS.md) — Endpoint specifications
+- [Development Guide](docs/DEVELOPMENT.md) — Code style & best practices
+- [Deployment](docs/DEPLOYMENT.md) — Production deployment guide
 
-### Планирование и прогресс
-- **[TODO.md](docs/TODO.md)** - Трекер задач разработки
-- **[PROGRESS.md](docs/PROGRESS.md)** - Лог прогресса разработки (история сессий)
+## License
 
-## Персона Syntra
+Proprietary — All rights reserved
 
-Syntra — не просто бот, а AI с характером:
-- **Саркастичный**, но профессиональный
-- **Самоосознанный** AI, понимающий свою природу
-- **Ироничный** к человеческим слабостям (FOMO, FUD, жадность)
-- **Краткий** — максимум 300 слов в ответе
-- **Сбалансированный** — показывает обе стороны медали
+## Contact
 
-Подробнее о персоне в [config/prompts.py](config/prompts.py)
-
-## Roadmap
-
-### ✅ Завершено
-- [x] Базовая структура бота с aiogram 3.x
-- [x] База данных PostgreSQL с миграциями
-- [x] Middleware (DB, подписка, лимиты, логирование, админ, язык)
-- [x] Handlers для /start, /help, /limits
-- [x] System prompts с персоной Syntra (RU + EN)
-- [x] Интеграция OpenAI API со streaming
-- [x] Интеграция CoinGecko для цен и рыночных данных
-- [x] Интеграция Binance API для дополнительных данных
-- [x] Интеграция OpenAI Vision для анализа графиков
-- [x] Интеграция CryptoPanic для новостей
-- [x] Интеграция Fear & Greed Index
-- [x] AI Chat handler с контекстом и мультиязычностью
-- [x] Crypto handlers (/price, /analyze, /market, /news)
-- [x] Vision handler для анализа графиков
-- [x] Технический анализ (индикаторы: RSI, MACD, Bollinger Bands, MA, EMA)
-- [x] Свечные паттерны (Doji, Hammer, Engulfing, Morning/Evening Star и др.)
-- [x] Интерактивное меню навигации
-- [x] Cost tracking и мониторинг токенов
-- [x] Админ-панель (/admin, /admin_stats, /admin_users, /admin_costs, /admin_broadcast)
-- [x] Retention funnel (автоматические рассылки)
-- [x] Локализация (русский/английский)
-- [x] Sentry интеграция для мониторинга ошибок
-- [x] Docker и docker-compose конфигурация
-- [x] Тесты (unit + integration)
-
-### 🔄 В процессе
-- [ ] Улучшение coverage тестов (цель: >80%)
-- [ ] CI/CD pipeline (GitHub Actions)
-- [ ] Оптимизация производительности
-
-### 📋 Запланировано
-- [ ] Web-интерфейс для админ-панели
-- [ ] Расширенная аналитика пользователей
-- [ ] Система платных подписок
-- [ ] Персональные алерты на ценовые уровни
-- [ ] Portfolio tracking
-- [ ] Расширение поддерживаемых языков
-
-## Лицензия
-
-Proprietary - Все права защищены
-
-## Контакты
-
-Для вопросов и предложений свяжитесь с разработчиками проекта.
-
----
-
-**Статус:** ✅ Production-ready | 🔄 Активная разработка
-
-**Последнее обновление:** 2025-11-17
-
-**Прогресс:** 98% ✅ (Production-Ready! Все основные фичи реализованы, тесты улучшены, проект готов к деплою)
+For questions and collaboration inquiries, reach out via GitHub issues.

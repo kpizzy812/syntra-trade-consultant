@@ -163,3 +163,18 @@ access.log
 # OpenAI Batch API files
 data/batches/*.jsonl
 data/batches/*.json
+
+# Backups
+backups/
+*.bak
+*.backup
+
+# Coverage reports
+htmlcov/
+
+# Logs
+logs/
+*.log
+
+# Local development
+.claude/
