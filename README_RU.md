@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/banner.jpeg" alt="SyntraAI Banner" width="100%">
+</p>
+
 # SyntraAI
 
 > AI-платформа для криптотрейдинга с интерфейсом Telegram Mini App
