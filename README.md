@@ -11,15 +11,16 @@
 [![Next.js](https://img.shields.io/badge/Next.js-14-black.svg)](https://nextjs.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue.svg)](https://postgresql.org)
 
-[Russian version](README_RU.md)
+**[Live Demo](https://ai.syntratrade.xyz)** | [Russian version](README_RU.md)
 
 ## Overview
 
-**SyntraAI** is a full-stack SaaS platform for cryptocurrency traders, combining AI-powered market analysis with an intuitive Telegram Mini App interface. The system generates actionable trading scenarios for futures markets using GPT-4, provides real-time portfolio tracking, and includes a comprehensive paper trading (forward testing) engine.
+**SyntraAI** is a full-stack SaaS platform for cryptocurrency traders, combining AI-powered market analysis with an intuitive Telegram Mini App interface. The system generates actionable trading scenarios for futures markets using latest AI models (GPT-5.2, o4-mini UltraThink), provides real-time portfolio tracking, and includes a comprehensive paper trading (forward testing) engine.
 
 ### Key Highlights
 
-- **AI Trading Engine** — Automated futures scenario generation with entry/exit points, risk/reward analysis
+- **AI Trading Engine** — GPT-5.2 powered scenario generation with entry/exit points, risk/reward analysis
+- **UltraThink Reasoning** — o4-mini deep reasoning mode for complex market analysis (VIP tier)
 - **Paper Trading** — Forward testing system with simulated order fills and performance tracking
 - **Multi-Platform** — Telegram Mini App + responsive web interface
 - **Real-time Data** — Integration with Binance, CoinGecko, CryptoPanic for live market data
@@ -28,7 +29,10 @@
 ## Features
 
 ### AI & Analysis
-- GPT-4 powered trading scenario generation with confidence scoring
+- **GPT-5.2** for futures scenario generation (heavy reasoning)
+- **GPT-5.1** flagship model for Premium/VIP analysis
+- **o4-mini UltraThink** reasoning mode for deep market insights
+- **DeepSeek Reasoner** for cost-effective analysis
 - Vision API for chart pattern recognition
 - Supervisor AI for macro-level market analysis
 - Technical indicators (RSI, MACD, Bollinger Bands, Moving Averages)
@@ -74,11 +78,22 @@
 ### External APIs
 | Service | Purpose |
 |---------|---------|
-| OpenAI GPT-4 | Text generation, Vision analysis |
+| OpenAI GPT-5.2/5.1 | Scenario generation, analysis |
+| OpenAI o4-mini | UltraThink reasoning mode |
+| DeepSeek | Cost-effective AI (Free/Basic tiers) |
+| OpenAI Vision | Chart pattern recognition |
 | Binance API | OHLC data, funding rates |
 | CoinGecko | Price data, market cap |
 | CryptoPanic | Crypto news feed |
 | Telegram Bot API | Bot & Mini App |
+
+### Subscription Tiers
+| Tier | Price | AI Models | Features |
+|------|-------|-----------|----------|
+| Free | $0 | GPT-4o-mini + DeepSeek | Basic analysis, 2 req/day |
+| Basic | $9.99/mo | + DeepSeek Reasoner | Patterns, funding rates, 10 req/day |
+| Premium | $24.99/mo | GPT-5-mini + GPT-5.1 | Full features, futures signals |
+| VIP | $49.99/mo | GPT-5.1 + o4-mini UltraThink | Priority, deep reasoning, 30 req/day |
 
 ## Architecture
 
