@@ -11,7 +11,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-14-black.svg)](https://nextjs.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue.svg)](https://postgresql.org)
 
-**[Live Demo](https://ai.syntratrade.xyz)** | [Russian version](README_RU.md)
+**[Website](https://ai.syntratrade.xyz)** | **[Telegram Mini App](https://t.me/SyntraAI_bot?startapp)** | [Russian version](README_RU.md)
 
 ## Overview
 
